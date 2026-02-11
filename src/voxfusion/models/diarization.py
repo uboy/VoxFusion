@@ -1,0 +1,1 @@
+"""Diarization data models: DiarizedSegment."""

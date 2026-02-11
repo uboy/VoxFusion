@@ -1,0 +1,1 @@
+"""TranslationEngine protocol definition."""

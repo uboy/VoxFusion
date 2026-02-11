@@ -1,0 +1,1 @@
+"""WebVTT subtitle output formatter."""
