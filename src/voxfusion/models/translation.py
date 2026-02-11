@@ -1,0 +1,1 @@
+"""Translation data models: TranslatedSegment."""

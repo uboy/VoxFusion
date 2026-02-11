@@ -1,0 +1,1 @@
+"""DiarizationEngine protocol definition."""

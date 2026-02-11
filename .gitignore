@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+sdist/
+wheels/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing & coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# Poetry
+poetry.lock
+
+# VoxFusion specific
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+*.pt
+*.bin
+*.onnx
+.voxfusion.yaml
+
+# User data directory
+.voxfusion/
+
+# Logs
+*.log
+logs/
+
+# Environment / secrets
+.env
+.env.*
+
+# Force-include test fixtures
+!tests/fixtures/audio/*.wav
+!tests/fixtures/audio/.gitkeep

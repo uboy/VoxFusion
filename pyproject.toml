@@ -1,0 +1,179 @@
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "voxfusion"
+version = "0.1.0"
+description = "Cross-platform audio capture, transcription, diarization, and translation system"
+license = "GPL-2.0-only"
+authors = ["VoxFusion Contributors"]
+readme = "README.md"
+homepage = "https://github.com/uboy/VoxFusion"
+repository = "https://github.com/uboy/VoxFusion"
+keywords = ["transcription", "speech-to-text", "diarization", "translation", "audio"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU General Public License v2 (GPLv2)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+packages = [{ include = "voxfusion", from = "src" }]
+
+[tool.poetry.scripts]
+voxfusion = "voxfusion.cli.main:cli"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+faster-whisper = ">=1.0"
+ctranslate2 = ">=4.0"
+numpy = ">=1.24"
+pydantic = ">=2.0"
+pydantic-settings = ">=2.0"
+click = ">=8.0"
+sounddevice = ">=0.4"
+soundfile = ">=0.12"
+structlog = ">=23.0"
+pyyaml = ">=6.0"
+httpx = ">=0.24"
+
+# Platform-specific dependencies
+pycaw = { version = ">=20230407", markers = "sys_platform == 'win32'", optional = true }
+comtypes = { version = ">=1.2", markers = "sys_platform == 'win32'", optional = true }
+pulsectl = { version = ">=23.5", markers = "sys_platform == 'linux'", optional = true }
+pyobjc-framework-CoreAudio = { version = ">=10.0", markers = "sys_platform == 'darwin'", optional = true }
+pyobjc-framework-ScreenCaptureKit = { version = ">=10.0", markers = "sys_platform == 'darwin'", optional = true }
+
+[tool.poetry.extras]
+diarization = ["pyannote-audio", "torch"]
+translation-offline = ["argostranslate"]
+audio-quality = ["librosa", "soxr"]
+noise-reduction = ["noisereduce"]
+security = ["cryptography"]
+windows = ["pycaw", "comtypes"]
+linux = ["pulsectl"]
+macos = ["pyobjc-framework-CoreAudio", "pyobjc-framework-ScreenCaptureKit"]
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.0"
+pytest-asyncio = ">=0.21"
+pytest-cov = ">=4.0"
+ruff = ">=0.1"
+mypy = ">=1.5"
+pip-audit = ">=2.6"
+pre-commit = ">=3.0"
+
+# Optional extras (declared here so poetry resolves them)
+[tool.poetry.group.diarization]
+optional = true
+
+[tool.poetry.group.diarization.dependencies]
+pyannote-audio = ">=3.1"
+torch = ">=2.0"
+
+[tool.poetry.group.translation-offline]
+optional = true
+
+[tool.poetry.group.translation-offline.dependencies]
+argostranslate = ">=1.9"
+
+[tool.poetry.group.audio-quality]
+optional = true
+
+[tool.poetry.group.audio-quality.dependencies]
+librosa = ">=0.10"
+soxr = ">=0.3"
+
+[tool.poetry.group.security]
+optional = true
+
+[tool.poetry.group.security.dependencies]
+cryptography = ">=41.0"
+
+# =============================================================================
+# Tool Configuration
+# =============================================================================
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "A",    # flake8-builtins
+    "C4",   # flake8-comprehensions
+    "PL",   # pylint
+    "RUF",  # ruff-specific rules
+]
+ignore = [
+    "PLR0913",  # too many arguments
+    "PLR2004",  # magic value comparison
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["voxfusion"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+packages = ["voxfusion"]
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = [
+    "faster_whisper.*",
+    "ctranslate2.*",
+    "sounddevice.*",
+    "soundfile.*",
+    "pyannote.*",
+    "argostranslate.*",
+    "pycaw.*",
+    "pulsectl.*",
+    "noisereduce.*",
+    "soxr.*",
+    "librosa.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "integration: marks tests that require models or external resources",
+    "platform: marks tests that are platform-specific",
+    "slow: marks tests that take > 5 seconds",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["src/voxfusion"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 70
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if __name__ == .__main__.",
+    "if TYPE_CHECKING:",
+    "pass",
+    "\\.\\.\\.",
+]

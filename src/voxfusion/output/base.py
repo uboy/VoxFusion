@@ -1,0 +1,1 @@
+"""OutputFormatter protocol definition."""
