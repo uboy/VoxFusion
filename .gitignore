@@ -61,6 +61,23 @@ logs/
 .env
 .env.*
 
+# Personal debug notes and scratch scripts in project root
+cli_start.py
+gui_start.py
+gui_capture.py
+create_test_audio.py
+diag_mic.py
+fix_sounddevice.py
+record_audio.py
+simple_capture.py
+simple_mic_test.py
+test_audio_device.py
+test_rec_method.py
+test_streaming.py
+
+# Temporary docs with Cyrillic filenames (personal dev notes)
+docs/[А-ЯЁа-яё]*.md
+
 # Force-include test fixtures
 !tests/fixtures/audio/*.wav
 !tests/fixtures/audio/.gitkeep

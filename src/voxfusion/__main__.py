@@ -1,6 +1,6 @@
 """Entry point for ``python -m voxfusion``."""
 
-from voxfusion.cli.main import cli
+from voxfusion.cli.main import main
 
 if __name__ == "__main__":
-    cli()
+    main()

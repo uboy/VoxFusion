@@ -1,0 +1,315 @@
+"""Build VoxFusion GUI/CLI binaries with PyInstaller and ZIP packaging.
+
+This script is designed for native builds:
+- run on Windows to build Windows binaries
+- run on Linux to build Linux binaries
+- run on macOS to build macOS binaries
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+BUILD_DIR = PROJECT_ROOT / "build"
+DIST_DIR = PROJECT_ROOT / "dist" / "binaries"
+VERSION_FILE_PATH = BUILD_DIR / "pyinstaller-version.txt"
+VERSION_MODULE_PATH = PROJECT_ROOT / "src" / "voxfusion" / "version.py"
+
+
+@dataclass(frozen=True)
+class BinaryTarget:
+    """PyInstaller build target."""
+
+    name: str
+    launcher: Path
+    windowed: bool
+
+
+TARGETS: dict[str, BinaryTarget] = {
+    "gui": BinaryTarget(
+        name="voxfusion-gui",
+        launcher=PROJECT_ROOT / "gui_start.py",
+        windowed=True,
+    ),
+    "cli": BinaryTarget(
+        name="voxfusion-cli",
+        launcher=PROJECT_ROOT / "cli_start.py",
+        windowed=False,
+    ),
+}
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse CLI args."""
+    parser = argparse.ArgumentParser(description="Build VoxFusion binaries.")
+    parser.add_argument(
+        "--target",
+        choices=["all", "gui", "cli"],
+        default="all",
+        help="Build target selector.",
+    )
+    parser.add_argument(
+        "--company-name",
+        default="VoxFusion Contributors",
+        help="Company metadata for Windows version resource.",
+    )
+    parser.add_argument(
+        "--product-name",
+        default="VoxFusion",
+        help="Product metadata for Windows version resource.",
+    )
+    parser.add_argument(
+        "--no-zip",
+        action="store_true",
+        help="Skip ZIP archive generation.",
+    )
+    return parser.parse_args()
+
+
+def load_version() -> tuple[str, tuple[int, int, int, int]]:
+    """Load package version from source file."""
+    raw_text = VERSION_MODULE_PATH.read_text(encoding="utf-8")
+    match = re.search(r'__version__\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"', raw_text)
+    if not match:
+        raise RuntimeError("Unable to parse version from src/voxfusion/version.py")
+    version = match.group(1)
+    major, minor, patch = (int(part) for part in version.split("."))
+    return version, (major, minor, patch, 0)
+
+
+def write_version_file(
+    *,
+    company_name: str,
+    product_name: str,
+    version_str: str,
+    version_tuple: tuple[int, int, int, int],
+) -> Path:
+    """Create a Windows-compatible PyInstaller version file."""
+    BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    version_text = f"""# UTF-8
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers={version_tuple},
+    prodvers={version_tuple},
+    mask=0x3F,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable(
+        '040904B0',
+        [
+          StringStruct('CompanyName', '{company_name}'),
+          StringStruct('FileDescription', '{product_name} executable'),
+          StringStruct('FileVersion', '{version_str}'),
+          StringStruct('InternalName', '{product_name}'),
+          StringStruct('LegalCopyright', 'Copyright (C) VoxFusion Contributors'),
+          StringStruct('OriginalFilename', '{product_name}.exe'),
+          StringStruct('ProductName', '{product_name}'),
+          StringStruct('ProductVersion', '{version_str}')
+        ]
+      )
+    ]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
+)
+"""
+    VERSION_FILE_PATH.write_text(version_text, encoding="utf-8")
+    return VERSION_FILE_PATH
+
+
+HIDDEN_IMPORTS: list[str] = [
+    # Core inference
+    "faster_whisper",
+    "ctranslate2",
+    # Audio I/O
+    "sounddevice",
+    "soundfile",
+    # VoxFusion internals that PyInstaller may miss due to dynamic imports
+    "voxfusion.asr.factory",
+    "voxfusion.asr.faster_whisper",
+    "voxfusion.capture.wasapi",
+    "voxfusion.capture.vad_chunker",
+    "voxfusion.capture.mixer",
+    "voxfusion.media.extractor",
+    "voxfusion.pipeline.orchestrator",
+    "voxfusion.pipeline.batch",
+    "voxfusion.pipeline.streaming",
+    "voxfusion.translation.registry",
+    "voxfusion.translation.argos_engine",
+    # Logging
+    "structlog",
+    # GUI
+    "tkinter",
+    "tkinter.ttk",
+    "tkinter.scrolledtext",
+    "tkinter.filedialog",
+]
+
+
+def _find_ffmpeg_binary() -> Path | None:
+    """Locate the ffmpeg binary in PATH for optional bundling."""
+    import shutil
+    binary_name = "ffmpeg.exe" if platform.system().lower() == "windows" else "ffmpeg"
+    found = shutil.which(binary_name) or shutil.which("ffmpeg")
+    return Path(found) if found else None
+
+
+def _customtkinter_data_entries() -> list[str]:
+    """Collect customtkinter theme paths when package is installed."""
+    try:
+        import customtkinter  # type: ignore[import-not-found]
+    except ImportError:
+        return []
+
+    package_root = Path(customtkinter.__file__).resolve().parent
+    themes_dir = package_root / "assets" / "themes"
+    if not themes_dir.exists():
+        return []
+
+    return [f"{themes_dir}{os.pathsep}customtkinter/assets/themes"]
+
+
+def _default_data_entries() -> list[str]:
+    defaults_yaml = PROJECT_ROOT / "src" / "voxfusion" / "config" / "defaults.yaml"
+    entries = [f"{defaults_yaml}{os.pathsep}voxfusion/config"]
+    entries.extend(_customtkinter_data_entries())
+
+    # Bundle ffmpeg binary if found in PATH so the distributable works without
+    # a system ffmpeg install.  The binary lands next to the executable.
+    ffmpeg = _find_ffmpeg_binary()
+    if ffmpeg and ffmpeg.exists():
+        entries.append(f"{ffmpeg}{os.pathsep}.")
+        print(f"[ffmpeg] bundling {ffmpeg}")
+    else:
+        print(
+            "[ffmpeg] WARNING: ffmpeg not found in PATH — video file support will "
+            "require users to install FFmpeg separately.\n"
+            "  Windows: https://www.gyan.dev/ffmpeg/builds/\n"
+            "  Linux:   sudo apt install ffmpeg"
+        )
+
+    return entries
+
+
+def _platform_tag() -> str:
+    machine = platform.machine().lower() or "unknown"
+    system_name = platform.system().lower() or "unknown"
+    return f"{system_name}-{machine}"
+
+
+def build_target(
+    target: BinaryTarget,
+    *,
+    version_file: Path,
+    include_zip: bool,
+) -> Path:
+    """Build one binary target and optionally package to ZIP."""
+    DIST_DIR.mkdir(parents=True, exist_ok=True)
+    pyinstaller_work = BUILD_DIR / "pyinstaller-work" / target.name
+    pyinstaller_spec = BUILD_DIR / "pyinstaller-spec"
+    pyinstaller_work.mkdir(parents=True, exist_ok=True)
+    pyinstaller_spec.mkdir(parents=True, exist_ok=True)
+
+    command = [
+        sys.executable,
+        "-m",
+        "PyInstaller",
+        "--noconfirm",
+        "--clean",
+        "--onedir",
+        "--name",
+        target.name,
+        "--distpath",
+        str(DIST_DIR),
+        "--workpath",
+        str(pyinstaller_work),
+        "--specpath",
+        str(pyinstaller_spec),
+    ]
+
+    if platform.system().lower() == "windows" and version_file.exists():
+        command.extend(["--version-file", str(version_file)])
+
+    command.append("--windowed" if target.windowed else "--console")
+
+    for imp in HIDDEN_IMPORTS:
+        command.extend(["--hidden-import", imp])
+
+    for entry in _default_data_entries():
+        command.extend(["--add-data", entry])
+
+    command.append(str(target.launcher))
+
+    print(f"\n[build] {target.name}")
+    print(" ".join(command))
+    subprocess.run(command, cwd=PROJECT_ROOT, check=True)
+
+    bundle_dir = DIST_DIR / target.name
+    if not include_zip:
+        return bundle_dir
+
+    archive_basename = DIST_DIR / f"{target.name}-{_platform_tag()}"
+    zip_path = archive_basename.with_suffix(".zip")
+    if zip_path.exists():
+        zip_path.unlink()
+
+    shutil.make_archive(
+        base_name=str(archive_basename),
+        format="zip",
+        root_dir=str(DIST_DIR),
+        base_dir=target.name,
+    )
+    print(f"[zip] {zip_path}")
+    return zip_path
+
+
+def main() -> int:
+    """Main build flow."""
+    args = parse_args()
+    version, version_tuple = load_version()
+    version_file = write_version_file(
+        company_name=args.company_name,
+        product_name=args.product_name,
+        version_str=version,
+        version_tuple=version_tuple,
+    )
+
+    selected_targets: list[BinaryTarget]
+    if args.target == "all":
+        selected_targets = [TARGETS["gui"], TARGETS["cli"]]
+    else:
+        selected_targets = [TARGETS[args.target]]
+
+    for target in selected_targets:
+        build_target(
+            target,
+            version_file=version_file,
+            include_zip=not args.no_zip,
+        )
+
+    print("\nBuild completed.")
+    if platform.system().lower() == "windows":
+        print(
+            "Windows note: ask users to open ZIP file properties and click "
+            "'Unblock' before extraction."
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
