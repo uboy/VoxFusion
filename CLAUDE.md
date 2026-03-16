@@ -10,7 +10,7 @@ VoxFusion is a cross-platform (Windows, macOS, Linux) audio capture and transcri
 
 ## Architecture Summary
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full architecture document with detailed module interfaces, data flow diagrams, and ADRs.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full architecture document with detailed module interfaces, data flow diagrams, and ADRs.
 
 ### Pipeline
 
@@ -294,7 +294,7 @@ voxfusion models list
 | `src/voxfusion/cli/main.py` | CLI entry point |
 | `src/voxfusion/models/` | All shared data types (AudioChunk, TranscriptionSegment, etc.) |
 | `tests/conftest.py` | Shared test fixtures |
-| `ARCHITECTURE.md` | Full architecture document |
+| `docs/ARCHITECTURE.md` | Full architecture document |
 
 ## Current Status
 

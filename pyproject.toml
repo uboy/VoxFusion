@@ -24,7 +24,8 @@ classifiers = [
 packages = [{ include = "voxfusion", from = "src" }]
 
 [tool.poetry.scripts]
-voxfusion = "voxfusion.cli.main:cli"
+voxfusion = "voxfusion.cli.main:main"
+voxfusion-gui = "voxfusion.gui.main:main"
 
 [tool.poetry.dependencies]
 python = "^3.11"
@@ -39,6 +40,7 @@ soundfile = ">=0.12"
 structlog = ">=23.0"
 pyyaml = ">=6.0"
 httpx = ">=0.24"
+tqdm = ">=4.66"
 
 # Platform-specific dependencies
 pycaw = { version = ">=20230407", markers = "sys_platform == 'win32'", optional = true }
@@ -65,6 +67,7 @@ ruff = ">=0.1"
 mypy = ">=1.5"
 pip-audit = ">=2.6"
 pre-commit = ">=3.0"
+pyinstaller = ">=6.0"
 
 # Optional extras (declared here so poetry resolves them)
 [tool.poetry.group.diarization]

@@ -1,0 +1,67 @@
+2026-03-16
+
+- Task type: trivial question about whether VoxFusion can record audio without real-time transcription.
+- Startup ritual: `coordination/tasks.jsonl` was missing and was created empty; no in-progress task to resume.
+- Findings:
+  - `src/voxfusion/cli/capture_cmd.py` implements live capture tied to real-time ASR/transcription output.
+  - `src/voxfusion/pipeline/streaming.py` always routes captured chunks through ASR.
+  - `record_audio.py` provides separate microphone-only recording to WAV for later transcription.
+- Task reclassified: non-trivial after user requested implementation in CLI/GUI.
+- Research artifacts created:
+  - `.scratchpad/research.md`
+  - `.scratchpad/plan.md`
+- Current checkpoint:
+  - recommended design is a separate `voxfusion record` command plus a GUI recording worker/button.
+  - user approved plan with `CC`.
+- Integration notes:
+  - `src/voxfusion/cli/main.py` registers commands centrally; adding `record` there is straightforward.
+  - `src/voxfusion/gui/main.py` already has independent workers for live capture and file transcription, so recording should be a separate worker instead of branching inside `CaptureWorker`.
+  - `src/voxfusion/capture/mixer.py` interleaves chunks from multiple sources; recorder can consume this stream and write a single mixed-timeline WAV without touching ASR code.
+  - `tests/unit/` already contains focused unit tests and is the right place for recorder tests.
+- Implementation progress:
+  - added `src/voxfusion/recording/` with source factory and WAV recorder.
+  - added CLI command `voxfusion record`.
+  - wired GUI with `RecordingWorker` and `Record Audio` button in the Live tab.
+  - added `tests/unit/test_recording.py` and README command notes.
+- Verification:
+  - `.\venv\Scripts\python.exe -m pytest tests\unit\test_recording.py tests\unit\test_capture_factory.py` -> pass (8 passed)
+  - `.\venv\Scripts\python.exe -m pytest tests\unit\test_config.py -q` -> pass (13 passed)
+  - `git diff --check -- src/voxfusion/cli/main.py src/voxfusion/cli/record_cmd.py src/voxfusion/gui/main.py src/voxfusion/recording README.md tests/unit/test_recording.py coordination/tasks.jsonl coordination/state/codex.md .scratchpad/research.md .scratchpad/plan.md` -> pass
+- Review artifact:
+  - `coordination/reviews/2026-03-16-record-audio-mode.md`
+- New user request:
+  - refine GUI into a guided flow: record audio -> transcribe recorded audio -> send transcript to Open WebUI LLM.
+- Current assessment:
+  - existing capabilities are present but fragmented across live/file/LLM sections.
+  - implementation should pause and re-plan because the task scope shifted from feature addition to UX orchestration.
+- Follow-up implementation:
+  - added raw-recording pause/resume support in `AudioRecorder`.
+  - added GUI `Pause`/`Resume` control for raw recording only.
+  - added a recorder test covering paused audio exclusion and timeline compaction.
+- Additional verification:
+  - `.\venv\Scripts\python.exe -m pytest tests\unit\test_recording.py -q` -> pass (4 passed)
+  - `git diff --check -- src/voxfusion/recording/recorder.py src/voxfusion/gui/main.py tests/unit/test_recording.py coordination/state/codex.md` -> pass
+- Guided flow implementation progress:
+  - GUI now tracks the last recorded file and preloads it into the file transcription flow after recording.
+  - file tab now exposes explicit next-step actions: use/transcribe last recording and send transcript to Open WebUI.
+  - added pure helper coverage for workflow status hints.
+- Latest verification:
+  - `.\venv\Scripts\python.exe -m pytest tests\unit\test_gui_flow.py tests\unit\test_recording.py -q` -> pass (7 passed)
+  - `git diff --check -- src/voxfusion/gui/main.py tests/unit/test_gui_flow.py coordination/state/codex.md coordination/reviews/2026-03-16-record-audio-mode.md` -> pass
+- User-reported issues after real run:
+  - transcription completion is unclear and no transcript file is visibly produced
+  - file-flow buttons are redundant with auto-populated path
+  - Open WebUI settings are not persisted and models are not loaded dynamically
+  - prompt selection/editing is absent in GUI
+  - `both` recording can fall back to one source without strong user-facing signaling
+- Implemented fixes:
+  - removed redundant file-flow buttons; `Transcribe` now acts on the populated file path
+  - transcription now auto-saves `.transcript.txt` next to the selected audio file
+  - GUI shows explicit transcript artifact path and clearer completion messaging
+  - Open WebUI settings are persisted in `~/.voxfusion/gui_settings.json`
+  - GUI can refresh available Open WebUI models and populate a combobox
+  - GUI provides a prompt editor/viewer for transcript processing templates
+  - recorder now surfaces a warning if `both` falls back to a single active source
+- Latest verification:
+  - `.\venv\Scripts\python.exe -m pytest tests\unit\test_gui_flow.py tests\unit\test_llm_client.py tests\unit\test_recording.py tests\unit\test_capture_factory.py -q` -> pass (17 passed)
+  - `git diff --check -- src/voxfusion/gui/main.py src/voxfusion/llm/client.py src/voxfusion/capture/mixer.py src/voxfusion/recording/recorder.py tests/unit/test_gui_flow.py tests/unit/test_llm_client.py coordination/state/codex.md coordination/reviews/2026-03-16-record-audio-mode.md .scratchpad/research.md .scratchpad/plan.md` -> pass

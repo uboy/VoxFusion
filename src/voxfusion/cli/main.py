@@ -17,3 +17,26 @@ def cli(ctx: click.Context, verbose: bool, quiet: bool, config: str | None) -> N
     ctx.obj["verbose"] = verbose
     ctx.obj["quiet"] = quiet
     ctx.obj["config_path"] = config
+
+
+# Register subcommands
+from voxfusion.cli.capture_cmd import capture  # noqa: E402
+from voxfusion.cli.config_cmd import config_group  # noqa: E402
+from voxfusion.cli.devices_cmd import devices  # noqa: E402
+from voxfusion.cli.models_cmd import models_group  # noqa: E402
+from voxfusion.cli.record_cmd import record  # noqa: E402
+from voxfusion.cli.summarize_cmd import summarize  # noqa: E402
+from voxfusion.cli.transcribe_cmd import transcribe  # noqa: E402
+
+cli.add_command(capture)
+cli.add_command(record)
+cli.add_command(transcribe)
+cli.add_command(summarize)
+cli.add_command(config_group, "config")
+cli.add_command(devices)
+cli.add_command(models_group, "models")
+
+
+def main() -> None:
+    """Run CLI entry point."""
+    cli(prog_name="voxfusion")
