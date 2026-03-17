@@ -49,16 +49,35 @@ def models_download(
 
     if asr_model:
         click.echo(f"Downloading ASR model: {asr_model}")
-        try:
-            from faster_whisper import WhisperModel
+        if asr_model == "gigaam-v3-e2e-ctc":
+            try:
+                from optimum.onnxruntime import ORTModelForCTC
+                from transformers import AutoProcessor
 
-            click.echo("  Loading model (this may download it)...")
-            WhisperModel(asr_model, device="cpu", compute_type="int8")
-            echo_success(f"  ASR model '{asr_model}' ready.")
-        except ImportError:
-            raise click.ClickException("faster-whisper is not installed.")
-        except Exception as exc:
-            raise click.ClickException(f"Failed to download ASR model: {exc}") from exc
+                ref = "ai-forever/gigaam-v3-e2e-ctc"
+                click.echo("  Downloading GigaAM processor...")
+                AutoProcessor.from_pretrained(ref)
+                click.echo("  Downloading GigaAM ONNX model...")
+                ORTModelForCTC.from_pretrained(ref, provider="CPUExecutionProvider")
+                echo_success(f"  GigaAM model '{asr_model}' ready.")
+            except ImportError:
+                raise click.ClickException(
+                    "GigaAM requires optimum[onnxruntime] and transformers. "
+                    "Install with: pip install 'optimum[onnxruntime]' transformers"
+                )
+            except Exception as exc:
+                raise click.ClickException(f"Failed to download GigaAM model: {exc}") from exc
+        else:
+            try:
+                from faster_whisper import WhisperModel
+
+                click.echo("  Loading model (this may download it)...")
+                WhisperModel(asr_model, device="cpu", compute_type="int8")
+                echo_success(f"  ASR model '{asr_model}' ready.")
+            except ImportError:
+                raise click.ClickException("faster-whisper is not installed.")
+            except Exception as exc:
+                raise click.ClickException(f"Failed to download ASR model: {exc}") from exc
 
     if diar_model:
         echo_warning(f"  Diarization model download not yet implemented: {diar_model}")

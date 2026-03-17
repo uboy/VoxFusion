@@ -1,7 +1,9 @@
 """Pydantic v2 configuration models for all VoxFusion settings."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from voxfusion.asr_catalog import get_model_info, normalize_language_for_model
 
 
 class VADParameters(BaseModel):
@@ -28,6 +30,7 @@ class ASRConfig(BaseModel):
 
     engine: str = "faster-whisper"
     model_size: str = "small"
+    model_path: str | None = None
     device: str = "auto"
     compute_type: str = "int8_float32"
     cpu_threads: int = Field(default=0, ge=0)  # 0 = use all available cores
@@ -42,6 +45,14 @@ class ASRConfig(BaseModel):
     no_speech_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
     chunk_duration_s: int = Field(default=5, ge=1, le=30)
     chunk_overlap_s: int = Field(default=1, ge=0, le=10)
+
+    @model_validator(mode="after")
+    def _normalize_catalog_compatibility(self) -> "ASRConfig":
+        model_info = get_model_info(self.model_size)
+        self.model_size = model_info.id
+        self.engine = model_info.engine
+        self.language = normalize_language_for_model(self.model_size, self.language)
+        return self
 
 
 class DiarizationMLConfig(BaseModel):

@@ -162,3 +162,99 @@ Fix the concrete UX/behavior issues reported after running the current flow.
 ## CC requested
 
 If this matches what you want, send `CC` and I will implement this revised GUI flow.
+
+---
+
+# Plan: borrow selected Handy patterns into VoxFusion
+
+## Scope
+
+Create an implementation plan for selectively borrowing the best ideas from `Handy` into `VoxFusion`, focusing on:
+
+1. `GigaAM v3`,
+2. model-aware language mapping,
+3. speed/accuracy visualization,
+4. a more polished settings UI.
+
+## Proposed workstreams
+
+1. Introduce a first-class model catalog in VoxFusion.
+   - Add structured metadata for each ASR option/backend:
+     - id,
+     - display name,
+     - backend family,
+     - description,
+     - supported languages,
+     - supports language selection,
+     - supports translation,
+     - recommended flag,
+     - estimated speed/accuracy scores.
+   - Keep score semantics explicitly heuristic, not benchmark guarantees.
+
+2. Add model-aware language behavior.
+   - Replace the flat language handling with:
+     - canonical language list,
+     - per-model allowed language set,
+     - automatic reset to `auto` when model and chosen language become incompatible.
+   - In GUI, filter the language selector based on the active model.
+
+3. Improve model selection UX in GUI.
+   - Add richer model presentation in settings:
+     - concise description,
+     - supported language summary,
+     - speed and accuracy bars,
+     - recommended badge.
+   - Keep the initial implementation compatible with Tkinter rather than trying to clone Handy’s React layout verbatim.
+
+4. Restructure GUI settings flow.
+   - Re-group settings into clearer sections:
+     - Capture
+     - Transcription
+     - Transcript Processing / LLM
+     - Advanced
+   - Add a model-specific settings subsection that appears only when relevant.
+   - Reuse the already-added Open WebUI persistence/model-refresh/prompt controls, but move them into a cleaner settings layout.
+
+5. Integrate `GigaAM v3` as a new backend option.
+   - Treat this as a separate implementation phase after metadata/UI groundwork.
+   - First validate a Python inference path and packaging story.
+   - Start with batch transcription support before considering live capture integration.
+
+## Recommended execution order
+
+### Phase 1: metadata and compatibility
+
+- Build the model catalog abstraction.
+- Wire language compatibility rules.
+- Update config/state shape to persist selected model and selected language safely.
+
+### Phase 2: GUI settings and selector improvements
+
+- Rework the transcription/settings UI around the new model metadata.
+- Add visual speed/accuracy hints and capability labels.
+- Improve overall settings hierarchy to be closer to Handy in clarity, not in framework.
+
+### Phase 3: `GigaAM v3`
+
+- Research Python integration options for `GigaAM v3`.
+- Add backend adapter and model registration.
+- Expose it in CLI and GUI only after the backend is verifiably usable.
+
+## Risks
+
+- `GigaAM v3` may be the most valuable item product-wise but has the highest technical integration risk.
+- A settings redesign can sprawl if it is not constrained to information architecture first.
+- Model metadata becomes a product contract; once exposed, unsupported combinations must be handled consistently in CLI and GUI.
+
+## Recommended first implementation slice
+
+If you want the best cost/benefit order, the first slice should be:
+
+1. model catalog,
+2. language mapping/reset rules,
+3. richer model selector in settings,
+4. then `GigaAM v3`.
+
+## CC requested
+
+If this direction matches what you want, send `CC`, and I will turn this into an implementation checklist and start with Phase 1.

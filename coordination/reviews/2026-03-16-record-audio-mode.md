@@ -37,3 +37,20 @@
 ## Notes
 
 - Review report validation script was not present under `scripts/validate-review-report.*`, so no script-based validation could be run.
+- Follow-up UX/refactor batch completed:
+  - GUI helpers/workers/theme/model summary were extracted into dedicated modules.
+  - `src/voxfusion/gui/main.py` was reduced substantially and now focuses on composition rather than worker/runtime implementation.
+  - catalog-driven model overview cards and grouped section layout were added to improve usability.
+  - broad regression verification was run:
+    - `.\venv\Scripts\python.exe -m pytest tests\unit tests\integration\test_gui_smoke.py -q`
+      - Result: pass (`165 passed`)
+    - `.\venv\Scripts\python.exe -m voxfusion.gui.main --help`
+      - Result: pass (help output shown; non-blocking `runpy` warning observed)
+- GigaAM backend follow-up:
+  - added a batch-oriented ONNX/CTC backend and factory routing for `gigaam-v3-e2e-ctc`
+  - live capture now rejects the model explicitly because only file transcription is supported for this backend
+  - verification:
+    - `.\venv\Scripts\python.exe -m pytest tests\unit tests\integration\test_gui_smoke.py -q`
+      - Result: pass (`171 passed`)
+  - residual risk:
+    - no real local GigaAM model/tokenizer artifacts were available for a true end-to-end transcription run in this environment

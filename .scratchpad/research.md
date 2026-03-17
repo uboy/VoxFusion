@@ -130,3 +130,146 @@ The user now wants a clear GUI flow for:
   - show a strong completion state,
   - make it obvious where the transcript lives,
   - allow immediate next-step processing by LLM.
+
+---
+
+# Research: borrow plan from Handy
+
+## User request
+
+Build a plan for what VoxFusion can borrow from `C:\Users\devl\proj\Handy`, with specific interest in:
+
+- `GigaAM v3`,
+- language selection with model-aware mapping,
+- visualization of model speed/accuracy,
+- a cleaner, more polished settings UI.
+
+## What Handy does relevant to this request
+
+- `Handy` has a typed model registry in Rust (`src-tauri/src/managers/model.rs`).
+  - Each model declares:
+    - `engine_type`,
+    - `accuracy_score`,
+    - `speed_score`,
+    - `supported_languages`,
+    - `supports_language_selection`,
+    - `supports_translation`,
+    - `is_recommended`.
+- `Handy` already includes `GigaAM v3`.
+  - Model id: `gigaam-v3-e2e-ctc`
+  - Engine: `EngineType::GigaAM`
+  - Filename: `giga-am-v3.int8.onnx`
+  - Declared support: Russian only (`["ru"]`)
+  - UI score hints: `accuracy_score=0.85`, `speed_score=0.75`
+- `Handy` enforces model-aware language behavior.
+  - The global language list lives in `src/lib/constants/languages.ts`.
+  - The active model advertises `supported_languages`.
+  - `LanguageSelector.tsx` filters available languages against the current model.
+  - `commands/models.rs` resets `selected_language` to `auto` if the newly selected model does not support the previously chosen language.
+- `Handy` surfaces model tradeoffs in the UI.
+  - `ModelCard.tsx` renders compact bar visualizations for `accuracy_score` and `speed_score`.
+  - The same card also shows capability badges for multilingual support and translation.
+- `Handy` settings UX is modular and more polished than current VoxFusion GUI.
+  - General settings are grouped with reusable `SettingsGroup` / `SettingContainer`.
+  - Model-specific settings are conditional (`ModelSettingsCard.tsx`).
+  - Post-processing settings include provider selection, persisted values, model refresh, and prompt management.
+
+## What is realistically portable to VoxFusion
+
+### Good candidates to borrow conceptually
+
+- Model registry metadata shape.
+  - VoxFusion can benefit from first-class metadata per ASR backend/model:
+    - display name,
+    - engine/backend family,
+    - supported languages,
+    - translation support,
+    - recommended/default flag,
+    - estimated speed/accuracy score.
+- Language-to-model compatibility rules.
+  - This is directly useful in VoxFusion and not tied to Tauri/Rust.
+  - The important behavior is not just filtering the dropdown; it is preventing invalid model/language combinations.
+- Speed/accuracy visualization.
+  - Lightweight bars or badges are easy to reproduce in Tkinter.
+  - They give users a fast heuristic for choosing a model without reading long descriptions.
+- Settings information architecture.
+  - Separate sections for:
+    - audio/capture,
+    - transcription/model,
+    - transcript processing / LLM,
+    - advanced/debug.
+  - Within the transcription section, model-aware sub-settings should appear only when relevant.
+- Post-processing UX patterns.
+  - Persist provider settings.
+  - Fetch model list from provider.
+  - Make prompt selection and editing explicit.
+
+### Borrowable model/backend direction
+
+- `GigaAM v3` is a strong candidate for VoxFusion.
+  - It fits the user's explicit preference.
+  - It also gives VoxFusion a Russian-specialized option beyond generic Whisper.
+- The `Handy` integration path itself is not directly portable.
+  - Handy uses `transcribe-rs` from Rust.
+  - VoxFusion is currently Python-based.
+  - So the transport/inference layer must be re-integrated in Python rather than copied from Handy.
+
+## What should not be copied directly
+
+- Tauri/React component architecture as implementation.
+  - VoxFusion currently uses Python/Tkinter; a direct UI code port is not realistic.
+- Rust audio/transcription runtime.
+  - Handy's `cpal` / Rust manager layer is a different concurrency and packaging model.
+- Hardcoded score values without provenance.
+  - Handy's speed/accuracy scores are UX heuristics, not benchmark guarantees.
+  - VoxFusion can adopt the pattern, but should label them as estimated or curated.
+
+## Implications for VoxFusion
+
+### GigaAM v3
+
+- Recommended as a new ASR backend option if a Python integration path is feasible.
+- Product positioning inside VoxFusion:
+  - "Best for Russian"
+  - batch transcription first,
+  - only later consider live/streaming if the backend supports it well enough.
+
+### Language mapping
+
+- VoxFusion should move from a flat language selector to:
+  - canonical language list,
+  - per-model `supported_languages`,
+  - per-model `supports_language_selection`,
+  - automatic fallback to `auto` when the model changes incompatibly.
+- This also improves Open WebUI prompting because downstream processing can know what language the transcript is expected to be in.
+
+### Visual model selection
+
+- VoxFusion should expose model cards or at least a richer selector with:
+  - model name,
+  - short description,
+  - languages summary,
+  - speed bar,
+  - accuracy bar,
+  - recommended badge.
+- This is most valuable in GUI settings and onboarding-like first-run flows.
+
+### Settings UI direction
+
+- Current GUI can be made much clearer by adopting Handy-like grouping, but in Tkinter terms:
+  - left navigation or tab/subtab grouping,
+  - consistent labeled rows,
+  - model-specific expandable section,
+  - persistent LLM/provider settings,
+  - clearer visual hierarchy.
+
+## Recommended borrowing order
+
+1. Model metadata and language compatibility rules.
+   - Highest leverage, low UI risk.
+2. Settings UI cleanup around transcription and LLM.
+   - Improves usability without forcing a full redesign.
+3. Speed/accuracy visualization.
+   - Good UX win once model metadata exists.
+4. `GigaAM v3` backend integration.
+   - High product value, but technically the riskiest because it requires a new inference integration path in Python.

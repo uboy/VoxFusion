@@ -65,3 +65,95 @@
 - Latest verification:
   - `.\venv\Scripts\python.exe -m pytest tests\unit\test_gui_flow.py tests\unit\test_llm_client.py tests\unit\test_recording.py tests\unit\test_capture_factory.py -q` -> pass (17 passed)
   - `git diff --check -- src/voxfusion/gui/main.py src/voxfusion/llm/client.py src/voxfusion/capture/mixer.py src/voxfusion/recording/recorder.py tests/unit/test_gui_flow.py tests/unit/test_llm_client.py coordination/state/codex.md coordination/reviews/2026-03-16-record-audio-mode.md .scratchpad/research.md .scratchpad/plan.md` -> pass
+- New non-trivial planning request:
+  - analyze `C:\Users\devl\proj\Handy` for patterns/models that can be borrowed into VoxFusion.
+  - explicit user interests: `GigaAM v3`, model/language mapping, speed/accuracy visualization, and a prettier settings UI.
+- Handy analysis findings:
+  - `src-tauri/src/managers/model.rs` defines a strong model metadata contract:
+    - `engine_type`, `accuracy_score`, `speed_score`, `supported_languages`,
+    - `supports_language_selection`, `supports_translation`, `is_recommended`.
+  - `Handy` includes `GigaAM v3` as `gigaam-v3-e2e-ctc`:
+    - Russian-only (`ru`),
+    - `accuracy_score=0.85`,
+    - `speed_score=0.75`,
+    - integrated through Rust `transcribe-rs`, not directly portable to Python.
+  - `src/components/settings/LanguageSelector.tsx` and `src-tauri/src/commands/models.rs` implement model-aware language filtering plus reset-to-`auto` on incompatible model change.
+  - `src/components/onboarding/ModelCard.tsx` renders compact visual bars for model speed and accuracy.
+  - settings UI is grouped cleanly via reusable containers and model-specific sections.
+- Planning artifacts updated:
+  - `.scratchpad/research.md` now includes a dedicated "borrow plan from Handy" section.
+  - `.scratchpad/plan.md` now includes a phased plan for:
+    - model catalog metadata,
+    - model-aware language mapping,
+    - richer settings/model selector UI,
+    - later `GigaAM v3` integration.
+- Recommended implementation order:
+  - Phase 1: model catalog + language compatibility rules
+  - Phase 2: GUI settings/model selector improvement + speed/accuracy hints
+  - Phase 3: `GigaAM v3` backend integration
+- Current checkpoint:
+  - waiting for user `CC` on the borrow plan before implementation.
+- User approved continuing implementation on branch `feat/handy-inspired-asr-gui-redesign`.
+- Active implementation slice:
+  - Phase 1: ASR model catalog + model-aware language compatibility groundwork.
+- Intended code scope for Phase 1:
+  - add an internal ASR catalog module for current models and languages,
+  - move GUI model/language choices off hardcoded tuples,
+  - add compatibility normalization so unsupported language/model combinations fall back to auto.
+- Phase 1 implementation completed:
+  - added `src/voxfusion/asr_catalog.py` with:
+    - built-in ASR model metadata,
+    - canonical language catalog,
+    - model-aware language compatibility helpers.
+  - `ASRConfig` now normalizes:
+    - unknown model ids -> default `small`,
+    - unsupported language for selected model -> `None` / auto.
+  - GUI now:
+    - sources model choices from the catalog,
+    - refreshes language combobox values when the model changes,
+    - normalizes live/file transcription language selections through the same catalog helpers.
+- Important implementation note:
+  - initial attempt placed the catalog inside `voxfusion.asr`, which introduced a circular import through `asr.__init__` and `config.models`.
+  - resolved by moving the catalog to top-level `src/voxfusion/asr_catalog.py`.
+- Verification:
+  - `.\venv\Scripts\python.exe -m pytest tests\unit\test_asr_catalog.py tests\unit\test_config.py tests\unit\test_gui_flow.py -q` -> pass (29 passed)
+  - `git diff --check -- ...` on touched files -> only CRLF normalization warnings from Git, no diff formatting errors.
+- Next logical phase:
+  - richer model selector/settings UI using the new metadata,
+  - then `GigaAM v3` backend integration.
+- Additional implementation batch completed on branch `feat/handy-inspired-asr-gui-redesign`:
+  - extracted GUI helpers into:
+    - `src/voxfusion/gui/helpers.py`
+    - `src/voxfusion/gui/runtime.py`
+    - `src/voxfusion/gui/theme.py`
+    - `src/voxfusion/gui/model_summary.py`
+  - reduced `src/voxfusion/gui/main.py` from ~1800 lines to 1287 lines.
+  - added grouped UI sections and catalog-driven model overview cards on live/file tabs.
+  - applied a custom ttk theme and clearer primary/accent action styling.
+  - switched `src/voxfusion/pipeline/orchestrator.py` from hardcoded `FasterWhisperEngine` to `create_asr_engine(...)` for backend-neutral batch wiring.
+- Verification:
+  - `.\venv\Scripts\python.exe -m pytest tests\unit\test_asr_catalog.py tests\unit\test_config.py tests\unit\test_gui_flow.py tests\integration\test_gui_smoke.py -q` -> pass (31 passed)
+  - `.\venv\Scripts\python.exe -m pytest tests\unit tests\integration\test_gui_smoke.py -q` -> pass (165 passed)
+  - `.\venv\Scripts\python.exe -m voxfusion.gui.main --help` -> pass (CLI help printed; runtime warning from `runpy` only)
+- GigaAM feasibility checkpoint:
+  - runtime dependencies are present in the project `venv`:
+    - `onnxruntime`
+    - `onnx`
+    - `transformers`
+    - `optimum.onnxruntime`
+    - `torch`
+  - no verified local `GigaAM` model/tokenizer artifacts were found in project scope or user profile search.
+- conclusion: `GigaAM v3` is not blocked by Python dependencies, but is still blocked by missing verified model id / artifact layout / integration contract for this repo.
+- GigaAM implementation batch completed:
+  - added catalog entry `gigaam-v3-e2e-ctc` in `src/voxfusion/asr_catalog.py`
+  - `ASRConfig` now derives `engine` from selected model family and supports `model_path`
+  - added `src/voxfusion/asr/gigaam_engine.py` with ONNX/CTC batch transcription path
+  - `src/voxfusion/asr/factory.py` now routes `engine == "gigaam"` to `GigaAMCTCEngine`
+  - live capture is explicitly blocked for GigaAM:
+    - GUI disables/guards Start for file-only model selection
+    - `voxfusion capture --model gigaam-v3-e2e-ctc` fails fast with a clear message
+- Verification:
+  - `.\venv\Scripts\python.exe -m pytest tests\unit\test_gigaam_engine.py tests\unit\test_config.py tests\unit\test_gui_flow.py tests\integration\test_gui_smoke.py -q` -> pass (31 passed)
+  - `.\venv\Scripts\python.exe -m pytest tests\unit tests\integration\test_gui_smoke.py -q` -> pass (171 passed)
+- Remaining limitation:
+  - no real local GigaAM model/tokenizer artifact was available in project scope, so backend was verified through routing/tests/fakes rather than a true audio-to-text run with the actual model.
