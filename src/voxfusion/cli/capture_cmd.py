@@ -245,14 +245,8 @@ def capture(
         if platform == "wasapi":
             if source == "both":
                 from voxfusion.capture.mixer import AudioMixer
-                from voxfusion.capture.wasapi import find_loopback_input_device
-                loopback_idx = find_loopback_input_device()
-                system_src = WASAPICapture(
-                    device_index=loopback_idx,
-                    loopback=(loopback_idx is None),
-                    source_label="system",
-                    config=config.capture,
-                )
+                from voxfusion.capture.wasapi import RobustLoopbackCapture
+                system_src: object = RobustLoopbackCapture(config=config.capture)
                 audio_source = AudioMixer([
                     WASAPICapture(
                         device_index=device,
@@ -262,10 +256,13 @@ def capture(
                     ),
                     system_src,
                 ])
+            elif source == "system":
+                from voxfusion.capture.wasapi import RobustLoopbackCapture
+                audio_source = RobustLoopbackCapture(config=config.capture)
             else:
                 audio_source = WASAPICapture(
                     device_index=device,
-                    loopback=(source == "system"),
+                    loopback=False,
                     config=config.capture,
                 )
         else:

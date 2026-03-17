@@ -496,45 +496,33 @@ class CaptureWorker:
 
         if self._options.source == "both":
             from voxfusion.capture.mixer import AudioMixer
-            from voxfusion.capture.wasapi import find_loopback_input_device
+            from voxfusion.capture.wasapi import RobustLoopbackCapture
 
             mic_source = WASAPICapture(
                 device_index=self._options.device_index,
                 loopback=False,
                 config=config.capture,
             )
-            loopback_input_idx = find_loopback_input_device()
-            if loopback_input_idx is not None:
-                self._on_status(
-                    f"System audio: virtual input device {loopback_input_idx}. Starting..."
-                )
-                sys_source: object = WASAPICapture(
-                    device_index=loopback_input_idx,
-                    loopback=False,
-                    source_label="system",
-                    config=config.capture,
-                )
-            else:
-                self._on_status("System audio: WASAPI loopback on default output. Starting...")
-                sys_source = WASAPICapture(
-                    device_index=None,
-                    loopback=True,
-                    source_label="system",
-                    config=config.capture,
-                )
+            sys_source: object = RobustLoopbackCapture(config=config.capture)
             mic_vad = VadChunker(mic_source, max_duration_ms=5000)
             sys_vad = VadChunker(sys_source, max_duration_ms=5000)
             audio_source: object = AudioMixer(sources=[mic_vad, sys_vad])
         else:
-            loopback = self._options.source == "system"
-            audio_source = VadChunker(
-                WASAPICapture(
-                    device_index=self._options.device_index,
-                    loopback=loopback,
-                    config=config.capture,
-                ),
-                max_duration_ms=5000,
-            )
+            if self._options.source == "system":
+                from voxfusion.capture.wasapi import RobustLoopbackCapture
+                audio_source = VadChunker(
+                    RobustLoopbackCapture(config=config.capture),
+                    max_duration_ms=5000,
+                )
+            else:
+                audio_source = VadChunker(
+                    WASAPICapture(
+                        device_index=self._options.device_index,
+                        loopback=False,
+                        config=config.capture,
+                    ),
+                    max_duration_ms=5000,
+                )
 
         segment_progress = get_stage_progress("segments")
 
