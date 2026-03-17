@@ -31,22 +31,38 @@ class BinaryTarget:
     """PyInstaller build target."""
 
     name: str
-    launcher: Path
+    entry_module: str
+    entry_callable: str
     windowed: bool
 
 
 TARGETS: dict[str, BinaryTarget] = {
     "gui": BinaryTarget(
         name="voxfusion-gui",
-        launcher=PROJECT_ROOT / "gui_start.py",
+        entry_module="voxfusion.gui.main",
+        entry_callable="main",
         windowed=True,
     ),
     "cli": BinaryTarget(
         name="voxfusion-cli",
-        launcher=PROJECT_ROOT / "cli_start.py",
+        entry_module="voxfusion.cli.main",
+        entry_callable="main",
         windowed=False,
     ),
 }
+
+
+def _write_launcher(target: BinaryTarget) -> Path:
+    """Generate a minimal launcher script in the build directory."""
+    BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    launcher_path = BUILD_DIR / f"{target.name}_launcher.py"
+    launcher_path.write_text(
+        f"from {target.entry_module} import {target.entry_callable}\n"
+        f"if __name__ == '__main__':\n"
+        f"    raise SystemExit({target.entry_callable}())\n",
+        encoding="utf-8",
+    )
+    return launcher_path
 
 
 def parse_args() -> argparse.Namespace:
@@ -212,6 +228,27 @@ def _platform_tag() -> str:
     return f"{system_name}-{machine}"
 
 
+def _copy_python_dll(bundle_dir: Path) -> None:
+    """Copy python3XX.dll next to the EXE for reliable loading on Windows.
+
+    PyInstaller places the DLL in _internal/ and uses SetDllDirectory to
+    expose it, but some Windows 11 security configurations prevent this.
+    Having the DLL in the same directory as the EXE is always found first
+    by the Windows DLL loader without any extra API calls.
+    """
+    if platform.system().lower() != "windows":
+        return
+    dll_name = f"python{sys.version_info.major}{sys.version_info.minor}.dll"
+    src = Path(sys.executable).parent / dll_name
+    if not src.exists():
+        print(f"[dll] WARNING: {dll_name} not found at {src}, skipping copy")
+        return
+    dst = bundle_dir / dll_name
+    if not dst.exists():
+        shutil.copy2(src, dst)
+        print(f"[dll] copied {dll_name} to bundle root for reliable loading")
+
+
 def build_target(
     target: BinaryTarget,
     *,
@@ -253,13 +290,15 @@ def build_target(
     for entry in _default_data_entries():
         command.extend(["--add-data", entry])
 
-    command.append(str(target.launcher))
+    launcher = _write_launcher(target)
+    command.append(str(launcher))
 
     print(f"\n[build] {target.name}")
     print(" ".join(command))
     subprocess.run(command, cwd=PROJECT_ROOT, check=True)
 
     bundle_dir = DIST_DIR / target.name
+    _copy_python_dll(bundle_dir)
     if not include_zip:
         return bundle_dir
 

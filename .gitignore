@@ -69,8 +69,6 @@ logs/
 .env.*
 
 # Personal debug notes and scratch scripts in project root
-cli_start.py
-gui_start.py
 gui_capture.py
 create_test_audio.py
 diag_mic.py

@@ -245,11 +245,11 @@ def capture(
         if platform == "wasapi":
             if source == "both":
                 from voxfusion.capture.mixer import AudioMixer
-                from voxfusion.capture.wasapi import find_stereo_mix_device
-                stereo_mix_idx = find_stereo_mix_device()
+                from voxfusion.capture.wasapi import find_loopback_input_device
+                loopback_idx = find_loopback_input_device()
                 system_src = WASAPICapture(
-                    device_index=stereo_mix_idx,
-                    loopback=(stereo_mix_idx is None),
+                    device_index=loopback_idx,
+                    loopback=(loopback_idx is None),
                     source_label="system",
                     config=config.capture,
                 )
