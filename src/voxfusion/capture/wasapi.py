@@ -632,3 +632,371 @@ def find_loopback_input_device() -> int | None:
 def find_stereo_mix_device() -> int | None:
     """Backward-compatible alias for find_loopback_input_device()."""
     return find_loopback_input_device()
+
+
+class RobustLoopbackCapture:
+    """System audio loopback with automatic backend fallback.
+
+    Tries capture backends in order at ``start()`` time:
+    1. pyaudiowpatch  — virtual loopback devices, works on any Win 10/11
+    2. Virtual input  — Stereo Mix / What U Hear (if enabled in Windows)
+    3. WASAPI loopback on the default output device
+
+    All fallback logic lives here so callers just use this class directly.
+    """
+
+    def __init__(
+        self,
+        device_index: int | None = None,
+        config: CaptureConfig | None = None,
+    ) -> None:
+        self._device_index = device_index
+        self._config = config or CaptureConfig()
+        self._delegate: object | None = None
+
+    # ------------------------------------------------------------------
+    # Protocol properties — delegate once started
+    # ------------------------------------------------------------------
+    @property
+    def device_name(self) -> str:
+        return self._delegate.device_name if self._delegate else "robust-loopback"  # type: ignore[union-attr]
+
+    @property
+    def sample_rate(self) -> int:
+        return self._delegate.sample_rate if self._delegate else self._config.sample_rate  # type: ignore[union-attr]
+
+    @property
+    def channels(self) -> int:
+        return self._delegate.channels if self._delegate else self._config.channels  # type: ignore[union-attr]
+
+    @property
+    def is_active(self) -> bool:
+        return self._delegate.is_active if self._delegate else False  # type: ignore[union-attr]
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+    async def start(self) -> None:
+        """Try each loopback backend in priority order."""
+        errors: list[str] = []
+
+        # 1. pyaudiowpatch — most reliable on Windows 10/11
+        try:
+            candidate: object = PyAudioLoopbackCapture(config=self._config)
+            await candidate.start()  # type: ignore[union-attr]
+            self._delegate = candidate
+            log.info("robust_loopback.backend", backend="pyaudiowpatch")
+            return
+        except Exception as exc:
+            errors.append(f"pyaudiowpatch: {exc}")
+            log.debug("robust_loopback.backend_failed", backend="pyaudiowpatch", error=str(exc))
+
+        # 2. Virtual input device (Stereo Mix, What U Hear, …)
+        virtual_idx = find_loopback_input_device()
+        if virtual_idx is not None:
+            try:
+                candidate = WASAPICapture(
+                    device_index=virtual_idx,
+                    loopback=False,
+                    source_label="system",
+                    config=self._config,
+                )
+                await candidate.start()  # type: ignore[union-attr]
+                self._delegate = candidate
+                log.info("robust_loopback.backend", backend="virtual_input", device_index=virtual_idx)
+                return
+            except Exception as exc:
+                errors.append(f"virtual_input[{virtual_idx}]: {exc}")
+                log.debug("robust_loopback.backend_failed", backend="virtual_input", error=str(exc))
+
+        # 3. WASAPI loopback on the default (or specified) output device
+        try:
+            candidate = WASAPICapture(
+                device_index=self._device_index,
+                loopback=True,
+                config=self._config,
+            )
+            await candidate.start()  # type: ignore[union-attr]
+            self._delegate = candidate
+            log.info("robust_loopback.backend", backend="wasapi_loopback")
+            return
+        except Exception as exc:
+            errors.append(f"wasapi_loopback: {exc}")
+
+        raise AudioCaptureError(
+            "All system audio capture methods failed on this machine.\n"
+            "Fix: open Windows Sound settings → Recording tab → right-click in the list\n"
+            "→ 'Show Disabled Devices' → enable 'Stereo Mix'.\n"
+            "Alternative: install VB-Audio Virtual Cable (free).\n"
+            f"Details: {' | '.join(errors)}"
+        )
+
+    async def stop(self) -> None:
+        if self._delegate is not None:
+            await self._delegate.stop()  # type: ignore[union-attr]
+            self._delegate = None
+
+    async def stream(self, chunk_duration_ms: int = 500) -> AsyncIterator[AudioChunk]:
+        if self._delegate is None:
+            raise AudioCaptureError("RobustLoopbackCapture is not active")
+        async for chunk in self._delegate.stream(chunk_duration_ms=chunk_duration_ms):  # type: ignore[union-attr]
+            yield chunk
+
+
+class PyAudioLoopbackCapture:
+    """System audio loopback capture via pyaudiowpatch.
+
+    pyaudiowpatch patches PortAudio to expose each WASAPI output device
+    as a virtual loopback input device (e.g. "Speakers [Loopback]").
+    This works on any Windows 10/11 machine without requiring Stereo Mix
+    to be enabled or exclusive audio mode access.
+
+    Install: ``pip install pyaudiowpatch``
+    """
+
+    def __init__(
+        self,
+        device_index: int | None = None,
+        config: CaptureConfig | None = None,
+    ) -> None:
+        self._device_index = device_index
+        self._config = config or CaptureConfig()
+        self._pa: object | None = None
+        self._stream: object | None = None
+        self._buffer: asyncio.Queue[np.ndarray | None] = asyncio.Queue(
+            maxsize=self._config.buffer_size,
+        )
+        self._active = False
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._position = 0
+
+    @property
+    def device_name(self) -> str:
+        return f"pyaudio-loopback:{self._device_index or 'default'}"
+
+    @property
+    def sample_rate(self) -> int:
+        return self._config.sample_rate
+
+    @property
+    def channels(self) -> int:
+        return self._config.channels
+
+    @property
+    def is_active(self) -> bool:
+        return self._active
+
+    def _find_loopback_device(self, pa: object) -> dict:  # type: ignore[type-arg]
+        """Find the best loopback device matching the default output."""
+        import pyaudiowpatch as pyaudio  # type: ignore[import-not-found]
+
+        wasapi_info = pa.get_host_api_info_by_type(pyaudio.paWASAPI)  # type: ignore[union-attr]
+        default_out_idx = wasapi_info["defaultOutputDevice"]
+        default_out = pa.get_device_info_by_index(default_out_idx)  # type: ignore[union-attr]
+        default_name: str = default_out.get("name", "")
+
+        best: dict | None = None  # type: ignore[type-arg]
+        for i in range(pa.get_device_count()):  # type: ignore[union-attr]
+            dev = pa.get_device_info_by_index(i)  # type: ignore[union-attr]
+            if not dev.get("isLoopbackDevice"):
+                continue
+            if int(dev.get("maxInputChannels", 0)) <= 0:
+                continue
+            if best is None:
+                best = dev
+            # Prefer the device that matches the default output name
+            if default_name and default_name in str(dev.get("name", "")):
+                return dev
+
+        if best is not None:
+            return best
+        raise AudioCaptureError(
+            "No WASAPI loopback devices found via pyaudiowpatch. "
+            "Make sure pyaudiowpatch is properly installed: pip install pyaudiowpatch"
+        )
+
+    def _make_callback(self) -> object:
+        """Return a PortAudio stream callback that enqueues float32 audio."""
+        import pyaudiowpatch as pyaudio  # type: ignore[import-not-found]
+
+        def _callback(
+            in_data: bytes,
+            frame_count: int,
+            time_info: object,
+            status: int,
+        ) -> tuple[None, int]:
+            loop = self._loop
+            if loop is not None and self._active:
+                arr = np.frombuffer(in_data, dtype=np.float32).copy()
+                try:
+                    loop.call_soon_threadsafe(self._enqueue, arr)
+                except RuntimeError:
+                    pass
+            return (None, pyaudio.paContinue)
+
+        return _callback
+
+    def _enqueue(self, data: np.ndarray) -> None:
+        if not self._active:
+            return
+        try:
+            self._buffer.put_nowait(data)
+        except asyncio.QueueFull:
+            if self._config.lossy_mode:
+                log.debug("pyaudio_loopback.buffer_full_dropping")
+            else:
+                log.warning("pyaudio_loopback.buffer_full")
+
+    async def start(self) -> None:
+        """Open the WASAPI loopback stream."""
+        try:
+            import pyaudiowpatch as pyaudio  # type: ignore[import-not-found]
+        except ImportError as exc:
+            raise AudioCaptureError(
+                "pyaudiowpatch is not installed. "
+                "Run: pip install pyaudiowpatch"
+            ) from exc
+
+        self._loop = asyncio.get_running_loop()
+        pa = pyaudio.PyAudio()
+        self._pa = pa
+
+        try:
+            if self._device_index is not None:
+                device_info = pa.get_device_info_by_index(self._device_index)
+            else:
+                device_info = self._find_loopback_device(pa)
+
+            sample_rate = int(device_info["defaultSampleRate"])
+            channels = max(1, min(int(device_info["maxInputChannels"]), 2))
+
+            stream = pa.open(
+                format=pyaudio.paFloat32,
+                channels=channels,
+                rate=sample_rate,
+                input=True,
+                input_device_index=device_info["index"],
+                frames_per_buffer=int(sample_rate * 0.1),
+                stream_callback=self._make_callback(),
+            )
+            stream.start_stream()
+            self._stream = stream
+            self._device_index = device_info["index"]
+            self._config.sample_rate = sample_rate
+            self._config.channels = channels
+            self._active = True
+            self._position = 0
+            log.info(
+                "pyaudio_loopback.started",
+                device=device_info.get("name", str(self._device_index)),
+                device_index=self._device_index,
+                sample_rate=sample_rate,
+                channels=channels,
+            )
+        except AudioCaptureError:
+            pa.terminate()
+            self._pa = None
+            raise
+        except Exception as exc:
+            pa.terminate()
+            self._pa = None
+            raise AudioCaptureError(f"Failed to open loopback stream: {exc}") from exc
+
+    async def stop(self) -> None:
+        """Stop and close the loopback stream."""
+        self._active = False
+        self._loop = None
+        if self._stream is not None:
+            try:
+                self._stream.stop_stream()  # type: ignore[union-attr]
+                self._stream.close()  # type: ignore[union-attr]
+            except Exception:
+                pass
+            self._stream = None
+        if self._pa is not None:
+            try:
+                self._pa.terminate()  # type: ignore[union-attr]
+            except Exception:
+                pass
+            self._pa = None
+
+        dropped = 0
+        while True:
+            try:
+                self._buffer.get_nowait()
+                dropped += 1
+            except asyncio.QueueEmpty:
+                break
+        from contextlib import suppress as _suppress
+        with _suppress(asyncio.QueueFull):
+            self._buffer.put_nowait(None)
+        log.info("pyaudio_loopback.stopped", dropped_buffer_chunks=dropped)
+
+    async def read_chunk(self, duration_ms: int = 500) -> AudioChunk:
+        """Read the next audio chunk from the buffer."""
+        if not self._active and self._buffer.empty():
+            raise AudioCaptureError("PyAudioLoopbackCapture is not active")
+
+        target_frames = max(1, int(self._config.sample_rate * duration_ms / 1000))
+        pieces: list[np.ndarray] = []
+        collected = 0
+        wait_timeout = max(duration_ms / 1000 * 2, 0.25)
+
+        while collected < target_frames:
+            if not self._active and self._buffer.empty():
+                break
+            try:
+                data = await asyncio.wait_for(self._buffer.get(), timeout=wait_timeout)
+            except asyncio.TimeoutError:
+                if pieces:
+                    break
+                if self._active:
+                    raise
+                raise AudioCaptureError("PyAudioLoopbackCapture is not active")
+            if data is None:
+                if not pieces:
+                    raise AudioCaptureError("PyAudioLoopbackCapture is not active")
+                break
+            if self._config.channels > 1 and data.ndim == 1:
+                data = data.reshape(-1, self._config.channels)
+            pieces.append(data)
+            collected += data.shape[0] if data.ndim > 1 else data.size
+
+        if not pieces:
+            raise AudioCaptureError("PyAudioLoopbackCapture is not active")
+
+        combined = np.concatenate(pieces, axis=0)
+        samples = combined.astype(np.float32).squeeze()
+
+        ts_start = self._position / self._config.sample_rate
+        self._position += samples.shape[0] if samples.ndim == 1 else samples.shape[0]
+        ts_end = self._position / self._config.sample_rate
+
+        return AudioChunk(
+            samples=samples,
+            sample_rate=self._config.sample_rate,
+            channels=self._config.channels,
+            timestamp_start=ts_start,
+            timestamp_end=ts_end,
+            source="system",
+            dtype="float32",
+        )
+
+    async def stream(self, chunk_duration_ms: int = 500) -> AsyncIterator[AudioChunk]:
+        """Yield audio chunks as they arrive."""
+        while self._active:
+            try:
+                chunk = await asyncio.wait_for(
+                    self.read_chunk(chunk_duration_ms),
+                    timeout=chunk_duration_ms / 1000 * 3,
+                )
+                yield chunk
+            except asyncio.TimeoutError:
+                if self._active:
+                    log.debug("pyaudio_loopback.stream_timeout")
+                    continue
+                break
+            except AudioCaptureError as exc:
+                if not self._active:
+                    break
+                raise

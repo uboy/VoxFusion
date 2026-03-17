@@ -148,6 +148,11 @@ VSVersionInfo(
     return VERSION_FILE_PATH
 
 
+# Packages that need --collect-all to bundle native DLLs and data files.
+_COLLECT_ALL_PACKAGES: list[str] = [
+    "pyaudiowpatch",
+]
+
 HIDDEN_IMPORTS: list[str] = [
     # Core inference
     "faster_whisper",
@@ -159,6 +164,7 @@ HIDDEN_IMPORTS: list[str] = [
     "voxfusion.asr.factory",
     "voxfusion.asr.faster_whisper",
     "voxfusion.capture.wasapi",
+    "pyaudiowpatch",
     "voxfusion.capture.vad_chunker",
     "voxfusion.capture.mixer",
     "voxfusion.media.extractor",
@@ -286,6 +292,10 @@ def build_target(
 
     for imp in HIDDEN_IMPORTS:
         command.extend(["--hidden-import", imp])
+
+    # Collect all files (including native DLLs) from packages that need it.
+    for pkg in _COLLECT_ALL_PACKAGES:
+        command.extend(["--collect-all", pkg])
 
     for entry in _default_data_entries():
         command.extend(["--add-data", entry])
