@@ -496,27 +496,30 @@ class CaptureWorker:
 
         if self._options.source == "both":
             from voxfusion.capture.mixer import AudioMixer
-            from voxfusion.capture.wasapi import find_stereo_mix_device
+            from voxfusion.capture.wasapi import find_loopback_input_device
 
             mic_source = WASAPICapture(
                 device_index=self._options.device_index,
                 loopback=False,
                 config=config.capture,
             )
-            stereo_mix_idx = find_stereo_mix_device()
-            if stereo_mix_idx is not None:
-                self._on_status(f"System audio: Stereo Mix (device {stereo_mix_idx}). Starting...")
+            loopback_input_idx = find_loopback_input_device()
+            if loopback_input_idx is not None:
+                self._on_status(
+                    f"System audio: virtual input device {loopback_input_idx}. Starting..."
+                )
                 sys_source: object = WASAPICapture(
-                    device_index=stereo_mix_idx,
+                    device_index=loopback_input_idx,
                     loopback=False,
                     source_label="system",
                     config=config.capture,
                 )
             else:
-                self._on_status("System audio: WASAPI loopback. Starting...")
+                self._on_status("System audio: WASAPI loopback on default output. Starting...")
                 sys_source = WASAPICapture(
                     device_index=None,
                     loopback=True,
+                    source_label="system",
                     config=config.capture,
                 )
             mic_vad = VadChunker(mic_source, max_duration_ms=5000)

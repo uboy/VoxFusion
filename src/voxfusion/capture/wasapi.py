@@ -19,6 +19,18 @@ from voxfusion.models.audio import AudioChunk
 
 log = get_logger(__name__)
 
+# Known names for virtual loopback input devices (localized variants included).
+_LOOPBACK_INPUT_KEYWORDS: tuple[str, ...] = (
+    "stereo mix",
+    "what u hear",
+    "wave out mix",
+    "rec. playback",
+    "output mix",
+    "loopback",
+    "mix output",
+    "record what",
+)
+
 
 class WASAPICapture:
     """WASAPI-based audio capture for Windows.
@@ -165,7 +177,8 @@ class WASAPICapture:
 
         def _is_fatal_device_error(message: str) -> bool:
             return (
-                "Invalid device [PaErrorCode -9996]" in message
+                "PaErrorCode -9996" in message
+                or "PaErrorCode -9998" in message
                 or "Blocking API not supported yet" in message
             )
 
@@ -399,11 +412,63 @@ class WASAPICapture:
             # Broke due fatal condition; continue with next candidate.
             continue
 
+        # For loopback: fall back to virtual input devices (Stereo Mix, What U Hear, etc.)
+        # These are input-only devices that mirror system audio output.
+        if self._loopback:
+            for v_idx, v_dev in enumerate(all_devices):
+                if v_idx in candidate_indices:
+                    continue
+                v_name = str(v_dev.get("name", "")).lower()
+                if int(v_dev.get("max_input_channels", 0)) <= 0:
+                    continue
+                if not any(kw in v_name for kw in _LOOPBACK_INPUT_KEYWORDS):
+                    continue
+                v_sr = int(v_dev.get("default_samplerate", 44100))
+                v_ch = min(int(v_dev.get("max_input_channels", 0)), 2)
+                try:
+                    fallback_stream = sd.InputStream(
+                        device=v_idx,
+                        samplerate=v_sr,
+                        channels=v_ch,
+                        dtype="float32",
+                        blocksize=0,
+                        callback=self._audio_callback,
+                    )
+                    fallback_stream.start()
+                    self._stream = fallback_stream
+                    self._device_index = v_idx
+                    self._config.sample_rate = v_sr
+                    self._config.channels = v_ch
+                    self._active = True
+                    self._position = 0
+                    self.__class__._last_working_loopback_device = v_idx
+                    log.info(
+                        "wasapi.started_via_virtual_input",
+                        device=v_dev.get("name", str(v_idx)),
+                        device_index=v_idx,
+                        sample_rate=v_sr,
+                        channels=v_ch,
+                    )
+                    return
+                except Exception as v_exc:
+                    _record_failure(
+                        "virtual_input",
+                        str(v_exc),
+                        device=v_dev.get("name", str(v_idx)),
+                        device_index=v_idx,
+                    )
+
         mode = "loopback" if self._loopback else "input"
         recent_failures = " | ".join(failure_reasons[-5:]) if failure_reasons else "(none)"
         last_error_text = str(last_error)
         troubleshooting_tip = ""
-        if "MME error 11" in last_error_text or "Invalid device" in last_error_text:
+        if self._loopback:
+            troubleshooting_tip = (
+                " Troubleshooting: open Windows Sound settings → Recording tab → "
+                "right-click empty area → 'Show Disabled Devices' → enable 'Stereo Mix'. "
+                "Alternatively install VB-Audio Virtual Cable for reliable loopback."
+            )
+        elif "MME error 11" in last_error_text or "Invalid device" in last_error_text:
             troubleshooting_tip = (
                 " Troubleshooting: check Windows microphone privacy for desktop apps, "
                 "disable Exclusive Mode for the selected recording device, and verify "
@@ -540,15 +605,30 @@ class WASAPICapture:
                 break
 
 
-def find_stereo_mix_device() -> int | None:
-    """Return the device index of the first Stereo Mix input device, or None."""
+def find_loopback_input_device() -> int | None:
+    """Return the device index of any virtual loopback input device, or None.
+
+    Searches for Stereo Mix, What U Hear, Wave Out Mix and similar devices
+    that Windows exposes as input sources mirroring system audio output.
+    The default output device is returned as a last resort so WASAPI loopback
+    mode can be attempted on it.
+    """
     try:
         import sounddevice as sd
 
-        for idx, dev in enumerate(sd.query_devices()):
+        devices = list(sd.query_devices())
+        # First pass: prefer known virtual input names
+        for idx, dev in enumerate(devices):
             name = str(dev.get("name", "")).lower()
-            if "stereo mix" in name and int(dev.get("max_input_channels", 0)) > 0:
+            if int(dev.get("max_input_channels", 0)) <= 0:
+                continue
+            if any(kw in name for kw in _LOOPBACK_INPUT_KEYWORDS):
                 return idx
     except Exception:
         pass
     return None
+
+
+def find_stereo_mix_device() -> int | None:
+    """Backward-compatible alias for find_loopback_input_device()."""
+    return find_loopback_input_device()
