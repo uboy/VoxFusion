@@ -32,6 +32,14 @@ class TestPipelineConfig:
         assert cfg.compute_type == "int8_float32"
         assert cfg.vad_filter is True
 
+    def test_asr_config_normalizes_unknown_model_to_default(self) -> None:
+        cfg = ASRConfig(model_size="unknown-model")
+        assert cfg.model_size == "small"
+
+    def test_asr_config_drops_unsupported_language_to_auto(self) -> None:
+        cfg = ASRConfig(model_size="small", language="xx")
+        assert cfg.language is None
+
     def test_capture_config_defaults(self) -> None:
         cfg = CaptureConfig()
         assert cfg.sample_rate == 44100  # Changed for compatibility

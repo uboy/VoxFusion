@@ -8,6 +8,7 @@ from contextlib import suppress
 import click
 
 from voxfusion.cli.formatting import echo_error, echo_warning
+from voxfusion.asr_catalog import get_model_info
 from voxfusion.config.loader import load_config
 from voxfusion.logging import configure_logging, get_logger
 from voxfusion.output import get_formatter
@@ -120,13 +121,19 @@ def capture(
     overrides.setdefault("capture", {})["buffer_size"] = 50  # Было 10
     overrides.setdefault("capture", {})["lossy_mode"] = True  # Сбрасываем при переполнении
     # Используем tiny модель для скорости в streaming режиме (если не указана другая)
-    if not model:
+    if model:
+        overrides.setdefault("asr", {})["model_size"] = model
+    else:
         overrides.setdefault("asr", {})["model_size"] = "tiny"
     if translate:
         overrides.setdefault("translation", {})["enabled"] = True
         overrides.setdefault("translation", {})["target_language"] = translate
 
     config = load_config(overrides if overrides else None)
+    if not get_model_info(config.asr.model_size).supports_live_capture:
+        raise click.ClickException(
+            f"Model '{config.asr.model_size}' is only supported for file transcription."
+        )
 
     # Check platform support
     from voxfusion.capture.factory import detect_platform
@@ -236,11 +243,31 @@ def capture(
     # Create the capture source
     try:
         if platform == "wasapi":
-            audio_source = WASAPICapture(
-                device_index=device,
-                loopback=(source == "system"),
-                config=config.capture,
-            )
+            if source == "both":
+                from voxfusion.capture.mixer import AudioMixer
+                from voxfusion.capture.wasapi import find_stereo_mix_device
+                stereo_mix_idx = find_stereo_mix_device()
+                system_src = WASAPICapture(
+                    device_index=stereo_mix_idx,
+                    loopback=(stereo_mix_idx is None),
+                    source_label="system",
+                    config=config.capture,
+                )
+                audio_source = AudioMixer([
+                    WASAPICapture(
+                        device_index=device,
+                        loopback=False,
+                        source_label="microphone",
+                        config=config.capture,
+                    ),
+                    system_src,
+                ])
+            else:
+                audio_source = WASAPICapture(
+                    device_index=device,
+                    loopback=(source == "system"),
+                    config=config.capture,
+                )
         else:
             echo_error(
                 f"Live capture on {platform} is not yet fully supported. "
@@ -304,7 +331,6 @@ def capture(
                     processing_info={"model": config.asr.model_size},
                     created_at=datetime.now().isoformat(),
                 )
-                from voxfusion.output import get_formatter
                 fmt = get_formatter(output_format)
                 with open(save_file, "w", encoding="utf-8") as f:
                     f.write(fmt.format(result))

@@ -55,6 +55,20 @@ def create_asr_engine(
     """
     cfg = config or ASRConfig()
 
+    if cfg.engine == "gigaam":
+        from voxfusion.asr.gigaam_engine import GigaAMCTCEngine
+
+        log.info("asr_factory.selected", backend="gigaam")
+        return GigaAMCTCEngine(cfg), "gigaam"
+
+    if cfg.engine in ("parakeet", "breeze"):
+        from voxfusion.exceptions import ModelLoadError
+
+        raise ModelLoadError(
+            f"The '{cfg.engine}' backend is not yet implemented. "
+            "Download the model file and set VOXFUSION_ASR__MODEL_PATH to its directory."
+        )
+
     # ── 1. CUDA (NVIDIA) ────────────────────────────────────────────────────
     if _has_cuda():
         from voxfusion.asr.faster_whisper import FasterWhisperEngine

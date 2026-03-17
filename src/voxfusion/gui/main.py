@@ -4,61 +4,57 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
-import logging
 import os
-import re
 import sys
 import textwrap
 import threading
 import tkinter as tk
-import warnings
-from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from time import monotonic
 from tkinter import filedialog, scrolledtext, ttk
-from typing import Any
 
-from voxfusion.config.loader import load_config
-from voxfusion.diarization.channel import ChannelDiarizer
-from voxfusion.gui.progress import close_all_progress, get_stage_progress
+from voxfusion.asr_catalog import (
+    DEFAULT_LANGUAGE_CODE,
+    get_language_code,
+    get_language_label,
+    get_model_info,
+    list_languages_for_model,
+    list_model_ids,
+    normalize_language_for_model,
+)
+from voxfusion.gui.helpers import (
+    build_file_workflow_status,
+    configure_gui_logging,
+    default_transcript_path,
+    load_gui_settings,
+    save_gui_settings,
+)
+from voxfusion.gui.model_summary import ModelSummaryCard
+from voxfusion.gui.runtime import (
+    CaptureOptions,
+    CaptureWorker,
+    DeviceOption,
+    FileTranscribeWorker,
+    LLMWorker,
+    RecordingOptions,
+    RecordingWorker,
+    TextRedirector,
+    resolve_preferred_device_index,
+)
+from voxfusion.gui.theme import configure_gui_theme
 from voxfusion.llm.client import (
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
-    LLMError,
     fetch_models,
-    stream_completion,
 )
-from voxfusion.llm.prompts import BUILTIN_PROMPTS, build_messages
-from voxfusion.logging import configure_logging
+from voxfusion.llm.prompts import BUILTIN_PROMPTS
 from voxfusion.media.extractor import NEEDS_EXTRACTION_EXTENSIONS
 from voxfusion.models.translation import TranslatedSegment
-from voxfusion.pipeline.streaming import StreamingPipeline
-from voxfusion.preprocessing.normalize import Normalizer
-from voxfusion.preprocessing.pipeline import PreProcessingPipeline
-from voxfusion.preprocessing.resample import Resampler
-from voxfusion.recording import AudioRecorder, RecordingStats, create_recording_source
+from voxfusion.recording import RecordingStats
 
-ASR_MODEL_CHOICES: tuple[str, ...] = (
-    "tiny",
-    "base",
-    "small",
-    "medium",
-    "large-v3",
-)
-
-ASR_LANGUAGE_CHOICES: tuple[tuple[str, str | None], ...] = (
-    ("Auto", None),
-    ("Russian (ru)", "ru"),
-    ("English (en)", "en"),
-    ("German (de)", "de"),
-    ("Spanish (es)", "es"),
-    ("French (fr)", "fr"),
-)
-GUI_DEFAULT_LANGUAGE = "ru"
+ASR_MODEL_CHOICES: tuple[str, ...] = list_model_ids()
+GUI_DEFAULT_LANGUAGE = DEFAULT_LANGUAGE_CODE
 
 # File dialog filter for supported media files
 _AUDIO_EXTENSIONS = " ".join(
@@ -77,640 +73,11 @@ MEDIA_FILETYPES = [
     ("All files", "*.*"),
 ]
 
-
-def _build_file_workflow_status(
-    *,
-    last_recorded_file: Path | None,
-    transcript_ready: bool,
-) -> str:
-    """Return a short guided-flow hint for the file/LLM workflow."""
-    if transcript_ready:
-        return "Step 3: Review the transcript and send it to Open WebUI."
-    if last_recorded_file is not None:
-        return f"Step 2: Transcribe the latest recording ({last_recorded_file.name})."
-    return "Step 1: Choose a file or record audio, then transcribe it."
-
-
-def _default_transcript_path(audio_path: Path) -> Path:
-    """Return the default transcript file path next to the audio file."""
-    return audio_path.with_suffix(".transcript.txt")
-
-
-def _gui_settings_path() -> Path:
-    """Return the persistent GUI settings file path."""
-    return Path.home() / ".voxfusion" / "gui_settings.json"
-
-
-def _load_gui_settings(path: Path | None = None) -> dict[str, str]:
-    """Load persisted GUI settings."""
-    target = path or _gui_settings_path()
-    if not target.exists():
-        return {}
-    try:
-        data = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    return {str(key): str(value) for key, value in data.items()}
-
-
-def _save_gui_settings(data: dict[str, str], path: Path | None = None) -> None:
-    """Persist GUI settings."""
-    target = path or _gui_settings_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def configure_gui_logging(level: int = logging.INFO) -> None:
-    """Configure project logging for GUI mode."""
-    level_name = logging.getLevelName(level)
-    if not isinstance(level_name, str):
-        level_name = "INFO"
-    configure_logging(log_level=level_name, json_format=False, use_colors=False)
-
-
-class TextRedirector:
-    """Thread-safe redirector from stdout/stderr into a Tk text widget."""
-
-    def __init__(self, widget: scrolledtext.ScrolledText) -> None:
-        self._widget = widget
-        self._ansi_re = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-        self._orphan_ansi_token_re = re.compile(r"\[(?:\d{1,3}(?:;\d{1,3})*)m|\[A")
-        self._buffer = ""
-
-    def write(self, text: str) -> int:
-        if not text:
-            return 0
-        clean = self._sanitize(text)
-        if not clean:
-            return len(text)
-        try:
-            self._widget.after(0, self._append, clean)
-        except RuntimeError:
-            pass
-        return len(text)
-
-    def flush(self) -> None:
-        if self._buffer:
-            buffered = self._buffer
-            self._buffer = ""
-            try:
-                self._widget.after(0, self._append, buffered)
-            except RuntimeError:
-                pass
-
-    def readable(self) -> bool:
-        return False
-
-    def writable(self) -> bool:
-        return True
-
-    def seekable(self) -> bool:
-        return False
-
-    def _append(self, text: str) -> None:
-        self._widget.configure(state=tk.NORMAL)
-        self._widget.insert(tk.END, text)
-        self._widget.see(tk.END)
-        self._widget.configure(state=tk.DISABLED)
-
-    def _sanitize(self, text: str) -> str:
-        text = self._ansi_re.sub("", text)
-        text = self._orphan_ansi_token_re.sub("", text)
-        text = text.replace("\r\n", "\n").replace("\r", "\n")
-        if "\n" not in text:
-            self._buffer += text
-            return ""
-        text = self._buffer + text
-        self._buffer = ""
-        return text
-
-
-@dataclass(frozen=True)
-class CaptureOptions:
-    """GUI runtime options for live capture."""
-
-    source: str
-    model: str
-    language: str | None
-    translate: str | None
-    device_index: int | None
-
-
-@dataclass(frozen=True)
-class RecordingOptions:
-    """GUI runtime options for raw audio recording."""
-
-    source: str
-    device_index: int | None
-    output_path: Path
-
-
-@dataclass(frozen=True)
-class DeviceOption:
-    """User-facing device selection option."""
-
-    label: str
-    index: int | None
-
-
-def _resolve_preferred_device_index(
-    options: list[DeviceOption],
-    selected_label: str,
-    source: str,
-) -> int | None:
-    """Resolve GUI device selection into an actual device index."""
-    selected_option = next(
-        (option for option in options if option.label == selected_label),
-        None,
-    )
-    if selected_option is not None and selected_option.index is not None:
-        return selected_option.index
-    if source != "system":
-        fallback = next((option for option in options if option.index is not None), None)
-        if fallback is not None:
-            return fallback.index
-    return None
-
-
-# ---------------------------------------------------------------------------
-# File transcription worker
-# ---------------------------------------------------------------------------
-
-class FileTranscribeWorker:
-    """Runs batch file transcription in a background thread.
-
-    Uses :class:`~voxfusion.pipeline.orchestrator.PipelineOrchestrator` which
-    automatically extracts audio from video files via FFmpeg.
-    """
-
-    def __init__(
-        self,
-        file_path: Path,
-        model: str,
-        language: str | None,
-        on_status: Callable[[str, float], None],
-        on_segments: Callable[[list[TranslatedSegment]], None],
-        on_error: Callable[[str], None],
-        on_finished: Callable[[], None],
-    ) -> None:
-        self._file_path = file_path
-        self._model = model
-        self._language = language
-        self._on_status = on_status
-        self._on_segments = on_segments
-        self._on_error = on_error
-        self._on_finished = on_finished
-        self._thread: threading.Thread | None = None
-
-    def start(self) -> None:
-        """Start transcription in a daemon thread."""
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def _run(self) -> None:
-        had_error = False
-        try:
-            asyncio.run(self._run_async())
-        except Exception as exc:
-            had_error = True
-            self._on_error(str(exc))
-        finally:
-            if not had_error:
-                pass
-            self._on_finished()
-
-    async def _run_async(self) -> None:
-        from voxfusion.pipeline.events import EventType, PipelineStage
-        from voxfusion.pipeline.orchestrator import PipelineOrchestrator
-
-        overrides: dict[str, Any] = {
-            "asr": {
-                "model_size": self._model,
-                "cpu_threads": os.cpu_count() or 4,
-                "beam_size": 5,
-            },
-        }
-        if self._language:
-            overrides["asr"]["language"] = self._language
-
-        config = load_config(overrides)
-
-        _stage_started_pct: dict[PipelineStage, float] = {
-            PipelineStage.CAPTURE: 0.05,
-            PipelineStage.PREPROCESSING: 0.30,
-            PipelineStage.ASR: 0.45,
-            PipelineStage.DIARIZATION: 0.80,
-        }
-        _stage_done_pct: dict[PipelineStage, float] = {
-            PipelineStage.CAPTURE: 0.28,
-            PipelineStage.PREPROCESSING: 0.43,
-            PipelineStage.ASR: 0.78,
-            PipelineStage.DIARIZATION: 0.95,
-        }
-
-        from voxfusion.pipeline.events import PipelineEvent
-
-        def on_event(event: PipelineEvent) -> None:
-            match event.event_type:
-                case EventType.PIPELINE_STARTED:
-                    self._on_status(event.message, 0.02)
-                case EventType.STAGE_STARTED:
-                    p = _stage_started_pct.get(event.stage, 0.0)  # type: ignore[arg-type]
-                    self._on_status(event.message, p)
-                case EventType.STAGE_COMPLETED:
-                    p = _stage_done_pct.get(event.stage, 0.0)  # type: ignore[arg-type]
-                    self._on_status(event.message, p)
-                case EventType.PIPELINE_COMPLETED:
-                    self._on_status(event.message, 1.0)
-                case EventType.PIPELINE_FAILED:
-                    self._on_status(f"Failed: {event.message}", 0.0)
-
-        orchestrator = PipelineOrchestrator(config, on_event=on_event)
-        self._on_status("Loading model...", 0.01)
-        try:
-            result = await orchestrator.transcribe_file(self._file_path)
-            self._on_segments(result.segments)
-        finally:
-            orchestrator.close()
-
-
-# ---------------------------------------------------------------------------
-# LLM summarization worker
-# ---------------------------------------------------------------------------
-
-class LLMWorker:
-    """Streams an LLM response from Open WebUI in a background thread.
-
-    Calls *on_token* for each text chunk as it arrives so the GUI can
-    display the response incrementally.
-    """
-
-    def __init__(
-        self,
-        text: str,
-        model: str,
-        base_url: str,
-        api_key: str,
-        prompt_name: str,
-        custom_user_prompt: str | None,
-        on_token: Callable[[str], None],
-        on_error: Callable[[str], None],
-        on_finished: Callable[[], None],
-    ) -> None:
-        self._text = text
-        self._model = model
-        self._base_url = base_url
-        self._api_key = api_key
-        self._prompt_name = prompt_name
-        self._custom_user_prompt = custom_user_prompt
-        self._on_token = on_token
-        self._on_error = on_error
-        self._on_finished = on_finished
-        self._thread: threading.Thread | None = None
-
-    def start(self) -> None:
-        """Start the background LLM request thread."""
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def _run(self) -> None:
-        try:
-            asyncio.run(self._run_async())
-        except Exception as exc:
-            self._on_error(str(exc))
-        finally:
-            self._on_finished()
-
-    async def _run_async(self) -> None:
-        messages = build_messages(
-            self._prompt_name,
-            self._text,
-            custom_user=self._custom_user_prompt,
-        )
-        try:
-            async for token in stream_completion(
-                messages,
-                base_url=self._base_url,
-                model=self._model,
-                api_key=self._api_key,
-            ):
-                self._on_token(token)
-        except LLMError as exc:
-            self._on_error(str(exc))
-
-
-# ---------------------------------------------------------------------------
-# Raw recording worker
-# ---------------------------------------------------------------------------
-
-class RecordingWorker:
-    """Runs audio-only recording in a daemon thread."""
-
-    def __init__(
-        self,
-        options: RecordingOptions,
-        on_status: Callable[[str], None],
-        on_error: Callable[[str], None],
-        on_finished: Callable[[RecordingStats | None], None],
-    ) -> None:
-        self._options = options
-        self._on_status = on_status
-        self._on_error = on_error
-        self._on_finished = on_finished
-        self._thread: threading.Thread | None = None
-        self._recorder = AudioRecorder(on_status=on_status)
-
-    def start(self) -> None:
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._recorder.request_stop()
-
-    def toggle_pause(self) -> bool:
-        """Toggle paused state and return the new value."""
-        if self._recorder.is_paused:
-            self._recorder.request_resume()
-            self._on_status("Recording resumed.")
-            return False
-        self._recorder.request_pause()
-        self._on_status("Recording paused.")
-        return True
-
-    def _run(self) -> None:
-        result: RecordingStats | None = None
-        try:
-            result = asyncio.run(self._run_async())
-        except KeyboardInterrupt:
-            self._recorder.request_stop()
-        except Exception as exc:  # pragma: no cover
-            self._on_error(str(exc))
-        finally:
-            self._on_finished(result)
-
-    async def _run_async(self) -> RecordingStats:
-        overrides: dict[str, dict[str, object]] = {
-            "capture": {
-                "sources": (
-                    ["microphone", "system"]
-                    if self._options.source == "both"
-                    else [self._options.source]
-                ),
-            }
-        }
-        config = load_config(overrides)
-        audio_source = create_recording_source(
-            self._options.source,
-            config.capture,
-            device_index=self._options.device_index,
-        )
-        return await self._recorder.record(audio_source, self._options.output_path)
-
-
-# ---------------------------------------------------------------------------
-# Live capture worker
-# ---------------------------------------------------------------------------
-
-class CaptureWorker:
-    """Runs async capture pipeline in a daemon thread."""
-
-    def __init__(
-        self,
-        options: CaptureOptions,
-        on_status: Callable[[str], None],
-        on_segment: Callable[[str, str, str, str | None], None],
-        on_error: Callable[[str], None],
-        on_finished: Callable[[], None],
-        on_drop: Callable[[str, str], None] | None = None,
-    ) -> None:
-        self._options = options
-        self._on_status = on_status
-        self._on_segment = on_segment
-        self._on_error = on_error
-        self._on_finished = on_finished
-        self._on_drop = on_drop or (lambda _t, _s: None)
-        self._stop_event = threading.Event()
-        self._thread: threading.Thread | None = None
-        self._pipeline: object | None = None
-
-    def get_stats(self) -> dict[str, int] | None:
-        if self._pipeline is None:
-            return None
-        return self._pipeline.get_stats()  # type: ignore[union-attr]
-
-    def start(self) -> None:
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop_event.set()
-
-    def _run(self) -> None:
-        had_error = False
-        try:
-            asyncio.run(self._run_async())
-        except KeyboardInterrupt:
-            self._stop_event.set()
-        except Exception as exc:  # pragma: no cover
-            had_error = True
-            self._on_error(f"{exc}")
-        finally:
-            close_all_progress()
-            if not had_error:
-                self._on_status("Stopped")
-            self._on_finished()
-
-    async def _run_async(self) -> None:
-        if sys.platform != "win32":
-            raise RuntimeError("GUI live capture currently requires Windows WASAPI.")
-
-        os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
-        warnings.filterwarnings(
-            "ignore",
-            message="`huggingface_hub` cache-system uses symlinks by default.*",
-            category=UserWarning,
-        )
-
-        self._on_status("Loading configuration...")
-        _cpu_threads = os.cpu_count() or 4
-        overrides: dict[str, dict[str, object]] = {
-            "capture": {"buffer_size": 20, "lossy_mode": True, "chunk_duration_ms": 5000},
-            "asr": {
-                "model_size": self._options.model,
-                "vad_filter": False,
-                "no_speech_threshold": 0.6,
-                "beam_size": 1,
-                "best_of": 1,
-                "cpu_threads": _cpu_threads,
-            },
-        }
-        if self._options.language:
-            overrides["asr"]["language"] = self._options.language
-        if self._options.translate:
-            overrides["translation"] = {
-                "enabled": True,
-                "target_language": self._options.translate,
-            }
-
-        config = load_config(overrides)
-
-        preprocessor = PreProcessingPipeline([Resampler(16_000), Normalizer()])
-        from voxfusion.asr.factory import create_asr_engine
-        asr_engine, _asr_backend = create_asr_engine(config.asr)
-        diarizer = ChannelDiarizer(config.diarization)
-        translator = None
-
-        if self._options.translate:
-            from voxfusion.translation.registry import get_translation_engine
-            translator = get_translation_engine("argos", config.translation)
-
-        model_label = config.asr.model_size
-        _backend_info = {
-            "cuda":     "GPU NVIDIA CUDA",
-            "openvino": "Intel OpenVINO",
-            "cpu":      f"CPU ({os.cpu_count()} threads)",
-        }.get(_asr_backend, _asr_backend)
-        if _asr_backend == "cpu" and model_label in ("large-v2", "large-v3"):
-            self._on_status(
-                f"Loading: {model_label}  [{_backend_info}]  "
-                "Real-time not achievable on CPU — use 'small'"
-            )
-        elif _asr_backend == "cpu" and model_label == "medium":
-            self._on_status(
-                f"Loading: {model_label}  [{_backend_info}]  "
-                "Delays possible — 'small' is faster"
-            )
-        elif _asr_backend == "openvino":
-            self._on_status(
-                f"Loading: {model_label}  [{_backend_info}]  "
-                "(first run: model conversion ~5 min)"
-            )
-        else:
-            self._on_status(f"Loading: {model_label}  [{_backend_info}]")
-
-        loading_progress = get_stage_progress("model-load", total=1)
-        asr_engine.load_model()
-        loading_progress.update(1)
-        self._on_status("Model loaded. Initializing audio capture...")
-
-        def _on_drop_chunk(chunk: object) -> None:
-            from voxfusion.models.audio import AudioChunk as _AC
-            src = chunk.source if isinstance(chunk, _AC) else "unknown"  # type: ignore[union-attr]
-            time_str = datetime.now().strftime("%H:%M:%S")
-            self._on_drop(time_str, src)
-
-        pipeline = StreamingPipeline(
-            asr_engine=asr_engine,
-            diarizer=diarizer,
-            preprocessor=preprocessor,
-            translator=translator,
-            config=config,
-            on_drop=_on_drop_chunk,
-            queue_size=50,
-        )
-        self._pipeline = pipeline
-
-        from voxfusion.capture.vad_chunker import VadChunker
-        from voxfusion.capture.wasapi import WASAPICapture
-
-        if self._options.source == "both":
-            from voxfusion.capture.mixer import AudioMixer
-            from voxfusion.capture.wasapi import find_stereo_mix_device
-
-            mic_source = WASAPICapture(
-                device_index=self._options.device_index,
-                loopback=False,
-                config=config.capture,
-            )
-            stereo_mix_idx = find_stereo_mix_device()
-            if stereo_mix_idx is not None:
-                self._on_status(
-                    f"System audio: Stereo Mix (device {stereo_mix_idx}). Starting..."
-                )
-                sys_source: object = WASAPICapture(
-                    device_index=stereo_mix_idx,
-                    loopback=False,
-                    source_label="system",
-                    config=config.capture,
-                )
-            else:
-                self._on_status("System audio: WASAPI loopback. Starting...")
-                sys_source = WASAPICapture(
-                    device_index=None,
-                    loopback=True,
-                    config=config.capture,
-                )
-            mic_vad = VadChunker(mic_source, max_duration_ms=5000)
-            sys_vad = VadChunker(sys_source, max_duration_ms=5000)
-            audio_source: object = AudioMixer(sources=[mic_vad, sys_vad])
-        else:
-            loopback = self._options.source == "system"
-            audio_source = VadChunker(
-                WASAPICapture(
-                    device_index=self._options.device_index,
-                    loopback=loopback,
-                    config=config.capture,
-                ),
-                max_duration_ms=5000,
-            )
-
-        segment_progress = get_stage_progress("segments")
-
-        def on_segments(segments: list[TranslatedSegment]) -> None:
-            nonlocal last_segment_ts, waiting_hint_shown
-            last_segment_ts = monotonic()
-            waiting_hint_shown = False
-            segment_progress.update(len(segments))
-            for segment in segments:
-                transcription = segment.diarized.segment
-                speaker = segment.diarized.speaker_id
-                spoken_at = capture_start_time + timedelta(seconds=transcription.start_time)
-                time_str = spoken_at.strftime("%H:%M:%S")
-                self._on_segment(
-                    time_str,
-                    speaker,
-                    transcription.text,
-                    segment.translated_text,
-                )
-
-        self._on_status("Starting capture...")
-        pipeline_task: asyncio.Task[None] | None = None
-        last_segment_ts = monotonic()
-        waiting_hint_shown = False
-        await audio_source.start()
-        capture_start_time = datetime.now()
-
-        from voxfusion.capture.mixer import AudioMixer
-        if isinstance(audio_source, AudioMixer) and len(audio_source._sources) < 2:
-            self._on_status("Capture started (loopback unavailable — mic only). Waiting for speech...")
-        else:
-            self._on_status("Capture started. Waiting for speech...")
-        try:
-            pipeline_task = asyncio.create_task(pipeline.run(audio_source, on_segments=on_segments))
-            while not self._stop_event.is_set() and not pipeline_task.done():
-                if not waiting_hint_shown and monotonic() - last_segment_ts >= 10:
-                    self._on_status(
-                        "Capture started. No speech segments yet — check microphone level/device."
-                    )
-                    waiting_hint_shown = True
-                await asyncio.sleep(0.1)
-            if self._stop_event.is_set() and pipeline_task is not None:
-                pipeline_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await pipeline_task
-            elif pipeline_task is not None:
-                await pipeline_task
-        finally:
-            if pipeline_task is not None and not pipeline_task.done():
-                pipeline_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await pipeline_task
-            await pipeline.stop()
-            await audio_source.stop()
-            asr_engine.unload_model()
-            asr_engine.close()
+_build_file_workflow_status = build_file_workflow_status
+_default_transcript_path = default_transcript_path
+_load_gui_settings = load_gui_settings
+_save_gui_settings = save_gui_settings
+_resolve_preferred_device_index = resolve_preferred_device_index
 
 
 # ---------------------------------------------------------------------------
@@ -725,6 +92,7 @@ class TranscriptionGUI:
         self.options = options
         self.root.title("VoxFusion")
         self.root.geometry("1200x780")
+        configure_gui_theme(self.root)
 
         # Live tab state
         self._worker: CaptureWorker | None = None
@@ -732,9 +100,12 @@ class TranscriptionGUI:
         self._segment_count = 0
         self._stdout = sys.stdout
         self._stderr = sys.stderr
+        initial_model = get_model_info(options.model).id
         self._source_var = tk.StringVar(value=options.source)
-        self._model_var = tk.StringVar(value=options.model)
-        self._language_var = tk.StringVar(value=self._language_label_for_code(options.language))
+        self._model_var = tk.StringVar(value=initial_model)
+        self._language_var = tk.StringVar(
+            value=self._language_label_for_code(options.language, initial_model)
+        )
         self._translate_var = tk.StringVar(value=options.translate or "")
         self._device_var = tk.StringVar(value="Auto (System default)")
         self._device_options: list[DeviceOption] = []
@@ -744,9 +115,9 @@ class TranscriptionGUI:
         # File tab state
         self._file_worker: FileTranscribeWorker | None = None
         self._file_path_var = tk.StringVar()
-        self._file_model_var = tk.StringVar(value=options.model)
+        self._file_model_var = tk.StringVar(value=initial_model)
         self._file_lang_var = tk.StringVar(
-            value=self._language_label_for_code(options.language)
+            value=self._language_label_for_code(options.language, initial_model)
         )
         self._file_seg_count = 0
         self._file_segments: list[TranslatedSegment] = []
@@ -769,6 +140,8 @@ class TranscriptionGUI:
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._refresh_device_options()
+        self._refresh_language_choices()
+        self._refresh_file_workflow()
         self._set_live_status("Select source/model and click Start or Record Audio.")
         self.root.after(250, self._refresh_llm_models)
 
@@ -777,9 +150,14 @@ class TranscriptionGUI:
     # ------------------------------------------------------------------
 
     def _build_layout(self) -> None:
-        """Build the top-level layout with a two-tab Notebook."""
-        self._notebook = ttk.Notebook(self.root)
-        self._notebook.pack(fill=tk.BOTH, expand=True, padx=4, pady=(6, 0))
+        """Build the top-level layout with a two-tab Notebook and resizable log pane."""
+        paned = ttk.PanedWindow(self.root, orient=tk.VERTICAL)
+        paned.pack(fill=tk.BOTH, expand=True, padx=4, pady=(4, 4))
+
+        notebook_frame = ttk.Frame(paned)
+        self._notebook = ttk.Notebook(notebook_frame)
+        self._notebook.pack(fill=tk.BOTH, expand=True)
+        paned.add(notebook_frame, weight=3)
 
         live_tab = ttk.Frame(self._notebook)
         self._notebook.add(live_tab, text="  Live Capture  ")
@@ -789,82 +167,119 @@ class TranscriptionGUI:
         self._notebook.add(file_tab, text="  File Transcription  ")
         self._build_file_tab(file_tab)
 
-        ttk.Label(self.root, text="Logs", anchor="w").pack(fill=tk.X, padx=8, pady=(4, 0))
+        log_frame = ttk.Frame(paned)
+        ttk.Label(log_frame, text="Logs", anchor="w").pack(fill=tk.X, padx=4)
         self.log_widget = scrolledtext.ScrolledText(
-            self.root,
-            height=8,
+            log_frame,
             wrap=tk.WORD,
             state=tk.DISABLED,
         )
-        self.log_widget.pack(fill=tk.BOTH, expand=False, padx=8, pady=(2, 8))
+        self.log_widget.pack(fill=tk.BOTH, expand=True, padx=4, pady=(0, 4))
+        paned.add(log_frame, weight=1)
 
     def _build_live_tab(self, parent: ttk.Frame) -> None:
         """Build the Live Capture tab contents."""
-        settings = ttk.Frame(parent)
-        settings.pack(fill=tk.X, padx=8, pady=(8, 4))
+        settings_box = ttk.LabelFrame(parent, text="Capture Setup", padding=(8, 6))
+        settings_box.pack(fill=tk.X, padx=8, pady=(8, 4))
+        settings_box.columnconfigure(1, weight=1)
+        settings_box.columnconfigure(3, weight=2)
 
-        ttk.Label(settings, text="Source").pack(side=tk.LEFT, padx=(0, 6))
+        # Row 0: Source | Device (stretches)
+        ttk.Label(settings_box, text="Source:").grid(row=0, column=0, sticky="w", padx=(0, 4))
         self.source_combo = ttk.Combobox(
-            settings,
+            settings_box,
             textvariable=self._source_var,
             state="readonly",
-            width=13,
+            width=14,
             values=("microphone", "system", "both"),
         )
-        self.source_combo.pack(side=tk.LEFT, padx=(0, 10))
+        self.source_combo.grid(row=0, column=1, sticky="w", padx=(0, 12))
         self.source_combo.bind("<<ComboboxSelected>>", self._on_source_changed)
 
-        ttk.Label(settings, text="Model").pack(side=tk.LEFT, padx=(0, 6))
-        self.model_combo = ttk.Combobox(
-            settings,
-            textvariable=self._model_var,
-            state="readonly",
-            width=10,
-            values=ASR_MODEL_CHOICES,
-        )
-        self.model_combo.pack(side=tk.LEFT, padx=(0, 10))
-
-        ttk.Label(settings, text="Language").pack(side=tk.LEFT, padx=(0, 6))
-        self.language_combo = ttk.Combobox(
-            settings,
-            textvariable=self._language_var,
-            state="readonly",
-            width=13,
-            values=[label for label, _ in ASR_LANGUAGE_CHOICES],
-        )
-        self.language_combo.pack(side=tk.LEFT, padx=(0, 10))
-
-        ttk.Label(settings, text="Translate").pack(side=tk.LEFT, padx=(0, 6))
-        self.translate_entry = ttk.Entry(
-            settings,
-            textvariable=self._translate_var,
-            width=10,
-        )
-        self.translate_entry.pack(side=tk.LEFT, padx=(0, 10))
-
-        ttk.Label(settings, text="Device").pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Label(settings_box, text="Device:").grid(row=0, column=2, sticky="w", padx=(0, 4))
         self.device_combo = ttk.Combobox(
-            settings,
+            settings_box,
             textvariable=self._device_var,
             state="readonly",
-            width=44,
         )
-        self.device_combo.pack(side=tk.LEFT, padx=(0, 10))
+        self.device_combo.grid(row=0, column=3, sticky="ew")
 
-        self.start_button = ttk.Button(settings, text="Start", command=self._start_capture)
-        self.start_button.pack(side=tk.LEFT)
+        # Row 1: Model | Language | Translate
+        ttk.Label(settings_box, text="Model:").grid(
+            row=1, column=0, sticky="w", padx=(0, 4), pady=(4, 0)
+        )
+        self.model_combo = ttk.Combobox(
+            settings_box,
+            textvariable=self._model_var,
+            state="readonly",
+            width=20,
+            values=ASR_MODEL_CHOICES,
+        )
+        self.model_combo.grid(row=1, column=1, sticky="w", padx=(0, 12), pady=(4, 0))
+        self.model_combo.bind("<<ComboboxSelected>>", self._on_model_changed)
+
+        lang_row = ttk.Frame(settings_box)
+        lang_row.grid(row=1, column=2, columnspan=2, sticky="ew", pady=(4, 0))
+        ttk.Label(lang_row, text="Language:").pack(side=tk.LEFT, padx=(0, 4))
+        self.language_combo = ttk.Combobox(
+            lang_row,
+            textvariable=self._language_var,
+            state="readonly",
+            width=18,
+        )
+        self.language_combo.pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Label(lang_row, text="Translate:").pack(side=tk.LEFT, padx=(0, 4))
+        self.translate_entry = ttk.Entry(
+            lang_row,
+            textvariable=self._translate_var,
+            width=8,
+        )
+        self.translate_entry.pack(side=tk.LEFT)
+
+        # Row 2: Action buttons + stats (all in one row)
+        btn_row = ttk.Frame(settings_box)
+        btn_row.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(6, 2))
+
+        self.start_button = ttk.Button(
+            btn_row, text="Start", command=self._start_capture, style="Primary.TButton"
+        )
+        self.start_button.pack(side=tk.LEFT, padx=(0, 4))
+        self.stop_button = ttk.Button(btn_row, text="Stop", command=self._stop_capture)
+        self.stop_button.configure(state=tk.DISABLED)
+        self.stop_button.pack(side=tk.LEFT, padx=(0, 4))
+        self.pause_button = ttk.Button(
+            btn_row, text="Pause", command=self._toggle_recording_pause
+        )
+        self.pause_button.configure(state=tk.DISABLED)
+        self.pause_button.pack(side=tk.LEFT, padx=(0, 4))
         self.record_button = ttk.Button(
-            settings,
+            btn_row,
             text="Record Audio",
             command=self._start_recording,
+            style="Accent.TButton",
         )
-        self.record_button.pack(side=tk.LEFT, padx=(4, 0))
+        self.record_button.pack(side=tk.LEFT, padx=(0, 12))
+
+        ttk.Separator(btn_row, orient="vertical").pack(side=tk.LEFT, fill=tk.Y, padx=(0, 12))
+
+        self.clear_button = ttk.Button(btn_row, text="Clear", command=self._clear_table)
+        self.clear_button.pack(side=tk.LEFT, padx=(0, 4))
+        self.save_button = ttk.Button(btn_row, text="Save...", command=self._save_to_file)
+        self.save_button.pack(side=tk.LEFT)
+
+        self.queue_label = ttk.Label(btn_row, text="Queue: —  |  ASR: —  |  Dropped: 0")
+        self.queue_label.pack(side=tk.RIGHT, padx=(8, 0))
+        self.counter_label = ttk.Label(btn_row, text="Segments: 0")
+        self.counter_label.pack(side=tk.RIGHT)
+
+        # Hidden model summary (kept for API compatibility — not displayed)
+        self._live_model_summary = ModelSummaryCard(settings_box, title="Model Overview")
 
         self.status_label = ttk.Label(parent, text="Ready", anchor="w")
-        self.status_label.pack(fill=tk.X, padx=8, pady=(4, 4))
+        self.status_label.pack(fill=tk.X, padx=8, pady=(4, 2))
 
         table_frame = ttk.Frame(parent)
-        table_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
+        table_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 4))
 
         _style = ttk.Style()
         _style.configure("Treeview", rowheight=22)
@@ -895,28 +310,6 @@ class TranscriptionGUI:
         self.table.tag_configure("dropped", foreground="red")
         self.table.tag_configure("continuation", foreground="#666666")
 
-        controls = ttk.Frame(parent)
-        controls.pack(fill=tk.X, padx=8, pady=(2, 6))
-
-        self.stop_button = ttk.Button(controls, text="Stop", command=self._stop_capture)
-        self.stop_button.configure(state=tk.DISABLED)
-        self.stop_button.pack(side=tk.LEFT, padx=(0, 4))
-        self.pause_button = ttk.Button(controls, text="Pause", command=self._toggle_recording_pause)
-        self.pause_button.configure(state=tk.DISABLED)
-        self.pause_button.pack(side=tk.LEFT, padx=(0, 4))
-
-        self.clear_button = ttk.Button(controls, text="Clear", command=self._clear_table)
-        self.clear_button.pack(side=tk.LEFT, padx=(0, 4))
-
-        self.save_button = ttk.Button(controls, text="Save...", command=self._save_to_file)
-        self.save_button.pack(side=tk.LEFT)
-
-        self.queue_label = ttk.Label(controls, text="Queue: —  |  ASR: —  |  Dropped: 0")
-        self.queue_label.pack(side=tk.RIGHT, padx=(8, 0))
-
-        self.counter_label = ttk.Label(controls, text="Segments: 0")
-        self.counter_label.pack(side=tk.RIGHT)
-
         self.root.after(500, self._poll_stats)
 
     def _build_file_tab(self, parent: ttk.Frame) -> None:
@@ -926,7 +319,7 @@ class TranscriptionGUI:
         ttk.Label(
             workflow_hdr,
             text="Workflow: Record audio -> Transcribe -> Send transcript to Open WebUI",
-            font=("", 9, "bold"),
+            style="Header.TLabel",
         ).pack(side=tk.LEFT)
 
         self._file_workflow_label = ttk.Label(
@@ -938,8 +331,16 @@ class TranscriptionGUI:
         self._file_workflow_label.pack(fill=tk.X, padx=8, pady=(0, 4))
 
         # -- File picker row --
-        picker = ttk.Frame(parent)
-        picker.pack(fill=tk.X, padx=8, pady=(0, 4))
+        top = ttk.Frame(parent)
+        top.pack(fill=tk.X, padx=8, pady=(0, 6))
+        top.columnconfigure(0, weight=3)
+        top.columnconfigure(1, weight=2)
+
+        transcribe_box = ttk.LabelFrame(top, text="Transcription Setup", padding=12)
+        transcribe_box.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+
+        picker = ttk.Frame(transcribe_box)
+        picker.pack(fill=tk.X, pady=(0, 4))
 
         ttk.Label(picker, text="File:").pack(side=tk.LEFT, padx=(0, 6))
         self._file_path_entry = ttk.Entry(picker, textvariable=self._file_path_var, width=70)
@@ -947,8 +348,8 @@ class TranscriptionGUI:
         ttk.Button(picker, text="Browse...", command=self._browse_file).pack(side=tk.LEFT)
 
         # -- Options row --
-        opts = ttk.Frame(parent)
-        opts.pack(fill=tk.X, padx=8, pady=(0, 4))
+        opts = ttk.Frame(transcribe_box)
+        opts.pack(fill=tk.X, pady=(0, 4))
 
         ttk.Label(opts, text="Model:").pack(side=tk.LEFT, padx=(0, 6))
         self._file_model_combo = ttk.Combobox(
@@ -959,25 +360,25 @@ class TranscriptionGUI:
             values=ASR_MODEL_CHOICES,
         )
         self._file_model_combo.pack(side=tk.LEFT, padx=(0, 12))
+        self._file_model_combo.bind("<<ComboboxSelected>>", self._on_file_model_changed)
 
         ttk.Label(opts, text="Language:").pack(side=tk.LEFT, padx=(0, 6))
         self._file_lang_combo = ttk.Combobox(
             opts,
             textvariable=self._file_lang_var,
             state="readonly",
-            width=14,
-            values=[label for label, _ in ASR_LANGUAGE_CHOICES],
+            width=18,
         )
         self._file_lang_combo.pack(side=tk.LEFT, padx=(0, 16))
 
         self._file_transcribe_btn = ttk.Button(
-            opts, text="Transcribe", command=self._start_file_transcribe
+            opts, text="Transcribe", command=self._start_file_transcribe, style="Accent.TButton"
         )
         self._file_transcribe_btn.pack(side=tk.LEFT, padx=(0, 4))
 
         # -- Status + progress row --
-        prog_row = ttk.Frame(parent)
-        prog_row.pack(fill=tk.X, padx=8, pady=(0, 4))
+        prog_row = ttk.Frame(transcribe_box)
+        prog_row.pack(fill=tk.X, pady=(0, 4))
 
         self._file_status_label = ttk.Label(
             prog_row, text="Select a file and click Transcribe.", anchor="w"
@@ -990,12 +391,15 @@ class TranscriptionGUI:
         self._file_progress.pack(side=tk.RIGHT)
 
         self._file_artifact_label = ttk.Label(
-            parent,
+            transcribe_box,
             text="Transcript file: not created yet.",
             anchor="w",
             foreground="#555555",
         )
-        self._file_artifact_label.pack(fill=tk.X, padx=8, pady=(0, 4))
+        self._file_artifact_label.pack(fill=tk.X, pady=(0, 4))
+
+        self._file_model_summary = ModelSummaryCard(top, title="Selected Model")
+        self._file_model_summary.grid(row=0, column=1, sticky="nsew")
 
         # -- Results table --
         file_table_frame = ttk.Frame(parent)
@@ -1039,14 +443,17 @@ class TranscriptionGUI:
         # -- LLM processing panel --
         ttk.Separator(parent, orient="horizontal").pack(fill=tk.X, padx=8, pady=(4, 0))
 
-        llm_hdr = ttk.Frame(parent)
-        llm_hdr.pack(fill=tk.X, padx=8, pady=(4, 2))
+        llm_box = ttk.LabelFrame(parent, text="Transcript Processing", padding=12)
+        llm_box.pack(fill=tk.X, padx=8, pady=(4, 6))
+
+        llm_hdr = ttk.Frame(llm_box)
+        llm_hdr.pack(fill=tk.X, pady=(0, 2))
         ttk.Label(llm_hdr, text="Process Transcript with Open WebUI", font=("", 9, "bold")).pack(
             side=tk.LEFT
         )
 
-        llm_cfg = ttk.Frame(parent)
-        llm_cfg.pack(fill=tk.X, padx=8, pady=(0, 2))
+        llm_cfg = ttk.Frame(llm_box)
+        llm_cfg.pack(fill=tk.X, pady=(0, 2))
 
         ttk.Label(llm_cfg, text="URL:").pack(side=tk.LEFT, padx=(0, 4))
         ttk.Entry(llm_cfg, textvariable=self._llm_url_var, width=26).pack(
@@ -1081,7 +488,7 @@ class TranscriptionGUI:
             side=tk.LEFT, padx=(0, 10)
         )
         self._llm_summarize_btn = ttk.Button(
-            llm_cfg, text="Send to LLM", command=self._start_llm_summarize
+            llm_cfg, text="Send to LLM", command=self._start_llm_summarize, style="Accent.TButton"
         )
         self._llm_summarize_btn.pack(side=tk.LEFT, padx=(0, 4))
         ttk.Button(llm_cfg, text="Copy", command=self._copy_llm_output).pack(
@@ -1092,8 +499,8 @@ class TranscriptionGUI:
         self._llm_status_label = ttk.Label(llm_cfg, text="", anchor="w", foreground="#555555")
         self._llm_status_label.pack(side=tk.LEFT, padx=(12, 0))
 
-        llm_out_frame = ttk.Frame(parent)
-        llm_out_frame.pack(fill=tk.BOTH, expand=False, padx=8, pady=(0, 6))
+        llm_out_frame = ttk.Frame(llm_box)
+        llm_out_frame.pack(fill=tk.BOTH, expand=False, pady=(0, 0))
 
         self._llm_output = scrolledtext.ScrolledText(
             llm_out_frame,
@@ -1120,11 +527,21 @@ class TranscriptionGUI:
     def _start_capture(self) -> None:
         if self._worker is not None or self._record_worker is not None:
             return
+        model_info = get_model_info(self._model_var.get() or "small")
+        if not model_info.supports_live_capture:
+            self._set_live_status(
+                f"{model_info.name} currently supports file transcription only. "
+                "Use Record Audio + File Transcription."
+            )
+            return
 
         options = CaptureOptions(
             source=self._source_var.get() or "microphone",
-            model=self._model_var.get() or "small",
-            language=self._language_code_for_label(self._language_var.get()),
+            model=model_info.id,
+            language=self._language_code_for_label(
+                self._language_var.get(),
+                self._model_var.get() or "small",
+            ),
             translate=(self._translate_var.get().strip() or None),
             device_index=None,
         )
@@ -1441,6 +858,7 @@ class TranscriptionGUI:
             self._refresh_file_workflow()
             return
         self._last_recorded_file = stats.output_path
+        self._persist_gui_settings()
         self._set_live_status(f"Recorded {stats.duration_s:.1f}s -> {stats.output_path.name}")
         timestamp = datetime.now().strftime("%H:%M:%S")
         self._append_log_line(
@@ -1459,6 +877,38 @@ class TranscriptionGUI:
         self.translate_entry.configure(state=(tk.NORMAL if enabled else tk.DISABLED))
         self.device_combo.configure(state=combo_state)
 
+    def _refresh_language_choices(self) -> None:
+        live_model = get_model_info(self._model_var.get()).id
+        live_model_info = get_model_info(live_model)
+        live_values = [language.label for language in list_languages_for_model(live_model)]
+        current_live = self._language_code_for_label(self._language_var.get(), live_model)
+        self.language_combo.configure(values=live_values)
+        self._language_var.set(self._language_label_for_code(current_live, live_model))
+        self._live_model_summary.set_model(live_model)
+        if live_model_info.supports_live_capture:
+            if self._worker is None and self._record_worker is None:
+                self.start_button.configure(state=tk.NORMAL)
+        elif self._worker is None and self._record_worker is None:
+            self.start_button.configure(state=tk.DISABLED)
+            self._set_live_status(
+                f"{live_model_info.name} is available for file transcription only."
+            )
+
+        file_model = get_model_info(self._file_model_var.get()).id
+        file_values = [language.label for language in list_languages_for_model(file_model)]
+        current_file = self._language_code_for_label(self._file_lang_var.get(), file_model)
+        self._file_lang_combo.configure(values=file_values)
+        self._file_lang_var.set(self._language_label_for_code(current_file, file_model))
+        self._file_model_summary.set_model(file_model)
+
+    def _on_model_changed(self, _event: object | None = None) -> None:
+        self._model_var.set(get_model_info(self._model_var.get()).id)
+        self._refresh_language_choices()
+
+    def _on_file_model_changed(self, _event: object | None = None) -> None:
+        self._file_model_var.set(get_model_info(self._file_model_var.get()).id)
+        self._refresh_language_choices()
+
     def _append_log_line(self, text: str) -> None:
         self.log_widget.configure(state=tk.NORMAL)
         self.log_widget.insert(tk.END, text)
@@ -1473,6 +923,19 @@ class TranscriptionGUI:
         self._llm_prompt_var.set(settings.get("llm_prompt", "summarize"))
         self._llm_custom_user_prompt = settings.get("llm_custom_user_prompt", "")
 
+        last_rec = settings.get("last_recorded_file", "")
+        if last_rec:
+            p = Path(last_rec)
+            if p.exists():
+                self._last_recorded_file = p
+                self._file_path_var.set(str(p))
+
+        last_tx = settings.get("last_transcript_path", "")
+        if last_tx:
+            p = Path(last_tx)
+            if p.exists():
+                self._last_transcript_path = p
+
     def _persist_gui_settings(self) -> None:
         _save_gui_settings(
             {
@@ -1481,6 +944,8 @@ class TranscriptionGUI:
                 "llm_api_key": self._llm_key_var.get(),
                 "llm_prompt": self._llm_prompt_var.get().strip() or "summarize",
                 "llm_custom_user_prompt": self._llm_custom_user_prompt,
+                "last_recorded_file": str(self._last_recorded_file) if self._last_recorded_file else "",
+                "last_transcript_path": str(self._last_transcript_path) if self._last_transcript_path else "",
             }
         )
 
@@ -1618,29 +1083,25 @@ class TranscriptionGUI:
             for idx, dev in enumerate(devices):
                 hostapi_idx = int(dev.get("hostapi", -1))
                 hostapi_name = hostapi_names.get(hostapi_idx, f"HostAPI {hostapi_idx}")
+                hostapi_key = hostapi_name.lower()
                 if is_loopback:
+                    # System audio: only WASAPI output devices
                     if hostapi_idx not in wasapi_host_ids:
                         continue
                     channels = int(dev.get("max_output_channels", 0))
                     if channels <= 0:
                         continue
                 else:
+                    # Microphone: only WASAPI input devices (matches Windows Sound Settings)
+                    if "wasapi" not in hostapi_key:
+                        continue
                     channels = int(dev.get("max_input_channels", 0))
                     if channels <= 0:
                         continue
-                hostapi_key = hostapi_name.lower()
                 if is_loopback:
                     priority = 0
-                elif "wasapi" in hostapi_key:
-                    priority = 0
-                elif "mme" in hostapi_key:
-                    priority = 1
-                elif "directsound" in hostapi_key:
-                    priority = 2
-                elif "wdm-ks" in hostapi_key:
-                    priority = 4
                 else:
-                    priority = 3
+                    priority = 0
                 name = str(dev.get("name", f"Device {idx}"))
                 label = f"{name} [{hostapi_name} #{idx}]"
                 ranked.append((priority, idx, label, hostapi_name))
@@ -1700,8 +1161,8 @@ class TranscriptionGUI:
         if self._file_worker is not None:
             return  # already running
 
-        model = self._file_model_var.get() or "small"
-        language = self._language_code_for_label(self._file_lang_var.get())
+        model = get_model_info(self._file_model_var.get() or "small").id
+        language = self._language_code_for_label(self._file_lang_var.get(), model)
 
         self._file_transcribe_btn.configure(state=tk.DISABLED)
         self._file_model_combo.configure(state="disabled")
@@ -1776,6 +1237,7 @@ class TranscriptionGUI:
         self._file_lang_combo.configure(state="readonly")
         if self._file_seg_count > 0:
             self._last_transcript_path = self._auto_save_transcript()
+            self._persist_gui_settings()
             self._file_status_label.configure(
                 text=(
                     f"Step 3: Transcript ready. Saved to {self._last_transcript_path.name}. "
@@ -1966,20 +1428,15 @@ class TranscriptionGUI:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _language_label_for_code(language_code: str | None) -> str:
-        if language_code is None:
-            language_code = GUI_DEFAULT_LANGUAGE
-        for label, code in ASR_LANGUAGE_CHOICES:
-            if code == language_code:
-                return label
-        return ASR_LANGUAGE_CHOICES[0][0]
+    def _language_label_for_code(language_code: str | None, model_id: str | None = None) -> str:
+        normalized = normalize_language_for_model(model_id, language_code)
+        if normalized is None and language_code is None and model_id is None:
+            normalized = GUI_DEFAULT_LANGUAGE
+        return get_language_label(normalized, model_id)
 
     @staticmethod
-    def _language_code_for_label(label: str) -> str | None:
-        for option_label, code in ASR_LANGUAGE_CHOICES:
-            if option_label == label:
-                return code
-        return None
+    def _language_code_for_label(label: str, model_id: str | None = None) -> str | None:
+        return get_language_code(label, model_id)
 
 
 def _secs_to_srt(secs: float) -> str:

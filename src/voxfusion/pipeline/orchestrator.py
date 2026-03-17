@@ -7,7 +7,7 @@ formatter based on the active ``PipelineConfig``, then delegates to
 
 from pathlib import Path
 
-from voxfusion.asr.faster_whisper import FasterWhisperEngine
+from voxfusion.asr.factory import create_asr_engine
 from voxfusion.config.models import PipelineConfig
 from voxfusion.diarization.channel import ChannelDiarizer
 from voxfusion.logging import get_logger
@@ -42,7 +42,7 @@ class PipelineOrchestrator:
         self._on_event = on_event
 
         # Build components
-        self._asr = FasterWhisperEngine(config.asr)
+        self._asr, self._asr_backend = create_asr_engine(config.asr)
         self._diarizer = ChannelDiarizer(config.diarization)
         self._preprocessor = self._build_preprocessor()
 

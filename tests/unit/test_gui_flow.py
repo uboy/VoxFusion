@@ -9,6 +9,7 @@ from voxfusion.gui.main import (
     _resolve_preferred_device_index,
     _save_gui_settings,
     DeviceOption,
+    TranscriptionGUI,
 )
 
 
@@ -66,3 +67,12 @@ def test_resolve_preferred_device_index_keeps_none_for_system_auto() -> None:
         DeviceOption("Headset [Windows WASAPI #17]", 17),
     ]
     assert _resolve_preferred_device_index(options, "Auto (System default)", "system") is None
+
+
+def test_language_helpers_use_catalog_labels() -> None:
+    assert TranscriptionGUI._language_label_for_code("ru", "small") == "Russian"
+    assert TranscriptionGUI._language_code_for_label("Russian", "small") == "ru"
+
+
+def test_language_helper_returns_auto_for_unsupported_model_language_pair() -> None:
+    assert TranscriptionGUI._language_code_for_label("English", "gigaam-v3-e2e-ctc") is None
