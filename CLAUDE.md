@@ -298,4 +298,12 @@ voxfusion models list
 
 ## Current Status
 
-The project is in its initial architecture phase. No source code exists yet. The next step is to implement the MVP (v0.1.0): batch transcription of audio files using faster-whisper with JSON/TXT output and a basic CLI.
+v0.1.0 is implemented and working. Key capabilities shipped:
+- Live audio capture (WASAPI mic + system loopback, `AudioMixer` for `both`)
+- Raw audio recording to WAV (`voxfusion record`, GUI Record Audio button with Pause/Resume)
+- Batch file transcription via faster-whisper (CPU/CUDA/OpenVINO auto-selection)
+- GigaAM v3 ONNX/CTC backend for Russian batch transcription
+- Parakeet V3 and Breeze ASR in the model catalog (backends pending download/implementation)
+- GUI: multi-step workflow (record → transcribe → send to Open WebUI LLM)
+- GUI settings persistence, WASAPI-only device list, resizable log pane
+- Binary packaging via PyInstaller (`scripts/build_binaries.py`)

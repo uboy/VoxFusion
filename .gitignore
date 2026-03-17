@@ -50,6 +50,13 @@ poetry.lock
 *.onnx
 .voxfusion.yaml
 
+# Auto-generated output files
+*.transcript.txt
+transcription_*.txt
+transcription_*.json
+transcription_*.srt
+transcription_*.vtt
+
 # User data directory
 .voxfusion/
 
