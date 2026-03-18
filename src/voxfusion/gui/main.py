@@ -27,6 +27,8 @@ from voxfusion.gui.helpers import (
     build_file_workflow_status,
     configure_gui_logging,
     default_transcript_path,
+    find_ffmpeg,
+    install_ffmpeg_winget,
     load_gui_settings,
     save_gui_settings,
 )
@@ -40,7 +42,10 @@ from voxfusion.gui.runtime import (
     RecordingOptions,
     RecordingWorker,
     TextRedirector,
-    resolve_preferred_device_index,
+    derive_capture_source,
+)
+from voxfusion.capture.windows_audio import (
+    list_windows_capture_devices,
 )
 from voxfusion.gui.theme import configure_gui_theme
 from voxfusion.llm.client import (
@@ -77,7 +82,7 @@ _build_file_workflow_status = build_file_workflow_status
 _default_transcript_path = default_transcript_path
 _load_gui_settings = load_gui_settings
 _save_gui_settings = save_gui_settings
-_resolve_preferred_device_index = resolve_preferred_device_index
+_derive_capture_source = derive_capture_source
 
 
 # ---------------------------------------------------------------------------
@@ -101,16 +106,19 @@ class TranscriptionGUI:
         self._stdout = sys.stdout
         self._stderr = sys.stderr
         initial_model = get_model_info(options.model).id
-        self._source_var = tk.StringVar(value=options.source)
         self._model_var = tk.StringVar(value=initial_model)
         self._language_var = tk.StringVar(
             value=self._language_label_for_code(options.language, initial_model)
         )
         self._translate_var = tk.StringVar(value=options.translate or "")
-        self._device_var = tk.StringVar(value="Auto (System default)")
+        self._device_picker_var = tk.StringVar(value="Loading devices...")
         self._device_options: list[DeviceOption] = []
-        self._requested_device_index = options.device_index
+        self._requested_device_index = options.microphone_device_id or options.system_device_id
+        self._device_check_vars: dict[str, tk.BooleanVar] = {}
+        self._selected_microphone_id: str | int | None = options.microphone_device_id
+        self._selected_system_id: str | int | None = options.system_device_id
         self._last_recorded_file: Path | None = None
+        self._ffmpeg_path: Path | None = find_ffmpeg()
 
         # File tab state
         self._file_worker: FileTranscribeWorker | None = None
@@ -142,7 +150,7 @@ class TranscriptionGUI:
         self._refresh_device_options()
         self._refresh_language_choices()
         self._refresh_file_workflow()
-        self._set_live_status("Select source/model and click Start or Record Audio.")
+        self._set_live_status("Select devices/model and click Start or Record Audio.")
         self.root.after(250, self._refresh_llm_models)
 
     # ------------------------------------------------------------------
@@ -184,25 +192,16 @@ class TranscriptionGUI:
         settings_box.columnconfigure(1, weight=1)
         settings_box.columnconfigure(3, weight=2)
 
-        # Row 0: Source | Device (stretches)
-        ttk.Label(settings_box, text="Source:").grid(row=0, column=0, sticky="w", padx=(0, 4))
-        self.source_combo = ttk.Combobox(
+        # Row 0: Multi-select device picker
+        ttk.Label(settings_box, text="Devices:").grid(row=0, column=0, sticky="w", padx=(0, 4))
+        self.device_picker = ttk.Menubutton(
             settings_box,
-            textvariable=self._source_var,
-            state="readonly",
-            width=14,
-            values=("microphone", "system", "both"),
+            textvariable=self._device_picker_var,
+            direction="below",
         )
-        self.source_combo.grid(row=0, column=1, sticky="w", padx=(0, 12))
-        self.source_combo.bind("<<ComboboxSelected>>", self._on_source_changed)
-
-        ttk.Label(settings_box, text="Device:").grid(row=0, column=2, sticky="w", padx=(0, 4))
-        self.device_combo = ttk.Combobox(
-            settings_box,
-            textvariable=self._device_var,
-            state="readonly",
-        )
-        self.device_combo.grid(row=0, column=3, sticky="ew")
+        self.device_picker.grid(row=0, column=1, columnspan=3, sticky="ew", padx=(0, 12))
+        self._device_menu = tk.Menu(self.device_picker, tearoff=0)
+        self.device_picker.configure(menu=self._device_menu)
 
         # Row 1: Model | Language | Translate
         ttk.Label(settings_box, text="Model:").grid(
@@ -314,6 +313,37 @@ class TranscriptionGUI:
 
     def _build_file_tab(self, parent: ttk.Frame) -> None:
         """Build the File Transcription tab contents."""
+        # -- FFmpeg warning banner (hidden when FFmpeg is present) --
+        self._ffmpeg_banner = tk.Frame(parent, bg="#fff3cd")
+        if self._ffmpeg_path is None:
+            self._ffmpeg_banner.pack(fill=tk.X, padx=8, pady=(8, 0))
+        tk.Label(
+            self._ffmpeg_banner,
+            text="FFmpeg not found. Video files will not work correctly.",
+            bg="#fff3cd",
+            fg="#856404",
+            anchor="w",
+        ).pack(side=tk.LEFT, padx=(8, 12), pady=4)
+        self._ffmpeg_install_btn = tk.Button(
+            self._ffmpeg_banner,
+            text="Install FFmpeg via winget",
+            command=self._install_ffmpeg,
+            bg="#e0a800",
+            fg="white",
+            relief="flat",
+            padx=8,
+            pady=2,
+        )
+        self._ffmpeg_install_btn.pack(side=tk.LEFT, pady=4)
+        self._ffmpeg_install_status = tk.Label(
+            self._ffmpeg_banner,
+            text="",
+            bg="#fff3cd",
+            fg="#333333",
+            anchor="w",
+        )
+        self._ffmpeg_install_status.pack(side=tk.LEFT, padx=(8, 0), pady=4)
+
         workflow_hdr = ttk.Frame(parent)
         workflow_hdr.pack(fill=tk.X, padx=8, pady=(10, 4))
         ttk.Label(
@@ -536,27 +566,21 @@ class TranscriptionGUI:
             return
 
         options = CaptureOptions(
-            source=self._source_var.get() or "microphone",
             model=model_info.id,
             language=self._language_code_for_label(
                 self._language_var.get(),
                 self._model_var.get() or "small",
             ),
             translate=(self._translate_var.get().strip() or None),
-            device_index=None,
+            microphone_device_id=self._selected_microphone_id,
+            system_device_id=self._selected_system_id,
         )
-        selected_label = self._device_var.get().strip()
-        options = CaptureOptions(
-            source=options.source,
-            model=options.model,
-            language=options.language,
-            translate=options.translate,
-            device_index=_resolve_preferred_device_index(
-                self._device_options,
-                selected_label,
-                options.source,
-            ),
-        )
+        if _derive_capture_source(
+            self._selected_microphone_id,
+            self._selected_system_id,
+        ) == "none":
+            self._set_live_status("Select at least one device to start capture.")
+            return
 
         self._set_live_controls_enabled(False)
         self.stop_button.configure(state=tk.NORMAL)
@@ -576,10 +600,14 @@ class TranscriptionGUI:
         if self._worker is not None or self._record_worker is not None:
             return
 
-        default_name = (
-            f"recording_{self._source_var.get() or 'microphone'}_"
-            f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
+        source = _derive_capture_source(
+            self._selected_microphone_id,
+            self._selected_system_id,
         )
+        if source == "none":
+            self._set_live_status("Select at least one device to record.")
+            return
+        default_name = f"recording_{source}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
         path = filedialog.asksaveasfilename(
             defaultextension=".wav",
             initialfile=default_name,
@@ -592,14 +620,9 @@ class TranscriptionGUI:
         if not path:
             return
 
-        selected_label = self._device_var.get().strip()
         options = RecordingOptions(
-            source=self._source_var.get() or "microphone",
-            device_index=_resolve_preferred_device_index(
-                self._device_options,
-                selected_label,
-                self._source_var.get() or "microphone",
-            ),
+            microphone_device_id=self._selected_microphone_id,
+            system_device_id=self._selected_system_id,
             output_path=Path(path),
         )
 
@@ -871,11 +894,10 @@ class TranscriptionGUI:
         combo_state = "readonly" if enabled else "disabled"
         self.start_button.configure(state=(tk.NORMAL if enabled else tk.DISABLED))
         self.record_button.configure(state=(tk.NORMAL if enabled else tk.DISABLED))
-        self.source_combo.configure(state=combo_state)
         self.model_combo.configure(state=combo_state)
         self.language_combo.configure(state=combo_state)
         self.translate_entry.configure(state=(tk.NORMAL if enabled else tk.DISABLED))
-        self.device_combo.configure(state=combo_state)
+        self.device_picker.configure(state=("normal" if enabled else "disabled"))
 
     def _refresh_language_choices(self) -> None:
         live_model = get_model_info(self._model_var.get()).id
@@ -1057,80 +1079,180 @@ class TranscriptionGUI:
         ttk.Button(button_row, text="Save Prompt", command=_save).pack(side=tk.RIGHT)
         ttk.Button(button_row, text="Close", command=dialog.destroy).pack(side=tk.RIGHT, padx=(0, 6))
 
-    def _on_source_changed(self, _event: object | None = None) -> None:
-        self._refresh_device_options()
-
     def _refresh_device_options(self) -> None:
-        source = self._source_var.get() or "microphone"
-        is_loopback = source == "system"
-
-        options: list[DeviceOption] = [DeviceOption("Auto (System default)", None)]
+        options: list[DeviceOption] = []
 
         try:
-            import sounddevice as sd
-
-            hostapis = list(sd.query_hostapis())
-            hostapi_names = {
-                i: str(api.get("name", f"HostAPI {i}"))
-                for i, api in enumerate(hostapis)
-            }
-            wasapi_host_ids = {
-                i for i, name in hostapi_names.items()
-                if "wasapi" in name.lower()
-            }
-            devices = list(sd.query_devices())
-            ranked: list[tuple[int, int, str, str]] = []
-            for idx, dev in enumerate(devices):
-                hostapi_idx = int(dev.get("hostapi", -1))
-                hostapi_name = hostapi_names.get(hostapi_idx, f"HostAPI {hostapi_idx}")
-                hostapi_key = hostapi_name.lower()
-                if is_loopback:
-                    # System audio: only WASAPI output devices
-                    if hostapi_idx not in wasapi_host_ids:
-                        continue
-                    channels = int(dev.get("max_output_channels", 0))
-                    if channels <= 0:
-                        continue
-                else:
-                    # Microphone: only WASAPI input devices (matches Windows Sound Settings)
-                    if "wasapi" not in hostapi_key:
-                        continue
-                    channels = int(dev.get("max_input_channels", 0))
-                    if channels <= 0:
-                        continue
-                if is_loopback:
-                    priority = 0
-                else:
-                    priority = 0
-                name = str(dev.get("name", f"Device {idx}"))
-                label = f"{name} [{hostapi_name} #{idx}]"
-                ranked.append((priority, idx, label, hostapi_name))
-
-            ranked.sort(key=lambda item: (item[0], item[1]))
-            for _priority, idx, label, _hostapi_name in ranked:
-                options.append(DeviceOption(label=label, index=idx))
+            devices = list_windows_capture_devices()
+            options.extend(
+                DeviceOption(
+                    label=(
+                        f"Microphone: {device.label}"
+                        if device.kind == "microphone"
+                        else f"System: {device.label}"
+                    ),
+                    index=device.id,
+                    kind=device.kind,
+                    is_default=device.is_default,
+                )
+                for device in devices
+            )
         except Exception:
             pass
 
         self._device_options = options
-        labels = [option.label for option in options]
-        self.device_combo.configure(values=labels)
+        self._rebuild_device_menu()
+        self._apply_default_device_selection()
+        self._update_device_picker_label()
 
-        selected_label = options[0].label
-        if self._requested_device_index is not None:
-            requested = next(
-                (option for option in options if option.index == self._requested_device_index),
+    def _rebuild_device_menu(self) -> None:
+        self._device_menu.delete(0, tk.END)
+        self._device_check_vars = {}
+        if not self._device_options:
+            self._device_menu.add_command(label="No audio devices found", state=tk.DISABLED)
+            return
+        current_kind: str | None = None
+        for option in self._device_options:
+            if current_kind is not None and option.kind != current_kind:
+                self._device_menu.add_separator()
+            current_kind = option.kind
+            variable = tk.BooleanVar(value=False)
+            if option.index is not None:
+                self._device_check_vars[str(option.index)] = variable
+            self._device_menu.add_checkbutton(
+                label=option.label,
+                variable=variable,
+                command=lambda opt=option: self._toggle_device_option(opt),
+            )
+
+    def _apply_default_device_selection(self) -> None:
+        valid_ids = {option.index for option in self._device_options if option.index is not None}
+        if self._selected_microphone_id not in valid_ids:
+            self._selected_microphone_id = None
+        if self._selected_system_id not in valid_ids:
+            self._selected_system_id = None
+
+        requested = self._requested_device_index
+        if requested is not None and requested in valid_ids:
+            requested_option = next(
+                (option for option in self._device_options if option.index == requested),
                 None,
             )
-            if requested is not None:
-                selected_label = requested.label
-        elif self._device_var.get() in labels:
-            selected_label = self._device_var.get()
-        self._device_var.set(selected_label)
+            if requested_option is not None:
+                if requested_option.kind == "microphone":
+                    self._selected_microphone_id = requested_option.index
+                elif requested_option.kind == "system":
+                    self._selected_system_id = requested_option.index
+
+        if self._selected_microphone_id is None:
+            default_mic = next(
+                (option.index for option in self._device_options if option.kind == "microphone" and option.is_default),
+                None,
+            )
+            if default_mic is None:
+                default_mic = next(
+                    (option.index for option in self._device_options if option.kind == "microphone"),
+                    None,
+                )
+            self._selected_microphone_id = default_mic
+        if self._selected_system_id is None:
+            default_system = next(
+                (option.index for option in self._device_options if option.kind == "system" and option.is_default),
+                None,
+            )
+            if default_system is None:
+                default_system = next(
+                    (option.index for option in self._device_options if option.kind == "system"),
+                    None,
+                )
+            self._selected_system_id = default_system
+
+        for option in self._device_options:
+            if option.index is None:
+                continue
+            variable = self._device_check_vars.get(str(option.index))
+            if variable is None:
+                continue
+            variable.set(
+                option.index == self._selected_microphone_id
+                or option.index == self._selected_system_id
+            )
+
+    def _toggle_device_option(self, option: DeviceOption) -> None:
+        if option.index is None:
+            return
+        variable = self._device_check_vars.get(str(option.index))
+        if variable is None:
+            return
+        checked = bool(variable.get())
+        if option.kind == "microphone":
+            self._selected_microphone_id = option.index if checked else None
+            if checked:
+                self._clear_other_device_checks("microphone", keep_id=option.index)
+        elif option.kind == "system":
+            self._selected_system_id = option.index if checked else None
+            if checked:
+                self._clear_other_device_checks("system", keep_id=option.index)
+        self._update_device_picker_label()
+
+    def _clear_other_device_checks(self, kind: str, *, keep_id: str | int | None) -> None:
+        for option in self._device_options:
+            if option.kind != kind or option.index is None or option.index == keep_id:
+                continue
+            variable = self._device_check_vars.get(str(option.index))
+            if variable is not None:
+                variable.set(False)
+
+    def _update_device_picker_label(self) -> None:
+        labels: list[str] = []
+        mic_option = next(
+            (option for option in self._device_options if option.index == self._selected_microphone_id),
+            None,
+        )
+        system_option = next(
+            (option for option in self._device_options if option.index == self._selected_system_id),
+            None,
+        )
+        if mic_option is not None:
+            labels.append(f"Mic: {mic_option.label.removeprefix('Microphone: ')}")
+        if system_option is not None:
+            labels.append(f"System: {system_option.label.removeprefix('System: ')}")
+        self._device_picker_var.set(" | ".join(labels) if labels else "Select devices...")
 
     # ------------------------------------------------------------------
     # File transcription methods
     # ------------------------------------------------------------------
+
+    def _install_ffmpeg(self) -> None:
+        """Start FFmpeg winget installation in a background thread."""
+        self._ffmpeg_install_btn.configure(state="disabled", text="Installing...")
+        self._ffmpeg_install_status.configure(text="Running winget...")
+
+        def _run() -> None:
+            ok = install_ffmpeg_winget(
+                on_output=lambda line: self.root.after(
+                    0, lambda l=line: self._ffmpeg_install_status.configure(text=l[:80])
+                )
+            )
+
+            def _finish() -> None:
+                self._ffmpeg_path = find_ffmpeg()
+                if self._ffmpeg_path is not None:
+                    self._ffmpeg_install_status.configure(text="FFmpeg installed successfully.")
+                    self._ffmpeg_banner.pack_forget()
+                elif ok:
+                    self._ffmpeg_install_status.configure(
+                        text="Installed. Restart VoxFusion to pick up FFmpeg."
+                    )
+                else:
+                    self._ffmpeg_install_status.configure(
+                        text="Installation failed. Install FFmpeg manually and restart."
+                    )
+                    self._ffmpeg_install_btn.configure(state="normal", text="Retry")
+
+            self.root.after(0, _finish)
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def _browse_file(self) -> None:
         path = filedialog.askopenfilename(
@@ -1455,12 +1577,6 @@ def _secs_to_srt(secs: float) -> str:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run VoxFusion GUI mode.")
     parser.add_argument(
-        "--source",
-        choices=["microphone", "system", "both"],
-        default="both",
-        help="Default audio source for live capture.",
-    )
-    parser.add_argument(
         "--translate",
         default=None,
         help="Target translation language code (optional).",
@@ -1477,9 +1593,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--device",
-        type=int,
+        type=str,
         default=None,
-        help="Optional sounddevice device ID.",
+        help="Optional Windows audio device id from the GUI/CLI device list.",
     )
     return parser
 
@@ -1491,11 +1607,11 @@ def main(argv: list[str] | None = None) -> int:
         print("Live capture requires Windows WASAPI. File transcription works on all platforms.")
 
     options = CaptureOptions(
-        source=args.source or "both",
         model=args.model,
         language=args.language,
         translate=args.translate,
-        device_index=args.device,
+        microphone_device_id=args.device if args.device and str(args.device).startswith("sd:") else None,
+        system_device_id=args.device if args.device and not str(args.device).startswith("sd:") else None,
     )
 
     root = tk.Tk()

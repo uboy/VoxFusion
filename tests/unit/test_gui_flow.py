@@ -6,11 +6,11 @@ from voxfusion.gui.main import (
     _build_file_workflow_status,
     _default_transcript_path,
     _load_gui_settings,
-    _resolve_preferred_device_index,
     _save_gui_settings,
     DeviceOption,
     TranscriptionGUI,
 )
+from voxfusion.gui.runtime import derive_capture_source
 
 
 def test_workflow_status_without_recording_or_transcript() -> None:
@@ -52,21 +52,22 @@ def test_gui_settings_invalid_json_returns_empty(tmp_path: Path) -> None:
     assert _load_gui_settings(path) == {}
 
 
-def test_resolve_preferred_device_index_prefers_ranked_input_for_auto() -> None:
-    options = [
-        DeviceOption("Auto (System default)", None),
-        DeviceOption("Headset [Windows WASAPI #17]", 17),
-        DeviceOption("Microphone [MME #1]", 1),
-    ]
-    assert _resolve_preferred_device_index(options, "Auto (System default)", "microphone") == 17
+def test_derive_capture_source_supports_microphone_only() -> None:
+    assert derive_capture_source("sd:17", None) == "microphone"
 
 
-def test_resolve_preferred_device_index_keeps_none_for_system_auto() -> None:
-    options = [
-        DeviceOption("Auto (System default)", None),
-        DeviceOption("Headset [Windows WASAPI #17]", 17),
-    ]
-    assert _resolve_preferred_device_index(options, "Auto (System default)", "system") is None
+def test_derive_capture_source_supports_system_only() -> None:
+    assert derive_capture_source(None, "pa:17") == "system"
+
+
+def test_derive_capture_source_supports_both() -> None:
+    assert derive_capture_source("sd:17", "pa:17") == "both"
+
+
+def test_device_option_fields_support_kind_and_default() -> None:
+    option = DeviceOption("Microphone: Headset", "sd:17", "microphone", True)
+    assert option.kind == "microphone"
+    assert option.is_default is True
 
 
 def test_language_helpers_use_catalog_labels() -> None:

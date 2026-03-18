@@ -22,9 +22,9 @@ from voxfusion.recording import AudioRecorder, create_recording_source
 )
 @click.option(
     "--device", "-d",
-    type=int,
+    type=str,
     default=None,
-    help="Audio device index for microphone capture.",
+    help="Audio device id from 'voxfusion devices'.",
 )
 @click.option(
     "--duration", "-t",
@@ -42,7 +42,7 @@ from voxfusion.recording import AudioRecorder, create_recording_source
 def record(
     ctx: click.Context,
     source: str,
-    device: int | None,
+    device: str | None,
     duration: float | None,
     output: Path | None,
 ) -> None:

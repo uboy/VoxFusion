@@ -59,6 +59,7 @@ transcription_*.vtt
 
 # User data directory
 .voxfusion/
+.agent-memory/
 
 # Logs
 *.log

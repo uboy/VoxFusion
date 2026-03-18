@@ -89,3 +89,14 @@ async def test_gigaam_engine_transcribes_with_fake_modules(monkeypatch: pytest.M
     assert segments[0].text == "privet mir"
     assert segments[0].language == "ru"
     engine.close()
+
+
+def test_gigaam_normalize_audio_flattens_deep_arrays() -> None:
+    engine = GigaAMCTCEngine()
+    samples = np.ones((8, 1, 1), dtype=np.float32)
+
+    normalized = engine._normalize_audio(samples, 16000)
+
+    assert normalized.ndim == 1
+    assert normalized.shape[0] == 8
+    engine.close()

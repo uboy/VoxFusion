@@ -7,7 +7,9 @@ from pathlib import Path
 import click
 
 from voxfusion.config.loader import load_config
+from voxfusion.gui.helpers import find_ffmpeg
 from voxfusion.logging import configure_logging, get_logger
+from voxfusion.media.extractor import NEEDS_EXTRACTION_EXTENSIONS
 from voxfusion.output import FORMATTERS
 from voxfusion.pipeline.events import EventType, PipelineEvent
 from voxfusion.pipeline.orchestrator import PipelineOrchestrator
@@ -103,6 +105,15 @@ def transcribe(
         config = load_config(overrides if overrides else None)
     except Exception as exc:
         raise click.ClickException(f"Configuration error: {exc}") from exc
+
+    # Warn if the file needs FFmpeg (video/container) but it's not installed
+    if audio_file.suffix.lower() in NEEDS_EXTRACTION_EXTENSIONS and find_ffmpeg() is None:
+        click.echo(
+            "WARNING: FFmpeg not found. This file may require FFmpeg for audio extraction.\n"
+            "  Install: winget install Gyan.FFmpeg.Essentials\n"
+            "  Or download from https://ffmpeg.org/download.html and add to PATH.",
+            err=True,
+        )
 
     fmt = output_format or config.output.format
     event_cb = _event_printer if not quiet else None

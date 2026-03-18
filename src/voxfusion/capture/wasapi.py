@@ -13,6 +13,7 @@ from contextlib import suppress
 import numpy as np
 
 from voxfusion.config.models import CaptureConfig
+from voxfusion.capture.windows_audio import parse_windows_device_id
 from voxfusion.exceptions import AudioCaptureError, UnsupportedPlatformError
 from voxfusion.logging import get_logger
 from voxfusion.models.audio import AudioChunk
@@ -178,7 +179,6 @@ class WASAPICapture:
         def _is_fatal_device_error(message: str) -> bool:
             return (
                 "PaErrorCode -9996" in message
-                or "PaErrorCode -9998" in message
                 or "Blocking API not supported yet" in message
             )
 
@@ -647,10 +647,10 @@ class RobustLoopbackCapture:
 
     def __init__(
         self,
-        device_index: int | None = None,
+        device_id: str | int | None = None,
         config: CaptureConfig | None = None,
     ) -> None:
-        self._device_index = device_index
+        self._device_id = device_id
         self._config = config or CaptureConfig()
         self._delegate: object | None = None
 
@@ -679,55 +679,73 @@ class RobustLoopbackCapture:
     async def start(self) -> None:
         """Try each loopback backend in priority order."""
         errors: list[str] = []
+        backend, native_index = parse_windows_device_id(self._device_id, default_backend="sd")
+        explicit_selection = backend is not None and native_index is not None
+        selected_backend = backend or "auto"
 
-        # 1. pyaudiowpatch — most reliable on Windows 10/11
-        try:
-            candidate: object = PyAudioLoopbackCapture(config=self._config)
-            await candidate.start()  # type: ignore[union-attr]
-            self._delegate = candidate
-            log.info("robust_loopback.backend", backend="pyaudiowpatch")
-            return
-        except Exception as exc:
-            errors.append(f"pyaudiowpatch: {exc}")
-            log.debug("robust_loopback.backend_failed", backend="pyaudiowpatch", error=str(exc))
-
-        # 2. Virtual input device (Stereo Mix, What U Hear, …)
-        virtual_idx = find_loopback_input_device()
-        if virtual_idx is not None:
+        # 1. pyaudiowpatch — primary Windows 10/11 loopback path
+        if selected_backend in ("auto", "pa"):
             try:
-                candidate = WASAPICapture(
-                    device_index=virtual_idx,
-                    loopback=False,
-                    source_label="system",
+                candidate: object = PyAudioLoopbackCapture(
+                    device_index=native_index if selected_backend == "pa" else None,
                     config=self._config,
                 )
                 await candidate.start()  # type: ignore[union-attr]
                 self._delegate = candidate
-                log.info("robust_loopback.backend", backend="virtual_input", device_index=virtual_idx)
+                log.info("robust_loopback.backend", backend="pyaudiowpatch")
                 return
             except Exception as exc:
-                errors.append(f"virtual_input[{virtual_idx}]: {exc}")
-                log.debug("robust_loopback.backend_failed", backend="virtual_input", error=str(exc))
+                errors.append(f"pyaudiowpatch: {exc}")
+                log.debug("robust_loopback.backend_failed", backend="pyaudiowpatch", error=str(exc))
+                if explicit_selection and selected_backend == "pa":
+                    raise AudioCaptureError(
+                        f"Selected PyAudio loopback device '{self._device_id}' failed: {exc}"
+                    ) from exc
 
-        # 3. WASAPI loopback on the default (or specified) output device
-        try:
-            candidate = WASAPICapture(
-                device_index=self._device_index,
-                loopback=True,
-                config=self._config,
-            )
-            await candidate.start()  # type: ignore[union-attr]
-            self._delegate = candidate
-            log.info("robust_loopback.backend", backend="wasapi_loopback")
-            return
-        except Exception as exc:
-            errors.append(f"wasapi_loopback: {exc}")
+        # 2. sounddevice/WASAPI loopback on the selected or default output device
+        if selected_backend in ("auto", "sd"):
+            try:
+                candidate = WASAPICapture(
+                    device_index=native_index if selected_backend == "sd" else None,
+                    loopback=True,
+                    config=self._config,
+                )
+                await candidate.start()  # type: ignore[union-attr]
+                self._delegate = candidate
+                log.info("robust_loopback.backend", backend="wasapi_loopback")
+                return
+            except Exception as exc:
+                errors.append(f"wasapi_loopback: {exc}")
+                log.debug("robust_loopback.backend_failed", backend="wasapi_loopback", error=str(exc))
+                if explicit_selection and selected_backend == "sd":
+                    raise AudioCaptureError(
+                        f"Selected WASAPI loopback device '{self._device_id}' failed: {exc}"
+                    ) from exc
+
+        # 3. Legacy virtual input fallback, only in auto mode
+        if not explicit_selection:
+            virtual_idx = find_loopback_input_device()
+            if virtual_idx is not None:
+                try:
+                    candidate = WASAPICapture(
+                        device_index=virtual_idx,
+                        loopback=False,
+                        source_label="system",
+                        config=self._config,
+                    )
+                    await candidate.start()  # type: ignore[union-attr]
+                    self._delegate = candidate
+                    log.info("robust_loopback.backend", backend="virtual_input", device_index=virtual_idx)
+                    return
+                except Exception as exc:
+                    errors.append(f"virtual_input[{virtual_idx}]: {exc}")
+                    log.debug("robust_loopback.backend_failed", backend="virtual_input", error=str(exc))
 
         raise AudioCaptureError(
             "All system audio capture methods failed on this machine.\n"
-            "Fix: open Windows Sound settings → Recording tab → right-click in the list\n"
-            "→ 'Show Disabled Devices' → enable 'Stereo Mix'.\n"
-            "Alternative: install VB-Audio Virtual Cable (free).\n"
+            "Fix: choose another loopback device from 'voxfusion devices --type loopback',\n"
+            "or retry with the Windows default playback endpoint.\n"
+            "Legacy fallback: enable 'Stereo Mix' if your audio driver exposes it.\n"
             f"Details: {' | '.join(errors)}"
         )
 
@@ -868,22 +886,48 @@ class PyAudioLoopbackCapture:
                 device_info = self._find_loopback_device(pa)
 
             sample_rate = int(device_info["defaultSampleRate"])
-            channels = max(1, min(int(device_info["maxInputChannels"]), 2))
+            max_input_channels = max(1, int(device_info.get("maxInputChannels", 1)))
+            channel_candidates: list[int] = []
+            for candidate in (self._config.channels, 2, 1, max_input_channels):
+                if candidate >= 1 and candidate <= max_input_channels and candidate not in channel_candidates:
+                    channel_candidates.append(candidate)
 
-            stream = pa.open(
-                format=pyaudio.paFloat32,
-                channels=channels,
-                rate=sample_rate,
-                input=True,
-                input_device_index=device_info["index"],
-                frames_per_buffer=int(sample_rate * 0.1),
-                stream_callback=self._make_callback(),
-            )
+            stream = None
+            opened_channels: int | None = None
+            last_error: Exception | None = None
+            for channels in channel_candidates:
+                try:
+                    stream = pa.open(
+                        format=pyaudio.paFloat32,
+                        channels=channels,
+                        rate=sample_rate,
+                        input=True,
+                        input_device_index=device_info["index"],
+                        frames_per_buffer=int(sample_rate * 0.1),
+                        stream_callback=self._make_callback(),
+                    )
+                    opened_channels = channels
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    log.debug(
+                        "pyaudio_loopback.open_failed",
+                        device=device_info.get("name", str(device_info.get("index"))),
+                        device_index=device_info.get("index"),
+                        channels=channels,
+                        error=str(exc),
+                    )
+
+            if stream is None or opened_channels is None:
+                raise AudioCaptureError(
+                    "Failed to open loopback stream: "
+                    f"{last_error or 'no valid channel configuration found'}"
+                )
             stream.start_stream()
             self._stream = stream
             self._device_index = device_info["index"]
             self._config.sample_rate = sample_rate
-            self._config.channels = channels
+            self._config.channels = opened_channels
             self._active = True
             self._position = 0
             log.info(
@@ -891,7 +935,7 @@ class PyAudioLoopbackCapture:
                 device=device_info.get("name", str(self._device_index)),
                 device_index=self._device_index,
                 sample_rate=sample_rate,
-                channels=channels,
+                channels=opened_channels,
             )
         except AudioCaptureError:
             pa.terminate()

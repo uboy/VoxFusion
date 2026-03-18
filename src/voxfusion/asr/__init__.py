@@ -13,17 +13,21 @@ from voxfusion.asr_catalog import (
     normalize_language_for_model,
 )
 from voxfusion.asr.dedup import OverlapDeduplicator
+from voxfusion.asr.breeze_engine import BreezeASREngine
 from voxfusion.asr.faster_whisper import FasterWhisperEngine
 from voxfusion.asr.gigaam_engine import GigaAMCTCEngine
+from voxfusion.asr.parakeet_engine import ParakeetASREngine
 from voxfusion.asr.streaming import StreamingASR
 
 __all__ = [
     "ASREngine",
     "ASRModelInfo",
+    "BreezeASREngine",
     "FasterWhisperEngine",
     "GigaAMCTCEngine",
     "LanguageInfo",
     "OverlapDeduplicator",
+    "ParakeetASREngine",
     "StreamingASR",
     "get_language_code",
     "get_language_label",

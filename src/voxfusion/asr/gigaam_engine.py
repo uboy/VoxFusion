@@ -134,6 +134,25 @@ class GigaAMCTCEngine:
             )
         ]
 
+    @staticmethod
+    def _normalize_audio(samples: np.ndarray, sample_rate: int) -> np.ndarray:
+        audio = np.asarray(samples, dtype=np.float32)
+        if audio.ndim == 0:
+            audio = audio.reshape(1)
+        elif audio.ndim == 2:
+            audio = audio.mean(axis=1, dtype=np.float32)
+        elif audio.ndim > 2:
+            audio = audio.reshape(audio.shape[0], -1).mean(axis=1, dtype=np.float32)
+        audio = np.ascontiguousarray(audio.reshape(-1), dtype=np.float32)
+
+        if sample_rate != 16000:
+            duration = len(audio) / sample_rate
+            target_samples = max(1, int(duration * 16000))
+            xs_old = np.linspace(0.0, 1.0, num=len(audio), endpoint=False)
+            xs_new = np.linspace(0.0, 1.0, num=target_samples, endpoint=False)
+            audio = np.interp(xs_new, xs_old, audio).astype(np.float32)
+        return audio
+
     async def transcribe(
         self,
         audio: AudioChunk,
@@ -145,16 +164,7 @@ class GigaAMCTCEngine:
         """Transcribe an audio chunk."""
         del initial_prompt, word_timestamps
         loop = asyncio.get_running_loop()
-        if audio.samples.ndim > 1:
-            mono = audio.samples.mean(axis=1, dtype=np.float32)
-        else:
-            mono = np.asarray(audio.samples, dtype=np.float32)
-        if audio.sample_rate != 16000:
-            duration = len(mono) / audio.sample_rate
-            target_samples = max(1, int(duration * 16000))
-            xs_old = np.linspace(0.0, 1.0, num=len(mono), endpoint=False)
-            xs_new = np.linspace(0.0, 1.0, num=target_samples, endpoint=False)
-            mono = np.interp(xs_new, xs_old, mono).astype(np.float32)
+        mono = self._normalize_audio(audio.samples, audio.sample_rate)
         executor = self._executor
         if executor is None:
             raise TranscriptionError("GigaAM executor is not available.")
