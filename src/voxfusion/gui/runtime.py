@@ -145,10 +145,12 @@ class FileTranscribeWorker:
         on_segments: Callable[[list[TranslatedSegment]], None],
         on_error: Callable[[str], None],
         on_finished: Callable[[], None],
+        quality: str = "balanced",
     ) -> None:
         self._file_path = file_path
         self._model = model
         self._language = language
+        self._quality = quality
         self._on_status = on_status
         self._on_segments = on_segments
         self._on_error = on_error
@@ -176,15 +178,18 @@ class FileTranscribeWorker:
         from voxfusion.pipeline.events import EventType, PipelineStage
         from voxfusion.pipeline.orchestrator import PipelineOrchestrator
 
-        overrides: dict[str, Any] = {
-            "asr": {
-                "model_size": self._model,
-                "cpu_threads": os.cpu_count() or 4,
-                "beam_size": 5,
-            },
-        }
+        from voxfusion.asr_catalog import get_quality_preset
+
+        # Start with quality preset (compute_type, beam_size, best_of, vad_*),
+        # then override model-level settings that always take priority.
+        asr_overrides: dict[str, Any] = get_quality_preset(self._quality)
+        asr_overrides.update({
+            "model_size": self._model,
+            "cpu_threads": os.cpu_count() or 4,
+        })
         if self._language:
-            overrides["asr"]["language"] = self._language
+            asr_overrides["language"] = self._language
+        overrides: dict[str, Any] = {"asr": asr_overrides}
 
         config = load_config(overrides)
         stage_started_pct: dict[PipelineStage, float] = {

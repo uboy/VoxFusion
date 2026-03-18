@@ -17,6 +17,7 @@ from tkinter import filedialog, scrolledtext, ttk
 
 from voxfusion.asr_catalog import (
     DEFAULT_LANGUAGE_CODE,
+    QUALITY_PRESET_LABELS,
     get_language_code,
     get_language_label,
     get_model_info,
@@ -132,6 +133,7 @@ class TranscriptionGUI:
         self._file_lang_var = tk.StringVar(
             value=self._language_label_for_code(options.language, initial_model)
         )
+        self._file_quality_var = tk.StringVar(value="Balanced")
         self._file_seg_count = 0
         self._file_segments: list[TranslatedSegment] = []
         self._last_transcript_path: Path | None = None
@@ -430,7 +432,17 @@ class TranscriptionGUI:
             state="readonly",
             width=18,
         )
-        self._file_lang_combo.pack(side=tk.LEFT, padx=(0, 16))
+        self._file_lang_combo.pack(side=tk.LEFT, padx=(0, 12))
+
+        ttk.Label(opts, text="Quality:").pack(side=tk.LEFT, padx=(0, 6))
+        self._file_quality_combo = ttk.Combobox(
+            opts,
+            textvariable=self._file_quality_var,
+            state="readonly",
+            width=11,
+            values=list(QUALITY_PRESET_LABELS),
+        )
+        self._file_quality_combo.pack(side=tk.LEFT, padx=(0, 16))
 
         self._file_transcribe_btn = ttk.Button(
             opts, text="Transcribe", command=self._start_file_transcribe, style="Accent.TButton"
@@ -1031,6 +1043,10 @@ class TranscriptionGUI:
             if p.exists():
                 self._last_transcript_path = p
 
+        saved_quality = settings.get("file_quality", "Balanced")
+        if saved_quality in QUALITY_PRESET_LABELS:
+            self._file_quality_var.set(saved_quality)
+
     def _persist_gui_settings(self) -> None:
         _save_gui_settings(
             {
@@ -1049,6 +1065,8 @@ class TranscriptionGUI:
                 "proxy_ca_bundle": self._proxy_ca_var.get().strip(),
                 # HuggingFace
                 "hf_token": self._hf_token_var.get().strip(),
+                # Transcription quality
+                "file_quality": self._file_quality_var.get(),
             }
         )
 
@@ -1512,6 +1530,7 @@ class TranscriptionGUI:
         self._file_cancel_btn.configure(state=tk.NORMAL)
         self._file_model_combo.configure(state="disabled")
         self._file_lang_combo.configure(state="disabled")
+        self._file_quality_combo.configure(state="disabled")
         self._file_progress["value"] = 0
         self._last_transcript_path = None
         self._file_start_time = monotonic()
@@ -1526,6 +1545,7 @@ class TranscriptionGUI:
             file_path=file_path,
             model=model,
             language=language,
+            quality=self._file_quality_var.get(),
             on_status=self._schedule_file_status,
             on_segments=self._schedule_file_segments,
             on_error=self._schedule_file_error,
@@ -1630,6 +1650,7 @@ class TranscriptionGUI:
         self._file_cancel_btn.configure(state=tk.DISABLED)
         self._file_model_combo.configure(state="readonly")
         self._file_lang_combo.configure(state="readonly")
+        self._file_quality_combo.configure(state="readonly")
         self._file_start_time = None
         self._file_time_label.configure(text="")
         if was_cancelled:

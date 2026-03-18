@@ -56,8 +56,11 @@ class ParakeetASREngine:
             from nemo.collections.asr.models import ASRModel
         except ImportError as exc:
             raise ModelLoadError(
-                "Parakeet backend requires nemo_toolkit['asr']. "
-                "Install it in the active environment and retry file transcription."
+                "Parakeet requires the NeMo ASR toolkit, which is not installed.\n"
+                "Install it with:\n"
+                "  pip install \"nemo_toolkit[asr]\" torchaudio\n"
+                "Note: this is a large download (~2 GB). "
+                "After installing, restart VoxFusion and retry."
             ) from exc
 
         try:
@@ -110,8 +113,18 @@ class ParakeetASREngine:
                 return ParakeetASREngine._extract_text(hypotheses[0])
         return str(result).strip()
 
+    @staticmethod
+    def _extract_language(result: object) -> str | None:
+        """Best-effort extraction of the detected language from a NeMo result."""
+        item = result[0] if isinstance(result, list) and result else result
+        for attr in ("language_id", "language", "lang"):
+            val = getattr(item, attr, None)
+            if val and isinstance(val, str):
+                return val.strip().lower() or None
+        return None
+
     def _transcribe_sync(self, audio: np.ndarray, *, language: str | None = None) -> list[TranscriptionSegment]:
-        del language
+        del language  # Parakeet auto-detects language; explicit selection is not supported
         model = self._ensure_model()
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
             wav_path = Path(handle.name)
@@ -119,6 +132,7 @@ class ParakeetASREngine:
             sf.write(wav_path, audio, 16000)
             result = model.transcribe([str(wav_path)])  # type: ignore[union-attr]
             text = self._extract_text(result)
+            detected_lang = self._extract_language(result)
         except Exception as exc:
             raise TranscriptionError(f"Parakeet transcription failed: {exc}") from exc
         finally:
@@ -130,7 +144,7 @@ class ParakeetASREngine:
         return [
             TranscriptionSegment(
                 text=text,
-                language="en",
+                language=detected_lang,
                 start_time=0.0,
                 end_time=len(audio) / 16000.0,
                 confidence=0.0,
