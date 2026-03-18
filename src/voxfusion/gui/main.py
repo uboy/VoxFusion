@@ -137,6 +137,8 @@ class TranscriptionGUI:
         self._last_transcript_path: Path | None = None
         self._file_start_time: float | None = None
         self._file_current_progress: float = 0.0
+        # (timestamp, progress) samples for velocity-based ETA
+        self._file_progress_samples: list[tuple[float, float]] = []
 
         # Proxy / network settings state
         self._proxy_use_system_var = tk.BooleanVar(value=True)
@@ -1514,6 +1516,7 @@ class TranscriptionGUI:
         self._last_transcript_path = None
         self._file_start_time = monotonic()
         self._file_current_progress = 0.0
+        self._file_progress_samples = []
         self._file_time_label.configure(text="")
         self._file_status_label.configure(text=f"Step 2: Transcribing {file_path.name}...")
         self._refresh_file_workflow()
@@ -1568,19 +1571,37 @@ class TranscriptionGUI:
     def _tick_file_timer(self) -> None:
         if self._file_worker is None or self._file_start_time is None:
             return
-        elapsed = monotonic() - self._file_start_time
+        now = monotonic()
+        elapsed = now - self._file_start_time
         m, s = divmod(int(elapsed), 60)
         h, m = divmod(m, 60)
         elapsed_str = f"{h:02d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
+        # Record sample and prune to a 10-second sliding window
         progress = self._file_current_progress
-        if progress > 0.05:
-            remaining = elapsed * (1.0 - progress) / progress
-            rm, rs = divmod(int(remaining), 60)
-            rh, rm = divmod(rm, 60)
-            eta_str = f"{rh:02d}:{rm:02d}:{rs:02d}" if rh else f"{rm:02d}:{rs:02d}"
-            self._file_time_label.configure(text=f"{elapsed_str} | ~{eta_str}")
-        else:
-            self._file_time_label.configure(text=elapsed_str)
+        self._file_progress_samples.append((now, progress))
+        cutoff = now - 10.0
+        self._file_progress_samples = [
+            (t, p) for t, p in self._file_progress_samples if t >= cutoff
+        ]
+
+        # Show ETA only when progress is advancing at a measurable rate
+        label = elapsed_str
+        if len(self._file_progress_samples) >= 2:
+            t0, p0 = self._file_progress_samples[0]
+            t1, p1 = self._file_progress_samples[-1]
+            dt = t1 - t0
+            dp = p1 - p0
+            # Require at least 2 s of window and 0.5% progress gained to compute ETA
+            if dt >= 2.0 and dp >= 0.005 and progress < 1.0:
+                velocity = dp / dt  # progress per second
+                remaining = (1.0 - progress) / velocity
+                rm, rs = divmod(int(remaining), 60)
+                rh, rm = divmod(rm, 60)
+                eta_str = f"{rh:02d}:{rm:02d}:{rs:02d}" if rh else f"{rm:02d}:{rs:02d}"
+                label = f"{elapsed_str} | ~{eta_str} left"
+
+        self._file_time_label.configure(text=label)
         self.root.after(500, self._tick_file_timer)
 
     def _add_file_segments(self, segments: list[TranslatedSegment]) -> None:

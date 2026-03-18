@@ -5,10 +5,11 @@ automatically when the model is not present.
 
 To enable the test, either:
   1. Set VOXFUSION_ASR__MODEL_PATH to a local directory that contains
-     the exported ONNX model and tokenizer.
+     the downloaded model.
   2. Pre-download the model via:
-       voxfusion models download --asr gigaam-v3-e2e-ctc
-     so that it lands in the Hugging Face cache (~/.cache/huggingface/hub).
+       huggingface-cli download ai-sage/GigaAM-v3 --revision ctc
+     so that it lands in the Hugging Face cache.
+
 
 The test verifies that:
   - the engine loads without error,
@@ -30,8 +31,15 @@ import pytest
 # ---------------------------------------------------------------------------
 
 _MODEL_PATH_ENV = "VOXFUSION_ASR__MODEL_PATH"
-_HF_CACHE = Path.home() / ".cache" / "huggingface" / "hub"
-_HF_GIGAAM_DIR = "models--ai-forever--gigaam-v3-e2e-ctc"
+# HuggingFace hub stores the model under "models--<org>--<repo>" with "--" separating path segments.
+_HF_GIGAAM_DIR = "models--ai-sage--GigaAM-v3"
+
+
+def _hf_cache_root() -> Path:
+    hf_home = os.environ.get("HF_HOME")
+    if hf_home:
+        return Path(hf_home) / "hub"
+    return Path.home() / ".cache" / "huggingface" / "hub"
 
 
 def _gigaam_available() -> bool:
@@ -39,7 +47,7 @@ def _gigaam_available() -> bool:
     if explicit and Path(explicit).exists():
         return True
     # Check whether the HuggingFace cache already has the model
-    return (_HF_CACHE / _HF_GIGAAM_DIR).exists()
+    return (_hf_cache_root() / _HF_GIGAAM_DIR).exists()
 
 
 _SKIP_REASON = (
