@@ -262,7 +262,7 @@ class TranscriptionGUI:
         self._rec_format_combo = ttk.Combobox(
             btn_row,
             textvariable=self._rec_format_var,
-            values=["wav", "flac", "ogg"],
+            values=["wav", "ogg", "opus", "mp3"],
             state="readonly",
             width=5,
         )
@@ -618,15 +618,17 @@ class TranscriptionGUI:
             return
         fmt = self._rec_format_var.get()
         _fmt_filetypes = {
-            "wav": [("WAV audio", "*.wav")],
-            "flac": [("FLAC audio", "*.flac")],
-            "ogg": [("OGG audio", "*.ogg")],
+            "wav":  ("wav",  [("WAV audio",       "*.wav")]),
+            "ogg":  ("ogg",  [("OGG Vorbis audio","*.ogg")]),
+            "opus": ("opus", [("OGG Opus audio",  "*.opus")]),
+            "mp3":  ("mp3",  [("MP3 audio",       "*.mp3")]),
         }
-        default_name = f"recording_{source}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{fmt}"
+        ext, filetypes = _fmt_filetypes.get(fmt, (fmt, [("Audio files", f"*.{fmt}")]))
+        default_name = f"recording_{source}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{ext}"
         path = filedialog.asksaveasfilename(
-            defaultextension=f".{fmt}",
+            defaultextension=f".{ext}",
             initialfile=default_name,
-            filetypes=_fmt_filetypes.get(fmt, [("Audio files", f"*.{fmt}")]) + [("All files", "*.*")],
+            filetypes=filetypes + [("All files", "*.*")],
             title="Save recorded audio",
         )
         if not path:

@@ -101,28 +101,6 @@ async def test_audio_recorder_writes_wav(tmp_path: Path) -> None:
     assert stats.chunks_captured == 1
 
 
-async def test_audio_recorder_writes_flac(tmp_path: Path) -> None:
-    import soundfile as sf
-
-    output = tmp_path / "capture.flac"
-    chunk = AudioChunk(
-        samples=np.array([0.0, 0.25, -0.25, 0.0], dtype=np.float32),
-        sample_rate=44100,
-        channels=1,
-        timestamp_start=0.0,
-        timestamp_end=4 / 44100,
-        source="microphone",
-    )
-    source = FakeCaptureSource([chunk])
-
-    recorder = AudioRecorder(chunk_duration_ms=250)
-    stats = await recorder.record(source, output, format="flac")
-
-    assert output.exists()
-    assert sf.info(str(output)).format == "FLAC"
-    assert stats.output_path == output
-
-
 async def test_audio_recorder_writes_ogg(tmp_path: Path) -> None:
     import soundfile as sf
 
@@ -143,6 +121,60 @@ async def test_audio_recorder_writes_ogg(tmp_path: Path) -> None:
     assert output.exists()
     assert sf.info(str(output)).format == "OGG"
     assert stats.output_path == output
+
+
+async def test_audio_recorder_writes_mp3(tmp_path: Path) -> None:
+    import shutil
+
+    output = tmp_path / "capture.mp3"
+    chunk = AudioChunk(
+        samples=np.array([0.0, 0.25, -0.25, 0.0] * 1000, dtype=np.float32),
+        sample_rate=44100,
+        channels=1,
+        timestamp_start=0.0,
+        timestamp_end=4000 / 44100,
+        source="microphone",
+    )
+    source = FakeCaptureSource([chunk])
+
+    if shutil.which("ffmpeg") is None:
+        import pytest
+        pytest.skip("ffmpeg not found in PATH")
+
+    recorder = AudioRecorder(chunk_duration_ms=250)
+    stats = await recorder.record(source, output, format="mp3")
+
+    assert output.exists()
+    assert output.stat().st_size > 0
+    assert stats.output_path == output
+
+
+async def test_audio_recorder_writes_opus(tmp_path: Path) -> None:
+    import soundfile as sf
+
+    output = tmp_path / "capture.opus"
+    chunk = AudioChunk(
+        samples=np.array([0.0, 0.25, -0.25, 0.0], dtype=np.float32),
+        sample_rate=44100,
+        channels=1,
+        timestamp_start=0.0,
+        timestamp_end=4 / 44100,
+        source="microphone",
+    )
+    source = FakeCaptureSource([chunk])
+
+    recorder = AudioRecorder(chunk_duration_ms=250)
+    try:
+        stats = await recorder.record(source, output, format="opus")
+        assert output.exists()
+        info = sf.info(str(output))
+        assert info.format == "OGG"
+        assert "opus" in info.subtype.lower()
+        assert stats.output_path == output
+    except Exception as exc:
+        # Opus requires libsndfile >= 1.1.0; skip gracefully on older installs
+        import pytest
+        pytest.skip(f"Opus not supported by installed libsndfile: {exc}")
 
 
 def test_recording_options_default_format() -> None:

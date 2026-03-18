@@ -113,9 +113,17 @@ class GigaAMCTCEngine:
                 return_tensors="np",
             )
             outputs = model(**inputs)
-            logits = outputs.logits
-            token_ids = np.asarray(logits).argmax(axis=-1)
-            text = processor.batch_decode(token_ids, skip_special_tokens=True)[0].strip()
+            raw_logits = outputs.logits
+            # Some ORT versions return a list/tuple of arrays instead of a
+            # single ndarray.  Unwrap one level so we always get an ndarray.
+            while isinstance(raw_logits, (list, tuple)):
+                raw_logits = raw_logits[0]
+            logits_arr = np.asarray(raw_logits, dtype=np.float32)
+            # Remove batch dimension if present (we always infer one sample)
+            if logits_arr.ndim == 3:
+                logits_arr = logits_arr[0]  # (time, vocab)
+            token_ids = logits_arr.argmax(axis=-1)  # (time,)
+            text = processor.decode(token_ids, skip_special_tokens=True).strip()
         except Exception as exc:
             raise TranscriptionError(f"GigaAM transcription failed: {exc}") from exc
 
