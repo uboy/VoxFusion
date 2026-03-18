@@ -119,6 +119,7 @@ class TranscriptionGUI:
         self._selected_system_id: str | int | None = options.system_device_id
         self._last_recorded_file: Path | None = None
         self._ffmpeg_path: Path | None = find_ffmpeg()
+        self._rec_format_var = tk.StringVar(value="wav")
 
         # File tab state
         self._file_worker: FileTranscribeWorker | None = None
@@ -257,7 +258,15 @@ class TranscriptionGUI:
             command=self._start_recording,
             style="Accent.TButton",
         )
-        self.record_button.pack(side=tk.LEFT, padx=(0, 12))
+        self.record_button.pack(side=tk.LEFT, padx=(0, 4))
+        self._rec_format_combo = ttk.Combobox(
+            btn_row,
+            textvariable=self._rec_format_var,
+            values=["wav", "flac", "ogg"],
+            state="readonly",
+            width=5,
+        )
+        self._rec_format_combo.pack(side=tk.LEFT, padx=(0, 12))
 
         ttk.Separator(btn_row, orient="vertical").pack(side=tk.LEFT, fill=tk.Y, padx=(0, 12))
 
@@ -607,14 +616,17 @@ class TranscriptionGUI:
         if source == "none":
             self._set_live_status("Select at least one device to record.")
             return
-        default_name = f"recording_{source}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
+        fmt = self._rec_format_var.get()
+        _fmt_filetypes = {
+            "wav": [("WAV audio", "*.wav")],
+            "flac": [("FLAC audio", "*.flac")],
+            "ogg": [("OGG audio", "*.ogg")],
+        }
+        default_name = f"recording_{source}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{fmt}"
         path = filedialog.asksaveasfilename(
-            defaultextension=".wav",
+            defaultextension=f".{fmt}",
             initialfile=default_name,
-            filetypes=[
-                ("WAV audio", "*.wav"),
-                ("All files", "*.*"),
-            ],
+            filetypes=_fmt_filetypes.get(fmt, [("Audio files", f"*.{fmt}")]) + [("All files", "*.*")],
             title="Save recorded audio",
         )
         if not path:
@@ -624,13 +636,14 @@ class TranscriptionGUI:
             microphone_device_id=self._selected_microphone_id,
             system_device_id=self._selected_system_id,
             output_path=Path(path),
+            output_format=fmt,
         )
 
         self._set_live_controls_enabled(False)
         self.stop_button.configure(state=tk.NORMAL)
         self.pause_button.configure(state=tk.NORMAL)
         self.pause_button.configure(text="Pause")
-        self.queue_label.configure(text="Queue: raw recording in progress")
+        self.queue_label.configure(text="Recording: 00:00:00")
         self._set_live_status(f"Recording audio to {options.output_path.name}...")
         self._record_worker = RecordingWorker(
             options=options,
@@ -639,6 +652,7 @@ class TranscriptionGUI:
             on_finished=self._schedule_recording_finished,
         )
         self._record_worker.start()
+        self.root.after(500, self._tick_recording_timer)
 
     def _stop_capture(self) -> None:
         if self._worker is not None:
@@ -656,9 +670,18 @@ class TranscriptionGUI:
             return
         paused = self._record_worker.toggle_pause()
         self.pause_button.configure(text=("Resume" if paused else "Pause"))
-        self.queue_label.configure(
-            text=("Queue: recording paused" if paused else "Queue: raw recording in progress")
-        )
+
+    def _tick_recording_timer(self) -> None:
+        if self._record_worker is None or not self._record_worker.is_running:
+            return
+        elapsed = self._record_worker.elapsed_s
+        h, rem = divmod(int(elapsed), 3600)
+        m, s = divmod(rem, 60)
+        label = f"Recording: {h:02d}:{m:02d}:{s:02d}"
+        if self._record_worker._recorder.is_paused:
+            label += " (paused)"
+        self.queue_label.configure(text=label)
+        self.root.after(500, self._tick_recording_timer)
 
     def _on_close(self) -> None:
         self._stop_capture()
@@ -1283,6 +1306,8 @@ class TranscriptionGUI:
         if self._file_worker is not None:
             return  # already running
 
+        self._clear_file_table()
+
         model = get_model_info(self._file_model_var.get() or "small").id
         language = self._language_code_for_label(self._file_lang_var.get(), model)
 
@@ -1322,12 +1347,12 @@ class TranscriptionGUI:
             self.root.after(0, self._on_file_worker_finished)
 
     def _update_file_status(self, msg: str, progress: float) -> None:
-        self._file_status_label.configure(text=msg)
+        self._file_status_label.configure(text=msg, foreground="")
         self._file_progress["value"] = int(progress * 100)
         self._refresh_file_workflow()
 
     def _show_file_error(self, message: str) -> None:
-        self._file_status_label.configure(text=f"Error: {message}")
+        self._file_status_label.configure(text=f"Error: {message}", foreground="red")
         self._file_progress["value"] = 0
         timestamp = datetime.now().strftime("%H:%M:%S")
         self._append_log_line(f"{timestamp} | FILE ERROR | {message}\n")

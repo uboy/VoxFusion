@@ -157,11 +157,9 @@ VSVersionInfo(
 
 
 # Packages that need --collect-all to bundle native DLLs and data files.
+# Only include packages that are actually installed; others use lazy/conditional imports.
 _COLLECT_ALL_PACKAGES: list[str] = [
     "pyaudiowpatch",
-    "transformers",
-    "optimum",
-    "onnxruntime",
 ]
 
 HIDDEN_IMPORTS: list[str] = [
@@ -179,10 +177,6 @@ HIDDEN_IMPORTS: list[str] = [
     "voxfusion.asr.faster_whisper",
     "voxfusion.capture.wasapi",
     "pyaudiowpatch",
-    "transformers",
-    "optimum.onnxruntime",
-    "onnxruntime",
-    "nemo.collections.asr.models",
     "voxfusion.capture.vad_chunker",
     "voxfusion.capture.mixer",
     "voxfusion.media.extractor",

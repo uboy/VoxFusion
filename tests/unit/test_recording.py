@@ -101,6 +101,62 @@ async def test_audio_recorder_writes_wav(tmp_path: Path) -> None:
     assert stats.chunks_captured == 1
 
 
+async def test_audio_recorder_writes_flac(tmp_path: Path) -> None:
+    import soundfile as sf
+
+    output = tmp_path / "capture.flac"
+    chunk = AudioChunk(
+        samples=np.array([0.0, 0.25, -0.25, 0.0], dtype=np.float32),
+        sample_rate=44100,
+        channels=1,
+        timestamp_start=0.0,
+        timestamp_end=4 / 44100,
+        source="microphone",
+    )
+    source = FakeCaptureSource([chunk])
+
+    recorder = AudioRecorder(chunk_duration_ms=250)
+    stats = await recorder.record(source, output, format="flac")
+
+    assert output.exists()
+    assert sf.info(str(output)).format == "FLAC"
+    assert stats.output_path == output
+
+
+async def test_audio_recorder_writes_ogg(tmp_path: Path) -> None:
+    import soundfile as sf
+
+    output = tmp_path / "capture.ogg"
+    chunk = AudioChunk(
+        samples=np.array([0.0, 0.25, -0.25, 0.0], dtype=np.float32),
+        sample_rate=44100,
+        channels=1,
+        timestamp_start=0.0,
+        timestamp_end=4 / 44100,
+        source="microphone",
+    )
+    source = FakeCaptureSource([chunk])
+
+    recorder = AudioRecorder(chunk_duration_ms=250)
+    stats = await recorder.record(source, output, format="ogg")
+
+    assert output.exists()
+    assert sf.info(str(output)).format == "OGG"
+    assert stats.output_path == output
+
+
+def test_recording_options_default_format() -> None:
+    from pathlib import Path
+    from voxfusion.gui.runtime import RecordingOptions
+
+    opts = RecordingOptions(
+        microphone_device_id=None,
+        system_device_id=None,
+        output_path=Path("/tmp/audio.wav"),
+    )
+    assert opts.output_format == "wav"
+
+
 async def test_audio_recorder_pause_skips_audio_and_compacts_timeline(tmp_path: Path) -> None:
     output = tmp_path / "paused.wav"
     first = AudioChunk(

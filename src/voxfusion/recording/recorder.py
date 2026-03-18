@@ -29,8 +29,15 @@ class RecordingStats:
     chunks_captured: int
 
 
+_FORMAT_SUBTYPES: dict[str, str] = {
+    "wav": "PCM_16",
+    "flac": "PCM_16",
+    "ogg": "VORBIS",
+}
+
+
 class AudioRecorder:
-    """Record streamed audio chunks to a WAV file."""
+    """Record streamed audio chunks to an audio file (WAV, FLAC, or OGG)."""
 
     def __init__(
         self,
@@ -68,6 +75,7 @@ class AudioRecorder:
         output_path: Path,
         *,
         duration_s: float | None = None,
+        format: str = "wav",
     ) -> RecordingStats:
         """Capture audio from *source* and write it to *output_path*."""
         chunks: list[AudioChunk] = []
@@ -120,7 +128,8 @@ class AudioRecorder:
 
         mixed = _mix_chunks(chunks, sample_rate=sample_rate, channels=channels, duration_s=deadline)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        sf.write(str(output_path), mixed, sample_rate)
+        subtype = _FORMAT_SUBTYPES.get(format.lower(), "PCM_16")
+        sf.write(str(output_path), mixed, sample_rate, subtype=subtype)
 
         duration_actual = mixed.shape[0] / sample_rate
         stats = RecordingStats(
