@@ -18,11 +18,11 @@ from tkinter import filedialog, scrolledtext, ttk
 from voxfusion.asr_catalog import (
     DEFAULT_LANGUAGE_CODE,
     QUALITY_PRESET_LABELS,
+    get_available_model_catalog,
     get_language_code,
     get_language_label,
     get_model_info,
     list_languages_for_model,
-    list_model_ids,
     normalize_language_for_model,
 )
 from voxfusion.gui.helpers import (
@@ -63,7 +63,7 @@ from voxfusion.media.extractor import NEEDS_EXTRACTION_EXTENSIONS
 from voxfusion.models.translation import TranslatedSegment
 from voxfusion.recording import RecordingStats
 
-ASR_MODEL_CHOICES: tuple[str, ...] = list_model_ids()
+ASR_MODEL_CHOICES: tuple[str, ...] = tuple(m.id for m in get_available_model_catalog())
 GUI_DEFAULT_LANGUAGE = DEFAULT_LANGUAGE_CODE
 
 # File dialog filter for supported media files
@@ -728,10 +728,18 @@ class TranscriptionGUI:
         self.root.after(500, self._tick_recording_timer)
 
     def _on_close(self) -> None:
+        # Signal all background workers to stop before destroying the window.
         self._stop_capture()
+        if self._file_worker is not None:
+            self._file_worker.cancel()
         self._persist_gui_settings()
         self._restore_redirection()
         self.root.destroy()
+        # Python's ThreadPoolExecutor registers an atexit handler that calls
+        # shutdown(wait=True), blocking until in-flight model loading or
+        # inference tasks finish — which can take minutes.  Force-exit the
+        # process immediately after saving settings to avoid this hang.
+        os._exit(0)
 
     def _schedule_live_status(self, status: str) -> None:
         with suppress(tk.TclError, RuntimeError):

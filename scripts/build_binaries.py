@@ -176,14 +176,13 @@ def _collect_all_packages() -> list[str]:
     # Always needed: pyaudiowpatch ships native DLLs that must be collected.
     candidates = ["pyaudiowpatch"]
 
-    # GigaAM / ONNX-based engines: bundle config JSONs, vocab files, etc.
-    optional_collect = ["transformers", "optimum", "onnxruntime"]
-    for pkg in optional_collect:
-        if _is_installed(pkg):
-            candidates.append(pkg)
-            print(f"[deps] --collect-all {pkg}  (installed)")
-        else:
-            print(f"[deps] skipping --collect-all {pkg}  (not installed)")
+    # GigaAM backend: bundle tokenizer config JSONs, vocab files, etc.
+    # Only included when the user has installed the `gigaam` extra (transformers + torch).
+    if _is_installed("transformers"):
+        candidates.append("transformers")
+        print("[deps] --collect-all transformers  (installed — GigaAM backend active)")
+    else:
+        print("[deps] skipping --collect-all transformers  (not installed — Whisper-only build)")
 
     return candidates
 
@@ -222,13 +221,11 @@ def _hidden_imports() -> list[str]:
         "tkinter.filedialog",
     ]
 
-    # Optional: GigaAM ONNX/transformers imports
+    # Optional: engine-specific imports — only bundled when actually installed.
     optional: dict[str, list[str]] = {
-        "optimum": ["optimum.onnxruntime"],
-        "transformers": ["transformers"],
-        "onnxruntime": ["onnxruntime", "onnxruntime.capi._pybind_state"],
+        "transformers": ["transformers"],   # GigaAM backend
         "scipy": ["scipy", "scipy.signal"],
-        "nemo": ["nemo.collections.asr"],
+        "nemo": ["nemo.collections.asr"],   # Parakeet backend
     }
     for check_pkg, imports in optional.items():
         if _is_installed(check_pkg):
@@ -271,15 +268,6 @@ def _install_dependencies() -> None:
     result = subprocess.run(pip_cmd, cwd=PROJECT_ROOT)
     if result.returncode != 0:
         print("[deps] WARNING: pip install returned non-zero. Continuing anyway.")
-
-    # Ensure optimum[onnxruntime] extras are properly activated (pip may not
-    # re-install just for the extras if the base package is already present).
-    onnx_cmd = [
-        sys.executable, "-m", "pip", "install", "--upgrade",
-        "optimum[onnxruntime]",
-    ]
-    print(f"[deps] {' '.join(onnx_cmd)}")
-    subprocess.run(onnx_cmd, cwd=PROJECT_ROOT)
 
     print("[deps] Dependency installation complete.\n")
 

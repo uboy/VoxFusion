@@ -3,12 +3,10 @@
 This test requires a locally available GigaAM model.  It is skipped
 automatically when the model is not present.
 
-To enable the test, either:
-  1. Set VOXFUSION_ASR__MODEL_PATH to a local directory that contains
-     the downloaded model.
-  2. Pre-download the model via:
-       huggingface-cli download ai-sage/GigaAM-v3 --revision ctc
-     so that it lands in the Hugging Face cache.
+To enable the test, pre-download the model via:
+    huggingface-cli download ai-sage/GigaAM-v3
+so that it lands in the Hugging Face cache.
+The model is cached under HF_HOME (or ~/.cache/huggingface by default).
 
 
 The test verifies that:
@@ -53,7 +51,7 @@ def _gigaam_available() -> bool:
 _SKIP_REASON = (
     "GigaAM model not available locally. "
     f"Set {_MODEL_PATH_ENV} to a local model directory, "
-    "or run: voxfusion models download --asr gigaam-v3-e2e-ctc"
+    "or run: huggingface-cli download ai-sage/GigaAM-v3"
 )
 
 

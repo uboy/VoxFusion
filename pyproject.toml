@@ -43,15 +43,15 @@ pyyaml = ">=6.0"
 httpx = ">=0.24"
 tqdm = ">=4.66"
 typing-extensions = ">=4.13"
+# GigaAM / HuggingFace model backends
 transformers = ">=4.55"
 torch = ">=2.4"
-optimum = {version = ">=1.27", extras = ["onnxruntime"]}
-onnxruntime = ">=1.19"
+# Parakeet (NeMo) backend (optional — adds ~2 GB)
 nemo_toolkit = {version = ">=2.0", extras = ["asr"], optional = true}
 
+# Noise reduction (optional — lazy import in preprocessing/noise.py)
+noisereduce = { version = ">=0.4", optional = true }
 # Platform-specific dependencies
-pycaw = { version = ">=20230407", markers = "sys_platform == 'win32'", optional = true }
-comtypes = { version = ">=1.2", markers = "sys_platform == 'win32'", optional = true }
 pyaudiowpatch = { version = ">=0.2.12", markers = "sys_platform == 'win32'" }
 pulsectl = { version = ">=23.5", markers = "sys_platform == 'linux'", optional = true }
 pyobjc-framework-CoreAudio = { version = ">=10.0", markers = "sys_platform == 'darwin'", optional = true }
@@ -63,9 +63,10 @@ translation-offline = ["argostranslate"]
 audio-quality = ["librosa", "soxr"]
 noise-reduction = ["noisereduce"]
 security = ["cryptography"]
-windows = ["pycaw", "comtypes", "pyaudiowpatch"]
+windows = ["pyaudiowpatch"]
 linux = ["pulsectl"]
 macos = ["pyobjc-framework-CoreAudio", "pyobjc-framework-ScreenCaptureKit"]
+gigaam = []  # transformers and torch are now default deps
 parakeet = ["nemo_toolkit"]
 
 [tool.poetry.group.dev.dependencies]
