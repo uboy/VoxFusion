@@ -154,10 +154,15 @@ class FileTranscribeWorker:
         self._on_error = on_error
         self._on_finished = on_finished
         self._thread: threading.Thread | None = None
+        self._cancelled = False
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
+
+    def cancel(self) -> None:
+        """Request cancellation of the running transcription."""
+        self._cancelled = True
 
     def _run(self) -> None:
         try:
@@ -210,10 +215,35 @@ class FileTranscribeWorker:
                 case EventType.PIPELINE_FAILED:
                     self._on_status(f"Failed: {event.message}", 0.0)
 
+        # Emit model download / cache hints to the log before loading
+        _cache = Path.home() / ".cache" / "huggingface" / "hub"
+        _engine = config.asr.engine
+        if _engine == "faster-whisper":
+            _repo = f"Systran/faster-whisper-{self._model}"
+        elif _engine == "gigaam":
+            _repo = "salute-developers/GigaAM-CTC-v3"
+        else:
+            _repo = None
+        print(f"[VoxFusion] Model: '{self._model}'  |  HF cache: {_cache}")
+        if _repo:
+            print(f"[VoxFusion] Pre-download (avoids waiting at startup):")
+            print(f"[VoxFusion]   huggingface-cli download {_repo}")
+            print(f"[VoxFusion]   -- or place the folder directly in: {_cache}")
+        print(f"[VoxFusion] Faster HF downloads: pip install hf-xet")
+
         orchestrator = PipelineOrchestrator(config, on_event=on_event)
         self._on_status("Loading model...", 0.01)
         try:
-            result = await orchestrator.transcribe_file(self._file_path)
+            task = asyncio.create_task(orchestrator.transcribe_file(self._file_path))
+            while not task.done():
+                if self._cancelled:
+                    task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await task
+                    self._on_status("Transcription cancelled.", 0.0)
+                    return
+                await asyncio.sleep(0.2)
+            result = task.result()
             self._on_segments(result.segments)
         finally:
             orchestrator.close()

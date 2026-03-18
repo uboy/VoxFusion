@@ -97,6 +97,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip ZIP archive generation.",
     )
+    parser.add_argument(
+        "--skip-install",
+        action="store_true",
+        help="Skip dependency installation step (use current environment as-is).",
+    )
     return parser.parse_args()
 
 
@@ -156,43 +161,127 @@ VSVersionInfo(
     return VERSION_FILE_PATH
 
 
-# Packages that need --collect-all to bundle native DLLs and data files.
-# Only include packages that are actually installed; others use lazy/conditional imports.
-_COLLECT_ALL_PACKAGES: list[str] = [
-    "pyaudiowpatch",
-]
+def _is_installed(package: str) -> bool:
+    """Return True if *package* is importable in the current environment."""
+    import importlib.util
+    return importlib.util.find_spec(package.replace("-", "_")) is not None
 
-HIDDEN_IMPORTS: list[str] = [
-    # Core inference
-    "faster_whisper",
-    "ctranslate2",
-    # Audio I/O
-    "sounddevice",
-    "soundfile",
-    # VoxFusion internals that PyInstaller may miss due to dynamic imports
-    "voxfusion.asr.factory",
-    "voxfusion.asr.gigaam_engine",
-    "voxfusion.asr.breeze_engine",
-    "voxfusion.asr.parakeet_engine",
-    "voxfusion.asr.faster_whisper",
-    "voxfusion.capture.wasapi",
-    "pyaudiowpatch",
-    "voxfusion.capture.vad_chunker",
-    "voxfusion.capture.mixer",
-    "voxfusion.media.extractor",
-    "voxfusion.pipeline.orchestrator",
-    "voxfusion.pipeline.batch",
-    "voxfusion.pipeline.streaming",
-    "voxfusion.translation.registry",
-    "voxfusion.translation.argos_engine",
-    # Logging
-    "structlog",
-    # GUI
-    "tkinter",
-    "tkinter.ttk",
-    "tkinter.scrolledtext",
-    "tkinter.filedialog",
-]
+
+def _collect_all_packages() -> list[str]:
+    """Return the list of packages that need --collect-all.
+
+    Only packages that are actually installed are included so that
+    PyInstaller does not fail on missing optional dependencies.
+    """
+    # Always needed: pyaudiowpatch ships native DLLs that must be collected.
+    candidates = ["pyaudiowpatch"]
+
+    # GigaAM / ONNX-based engines: bundle config JSONs, vocab files, etc.
+    optional_collect = ["transformers", "optimum", "onnxruntime"]
+    for pkg in optional_collect:
+        if _is_installed(pkg):
+            candidates.append(pkg)
+            print(f"[deps] --collect-all {pkg}  (installed)")
+        else:
+            print(f"[deps] skipping --collect-all {pkg}  (not installed)")
+
+    return candidates
+
+
+def _hidden_imports() -> list[str]:
+    """Return hidden imports, adding optional ones only when installed."""
+    base: list[str] = [
+        # Core inference
+        "faster_whisper",
+        "ctranslate2",
+        # Audio I/O
+        "sounddevice",
+        "soundfile",
+        # VoxFusion internals that PyInstaller may miss due to dynamic imports
+        "voxfusion.asr.factory",
+        "voxfusion.asr.gigaam_engine",
+        "voxfusion.asr.breeze_engine",
+        "voxfusion.asr.parakeet_engine",
+        "voxfusion.asr.faster_whisper",
+        "voxfusion.capture.wasapi",
+        "pyaudiowpatch",
+        "voxfusion.capture.vad_chunker",
+        "voxfusion.capture.mixer",
+        "voxfusion.media.extractor",
+        "voxfusion.pipeline.orchestrator",
+        "voxfusion.pipeline.batch",
+        "voxfusion.pipeline.streaming",
+        "voxfusion.translation.registry",
+        "voxfusion.translation.argos_engine",
+        # Logging
+        "structlog",
+        # GUI
+        "tkinter",
+        "tkinter.ttk",
+        "tkinter.scrolledtext",
+        "tkinter.filedialog",
+    ]
+
+    # Optional: GigaAM ONNX/transformers imports
+    optional: dict[str, list[str]] = {
+        "optimum": ["optimum.onnxruntime"],
+        "transformers": ["transformers"],
+        "onnxruntime": ["onnxruntime", "onnxruntime.capi._pybind_state"],
+        "scipy": ["scipy", "scipy.signal"],
+        "nemo": ["nemo.collections.asr"],
+    }
+    for check_pkg, imports in optional.items():
+        if _is_installed(check_pkg):
+            base.extend(imports)
+
+    return base
+
+
+def _install_dependencies() -> None:
+    """Install all project dependencies into the current Python environment.
+
+    Uses ``pip install`` with the project's ``pyproject.toml``-declared
+    requirements so the PyInstaller bundle contains every needed package.
+    Prefer poetry if available; fall back to plain pip.
+    """
+    print("\n[deps] Installing / verifying project dependencies...")
+
+    # Determine platform-specific extras
+    extras = []
+    if platform.system().lower() == "windows":
+        extras.append("windows")
+
+    # Try poetry first (handles version constraints best)
+    if shutil.which("poetry"):
+        cmd = ["poetry", "install", "--no-interaction"]
+        print(f"[deps] {' '.join(cmd)}")
+        result = subprocess.run(cmd, cwd=PROJECT_ROOT)
+        if result.returncode == 0:
+            print("[deps] poetry install succeeded.")
+            return
+        print("[deps] poetry install failed — falling back to pip.")
+
+    # Fall back to pip install -e .
+    extra_str = f"[{','.join(extras)}]" if extras else ""
+    pip_cmd = [
+        sys.executable, "-m", "pip", "install", "--upgrade",
+        f".{extra_str}",
+    ]
+    print(f"[deps] {' '.join(pip_cmd)}")
+    result = subprocess.run(pip_cmd, cwd=PROJECT_ROOT)
+    if result.returncode != 0:
+        print("[deps] WARNING: pip install returned non-zero. Continuing anyway.")
+
+    # Ensure optimum[onnxruntime] extras are properly activated (pip may not
+    # re-install just for the extras if the base package is already present).
+    onnx_cmd = [
+        sys.executable, "-m", "pip", "install", "--upgrade",
+        "optimum[onnxruntime]",
+    ]
+    print(f"[deps] {' '.join(onnx_cmd)}")
+    subprocess.run(onnx_cmd, cwd=PROJECT_ROOT)
+
+    print("[deps] Dependency installation complete.\n")
 
 
 def _generate_icons() -> None:
@@ -354,11 +443,12 @@ def build_target(
 
     command.append("--windowed" if target.windowed else "--console")
 
-    for imp in HIDDEN_IMPORTS:
+    for imp in _hidden_imports():
         command.extend(["--hidden-import", imp])
 
     # Collect all files (including native DLLs) from packages that need it.
-    for pkg in _COLLECT_ALL_PACKAGES:
+    # Only packages that are actually installed are included.
+    for pkg in _collect_all_packages():
         command.extend(["--collect-all", pkg])
 
     for entry in _default_data_entries():
@@ -394,6 +484,12 @@ def build_target(
 def main() -> int:
     """Main build flow."""
     args = parse_args()
+
+    if not args.skip_install:
+        _install_dependencies()
+    else:
+        print("[deps] Skipping dependency installation (--skip-install).")
+
     version, version_tuple = load_version()
     version_file = write_version_file(
         company_name=args.company_name,
