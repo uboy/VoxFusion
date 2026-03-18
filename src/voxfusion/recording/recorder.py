@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
+import subprocess
+import sys
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,11 +33,43 @@ class RecordingStats:
     chunks_captured: int
 
 
-_FORMAT_SUBTYPES: dict[str, str] = {
-    "wav": "PCM_16",
-    "flac": "PCM_16",
-    "ogg": "VORBIS",
+# Maps format name → (soundfile subtype, explicit format override or None).
+# The explicit format override is needed when the file extension does not match
+# the container (e.g. .opus files use OGG container).
+# "mp3" is handled separately via ffmpeg (soundfile cannot encode MP3).
+_FORMAT_PARAMS: dict[str, tuple[str, str | None]] = {
+    "wav": ("PCM_16", None),
+    "ogg": ("VORBIS", None),
+    "opus": ("OPUS", "OGG"),  # OGG container, Opus codec, saved as .opus
 }
+
+
+def _find_ffmpeg() -> str | None:
+    """Locate the ffmpeg binary: bundled next to the EXE first, then PATH."""
+    exe_dir = Path(sys.executable).parent
+    for candidate in (exe_dir / "ffmpeg.exe", exe_dir / "ffmpeg"):
+        if candidate.exists():
+            return str(candidate)
+    return shutil.which("ffmpeg")
+
+
+def _encode_mp3(wav_path: Path, output_path: Path, *, ffmpeg: str) -> None:
+    """Re-encode *wav_path* as MP3 at *output_path* using ffmpeg.
+
+    Uses VBR quality 4 (~128 kbps), which is transparent for speech.
+    """
+    cmd: list[str] = [
+        ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+        "-i", str(wav_path),
+        "-acodec", "libmp3lame",
+        "-q:a", "4",
+        str(output_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"ffmpeg MP3 encoding failed (exit {result.returncode}): {result.stderr.strip()}"
+        )
 
 
 class AudioRecorder:
@@ -128,8 +164,32 @@ class AudioRecorder:
 
         mixed = _mix_chunks(chunks, sample_rate=sample_rate, channels=channels, duration_s=deadline)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        subtype = _FORMAT_SUBTYPES.get(format.lower(), "PCM_16")
-        sf.write(str(output_path), mixed, sample_rate, subtype=subtype)
+
+        if format.lower() == "mp3":
+            ffmpeg = _find_ffmpeg()
+            if ffmpeg is None:
+                raise RuntimeError(
+                    "MP3 encoding requires FFmpeg. Install it from "
+                    "https://www.gyan.dev/ffmpeg/builds/ or choose WAV/OGG/Opus instead."
+                )
+            tmp_fd, tmp_name = tempfile.mkstemp(suffix=".wav", prefix="voxfusion_")
+            tmp_wav = Path(tmp_name)
+            try:
+                import os
+                os.close(tmp_fd)
+                sf.write(str(tmp_wav), mixed, sample_rate, subtype="PCM_16")
+                _encode_mp3(tmp_wav, output_path, ffmpeg=ffmpeg)
+            finally:
+                tmp_wav.unlink(missing_ok=True)
+        else:
+            subtype, fmt_override = _FORMAT_PARAMS.get(format.lower(), ("PCM_16", None))
+            sf.write(
+                str(output_path),
+                mixed,
+                sample_rate,
+                subtype=subtype,
+                **({"format": fmt_override} if fmt_override else {}),
+            )
 
         duration_actual = mixed.shape[0] / sample_rate
         stats = RecordingStats(

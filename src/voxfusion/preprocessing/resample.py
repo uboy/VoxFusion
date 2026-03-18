@@ -24,11 +24,20 @@ def _resample_array(samples: np.ndarray, orig_sr: int, target_sr: int) -> np.nda
     try:
         from scipy.signal import resample_poly
     except ImportError:
-        # Fallback: simple linear interpolation
+        # Fallback: simple linear interpolation (scipy not installed).
+        # np.interp only handles 1-D arrays, so process each channel separately.
+        n_in = samples.shape[0]
         ratio = target_sr / orig_sr
-        n_out = int(len(samples) * ratio)
-        indices = np.linspace(0, len(samples) - 1, n_out)
-        return np.interp(indices, np.arange(len(samples)), samples).astype(np.float32)
+        n_out = max(1, int(n_in * ratio))
+        xs_old = np.arange(n_in, dtype=np.float64)
+        xs_new = np.linspace(0, n_in - 1, n_out)
+        if samples.ndim == 1:
+            return np.interp(xs_new, xs_old, samples).astype(np.float32)
+        # 2-D: (frames, channels) — resample each channel independently
+        channels = [
+            np.interp(xs_new, xs_old, samples[:, ch]) for ch in range(samples.shape[1])
+        ]
+        return np.stack(channels, axis=1).astype(np.float32)
 
     divisor = gcd(orig_sr, target_sr)
     up = target_sr // divisor

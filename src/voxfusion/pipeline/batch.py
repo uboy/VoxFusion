@@ -134,6 +134,13 @@ class BatchPipeline:
 
         # Concatenate all chunks into one AudioChunk for ASR
         all_samples = np.concatenate([c.samples for c in processed_chunks])
+        # Guarantee mono 1D float32 — stereo files produce (N, 2) arrays which
+        # confuse every ASR engine and cause "object too deep" errors downstream.
+        if all_samples.ndim == 2:
+            all_samples = all_samples.mean(axis=1).astype(np.float32)
+        elif all_samples.ndim > 2:
+            all_samples = all_samples.reshape(all_samples.shape[0], -1).mean(axis=1).astype(np.float32)
+        all_samples = np.ascontiguousarray(all_samples, dtype=np.float32)
         sr = processed_chunks[0].sample_rate
         full_audio = AudioChunk(
             samples=all_samples,
