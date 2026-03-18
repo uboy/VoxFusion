@@ -14,40 +14,27 @@ def create_recording_source(
     source_type: str,
     config: CaptureConfig,
     *,
-    device_index: int | None = None,
+    device_index: str | int | None = None,
+    microphone_device_id: str | int | None = None,
+    system_device_id: str | int | None = None,
 ) -> AudioCaptureSource | AudioMixer:
     """Create a live capture source suitable for raw audio recording."""
     if sys.platform == "win32":
-        from voxfusion.capture.wasapi import WASAPICapture, find_stereo_mix_device
+        from voxfusion.capture.windows_factory import create_windows_capture_source
 
-        def _create_system_source() -> WASAPICapture:
-            stereo_mix_idx = find_stereo_mix_device()
-            if stereo_mix_idx is not None:
-                return WASAPICapture(
-                    device_index=stereo_mix_idx,
-                    loopback=False,
-                    source_label="system",
-                    config=config,
-                )
-            return WASAPICapture(
-                device_index=None,
-                loopback=True,
-                config=config,
-            )
-
-        if source_type == "both":
-            return AudioMixer(
-                sources=[
-                    WASAPICapture(device_index=device_index, loopback=False, config=config),
-                    _create_system_source(),
-                ]
-            )
-        if source_type == "system":
-            return _create_system_source()
-        return WASAPICapture(
-            device_index=device_index,
-            loopback=False,
-            config=config,
+        return create_windows_capture_source(
+            source_type,
+            config,
+            microphone_device_id=(
+                microphone_device_id
+                if microphone_device_id is not None
+                else device_index if source_type != "system" else None
+            ),
+            system_device_id=(
+                system_device_id
+                if system_device_id is not None
+                else device_index if source_type == "system" else None
+            ),
         )
 
     if sys.platform.startswith("linux"):

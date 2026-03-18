@@ -52,9 +52,9 @@ def _event_printer(event: PipelineEvent) -> None:
 )
 @click.option(
     "--device", "-d",
-    type=int,
+    type=str,
     default=None,
-    help="Audio device index (from 'voxfusion devices').",
+    help="Audio device id (from 'voxfusion devices').",
 )
 @click.option(
     "--model", "-m",
@@ -93,7 +93,7 @@ def capture(
     source: str,
     output_format: str,
     language: str | None,
-    device: int | None,
+    device: str | None,
     duration: float | None,
     translate: str | None,
     model: str | None,
@@ -152,7 +152,7 @@ def capture(
 
     # Build the streaming pipeline
     from voxfusion.asr.faster_whisper import FasterWhisperEngine
-    from voxfusion.capture.wasapi import WASAPICapture
+    from voxfusion.capture.windows_factory import create_windows_capture_source
     from voxfusion.diarization.channel import ChannelDiarizer
     from voxfusion.models.translation import TranslatedSegment
     from voxfusion.pipeline.streaming import StreamingPipeline
@@ -243,28 +243,12 @@ def capture(
     # Create the capture source
     try:
         if platform == "wasapi":
-            if source == "both":
-                from voxfusion.capture.mixer import AudioMixer
-                from voxfusion.capture.wasapi import RobustLoopbackCapture
-                system_src: object = RobustLoopbackCapture(config=config.capture)
-                audio_source = AudioMixer([
-                    WASAPICapture(
-                        device_index=device,
-                        loopback=False,
-                        source_label="microphone",
-                        config=config.capture,
-                    ),
-                    system_src,
-                ])
-            elif source == "system":
-                from voxfusion.capture.wasapi import RobustLoopbackCapture
-                audio_source = RobustLoopbackCapture(config=config.capture)
-            else:
-                audio_source = WASAPICapture(
-                    device_index=device,
-                    loopback=False,
-                    config=config.capture,
-                )
+            audio_source = create_windows_capture_source(
+                source,
+                config.capture,
+                microphone_device_id=device if source != "system" else None,
+                system_device_id=device if source == "system" else None,
+            )
         else:
             echo_error(
                 f"Live capture on {platform} is not yet fully supported. "

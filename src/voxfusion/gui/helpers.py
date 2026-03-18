@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 from voxfusion.logging import configure_logging
@@ -51,6 +54,54 @@ def save_gui_settings(data: dict[str, str], path: Path | None = None) -> None:
     target = path or gui_settings_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def find_ffmpeg() -> Path | None:
+    """Return the path to the ffmpeg executable, or None if not found.
+
+    Checks (in order):
+    1. Directory of the current executable (bundled binary)
+    2. System PATH
+    """
+    # 1. Next to the running executable (PyInstaller bundle)
+    exe_dir = Path(sys.executable).parent
+    for candidate in (exe_dir / "ffmpeg.exe", exe_dir / "ffmpeg"):
+        if candidate.exists():
+            return candidate
+    # 2. System PATH
+    found = shutil.which("ffmpeg")
+    return Path(found) if found else None
+
+
+def install_ffmpeg_winget(on_output: "Callable[[str], None] | None" = None) -> bool:  # type: ignore[name-defined]
+    """Install FFmpeg via winget (Windows 10/11 built-in package manager).
+
+    Args:
+        on_output: Optional callback called with each line of winget output.
+
+    Returns:
+        True if installation succeeded, False otherwise.
+    """
+    winget = shutil.which("winget")
+    if not winget:
+        return False
+    try:
+        proc = subprocess.Popen(
+            [winget, "install", "--id", "Gyan.FFmpeg.Essentials",
+             "--accept-package-agreements", "--accept-source-agreements"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if on_output:
+            for line in proc.stdout or []:
+                on_output(line.rstrip())
+        proc.wait()
+        return proc.returncode == 0
+    except Exception:
+        return False
 
 
 def configure_gui_logging(level: int = logging.INFO) -> None:

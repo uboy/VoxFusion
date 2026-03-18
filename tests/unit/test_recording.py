@@ -175,7 +175,7 @@ def test_record_command_invokes_recorder(monkeypatch, tmp_path: Path) -> None:
                 },
             )()
 
-    def fake_create_recording_source(source_type: str, config, *, device_index: int | None = None):
+    def fake_create_recording_source(source_type: str, config, *, device_index: str | None = None):
         seen["source_type"] = source_type
         seen["device_index"] = device_index
         seen["config_sources"] = config.sources
@@ -186,45 +186,99 @@ def test_record_command_invokes_recorder(monkeypatch, tmp_path: Path) -> None:
 
     result = runner.invoke(
         record,
-        ["--source", "system", "--device", "7", "--duration", "3", "--output", str(output)],
+        ["--source", "system", "--device", "pa:7", "--duration", "3", "--output", str(output)],
         obj={"verbose": False, "quiet": False},
     )
 
     assert result.exit_code == 0, result.output
     assert seen["source_type"] == "system"
-    assert seen["device_index"] == 7
+    assert seen["device_index"] == "pa:7"
     assert seen["duration_s"] == 3.0
     assert seen["output_path"] == output
     assert seen["config_sources"] == ["system"]
     assert "Saved audio to" in result.output
 
 
-def test_create_recording_source_prefers_stereo_mix_for_windows_system(monkeypatch) -> None:
+def test_create_recording_source_uses_shared_windows_factory(monkeypatch) -> None:
     from voxfusion.config.models import CaptureConfig
 
     created: dict[str, object] = {}
 
-    class StubCapture:
-        def __init__(
-            self,
-            device_index: int | None = None,
-            *,
-            loopback: bool = False,
-            source_label: str | None = None,
-            config=None,
-        ) -> None:
-            created["device_index"] = device_index
-            created["loopback"] = loopback
-            created["source_label"] = source_label
-            created["config"] = config
+    def fake_create_windows_capture_source(
+        source_type: str,
+        config,
+        *,
+        microphone_device_id: str | int | None = None,
+        system_device_id: str | int | None = None,
+    ) -> object:
+        created["source_type"] = source_type
+        created["config"] = config
+        created["microphone_device_id"] = microphone_device_id
+        created["system_device_id"] = system_device_id
+        return object()
 
     monkeypatch.setattr("sys.platform", "win32")
-    monkeypatch.setattr("voxfusion.capture.wasapi.find_stereo_mix_device", lambda: 27)
-    monkeypatch.setattr("voxfusion.capture.wasapi.WASAPICapture", StubCapture)
+    monkeypatch.setattr(
+        "voxfusion.capture.windows_factory.create_windows_capture_source",
+        fake_create_windows_capture_source,
+    )
 
-    source = create_recording_source("system", CaptureConfig())
+    source = create_recording_source("system", CaptureConfig(), device_index="pa:27")
 
-    assert isinstance(source, StubCapture)
-    assert created["device_index"] == 27
-    assert created["loopback"] is False
-    assert created["source_label"] == "system"
+    assert source is not None
+    assert created["source_type"] == "system"
+    assert created["microphone_device_id"] is None
+    assert created["system_device_id"] == "pa:27"
+"""Unit tests for shared Windows audio device handling."""
+
+from voxfusion.capture.windows_audio import parse_windows_device_id
+from voxfusion.capture.windows_factory import create_windows_capture_source
+
+
+def test_parse_windows_device_id_supports_explicit_backend_prefix() -> None:
+    assert parse_windows_device_id("pa:12") == ("pa", 12)
+    assert parse_windows_device_id("sd:7") == ("sd", 7)
+
+
+def test_parse_windows_device_id_treats_plain_int_as_default_backend() -> None:
+    assert parse_windows_device_id(5, default_backend="sd") == ("sd", 5)
+    assert parse_windows_device_id("9", default_backend="pa") == ("pa", 9)
+
+
+def test_create_windows_capture_source_for_system_forwards_explicit_loopback_device(monkeypatch) -> None:
+    from voxfusion.config.models import CaptureConfig
+
+    seen: dict[str, object] = {}
+
+    class StubLoopback:
+        def __init__(self, *, device_id=None, config=None) -> None:
+            seen["device_id"] = device_id
+            seen["config"] = config
+
+    monkeypatch.setattr("voxfusion.capture.windows_factory.RobustLoopbackCapture", StubLoopback)
+
+    source = create_windows_capture_source(
+        "system",
+        CaptureConfig(),
+        system_device_id="pa:42",
+    )
+
+    assert isinstance(source, StubLoopback)
+    assert seen["device_id"] == "pa:42"
+
+
+def test_create_windows_capture_source_rejects_pyaudio_device_for_microphone(monkeypatch) -> None:
+    from voxfusion.config.models import CaptureConfig
+
+    monkeypatch.setattr("voxfusion.capture.windows_factory.WASAPICapture", object)
+
+    try:
+        create_windows_capture_source(
+            "microphone",
+            CaptureConfig(),
+            microphone_device_id="pa:3",
+        )
+    except ValueError as exc:
+        assert "Microphone capture requires a sounddevice/WASAPI device" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for invalid microphone device backend.")

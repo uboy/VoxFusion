@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from voxfusion.gui.main import CaptureOptions, TranscriptionGUI
+from voxfusion.gui.runtime import DeviceOption
 
 
 def _make_root() -> tk.Tk:
@@ -25,11 +26,11 @@ def test_gui_smoke_builds_and_updates_model_summaries() -> None:
     gui = TranscriptionGUI(
         root,
         CaptureOptions(
-            source="microphone",
             model="small",
             language="ru",
             translate=None,
-            device_index=None,
+            microphone_device_id=None,
+            system_device_id=None,
         ),
     )
     root.update_idletasks()
@@ -58,11 +59,11 @@ def test_gui_smoke_loads_recorded_file_into_workflow(tmp_path: Path) -> None:
     gui = TranscriptionGUI(
         root,
         CaptureOptions(
-            source="microphone",
             model="small",
             language="ru",
             translate=None,
-            device_index=None,
+            microphone_device_id=None,
+            system_device_id=None,
         ),
     )
     root.update_idletasks()
@@ -85,11 +86,11 @@ def test_gui_smoke_disables_live_start_for_file_only_model() -> None:
     gui = TranscriptionGUI(
         root,
         CaptureOptions(
-            source="microphone",
             model="small",
             language="ru",
             translate=None,
-            device_index=None,
+            microphone_device_id=None,
+            system_device_id=None,
         ),
     )
     root.update_idletasks()
@@ -100,6 +101,33 @@ def test_gui_smoke_disables_live_start_for_file_only_model() -> None:
 
     assert str(gui.start_button.cget("state")) == "disabled"
     assert "file transcription only" in gui.status_label.cget("text")
+
+    gui._restore_redirection()
+    root.destroy()
+
+
+@pytest.mark.integration
+def test_gui_smoke_falls_back_to_first_devices_when_no_defaults_exist() -> None:
+    root = _make_root()
+    gui = TranscriptionGUI(
+        root,
+        CaptureOptions(
+            model="small",
+            language="ru",
+            translate=None,
+            microphone_device_id=None,
+            system_device_id=None,
+        ),
+    )
+    gui._device_options = [
+        DeviceOption("Microphone: Mic A", "sd:1", "microphone", False),
+        DeviceOption("System: Speakers A", "pa:2", "system", False),
+    ]
+    gui._rebuild_device_menu()
+    gui._apply_default_device_selection()
+
+    assert gui._selected_microphone_id == "sd:1"
+    assert gui._selected_system_id == "pa:2"
 
     gui._restore_redirection()
     root.destroy()

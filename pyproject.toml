@@ -42,11 +42,16 @@ pyyaml = ">=6.0"
 httpx = ">=0.24"
 tqdm = ">=4.66"
 typing-extensions = ">=4.13"
+transformers = ">=4.55"
+torch = ">=2.4"
+optimum = ">=1.27"
+onnxruntime = ">=1.19"
+nemo-toolkit-asr = ">=2.7.0rc1"
 
 # Platform-specific dependencies
 pycaw = { version = ">=20230407", markers = "sys_platform == 'win32'", optional = true }
 comtypes = { version = ">=1.2", markers = "sys_platform == 'win32'", optional = true }
-pyaudiowpatch = { version = ">=0.2.12", markers = "sys_platform == 'win32'", optional = true }
+pyaudiowpatch = { version = ">=0.2.12", markers = "sys_platform == 'win32'" }
 pulsectl = { version = ">=23.5", markers = "sys_platform == 'linux'", optional = true }
 pyobjc-framework-CoreAudio = { version = ">=10.0", markers = "sys_platform == 'darwin'", optional = true }
 pyobjc-framework-ScreenCaptureKit = { version = ">=10.0", markers = "sys_platform == 'darwin'", optional = true }

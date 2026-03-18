@@ -15,6 +15,8 @@ poetry install
 pip install -e .
 ```
 
+The default install now includes runtime dependencies for the built-in Whisper path plus file-only backends such as GigaAM, Breeze, and Parakeet. The first install is heavier because it pulls model runtimes like `torch`, `transformers`, `onnxruntime`, and NeMo ASR support.
+
 To also install PyInstaller for binary builds:
 ```bash
 # Poetry (included automatically in dev group)
@@ -57,7 +59,13 @@ voxfusion models download --asr gigaam-v3-e2e-ctc
 
 # List audio devices
 voxfusion devices
+
+# Record Windows system audio from an explicit loopback device
+voxfusion devices --type loopback
+voxfusion record --source system --device pa:3 --output system.wav
 ```
+
+On Windows, `voxfusion devices` now prints explicit device ids such as `pa:3` (PyAudioWPatch loopback) and `sd:7` (sounddevice/WASAPI). For system-audio capture, `pa:*` devices are the preferred path.
 
 ## Build binaries
 

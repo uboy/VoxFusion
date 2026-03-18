@@ -61,13 +61,17 @@ def create_asr_engine(
         log.info("asr_factory.selected", backend="gigaam")
         return GigaAMCTCEngine(cfg), "gigaam"
 
-    if cfg.engine in ("parakeet", "breeze"):
-        from voxfusion.exceptions import ModelLoadError
+    if cfg.engine == "parakeet":
+        from voxfusion.asr.parakeet_engine import ParakeetASREngine
 
-        raise ModelLoadError(
-            f"The '{cfg.engine}' backend is not yet implemented. "
-            "Download the model file and set VOXFUSION_ASR__MODEL_PATH to its directory."
-        )
+        log.info("asr_factory.selected", backend="parakeet")
+        return ParakeetASREngine(cfg), "parakeet"
+
+    if cfg.engine == "breeze":
+        from voxfusion.asr.breeze_engine import BreezeASREngine
+
+        log.info("asr_factory.selected", backend="breeze")
+        return BreezeASREngine(cfg), "breeze"
 
     # ── 1. CUDA (NVIDIA) ────────────────────────────────────────────────────
     if _has_cuda():

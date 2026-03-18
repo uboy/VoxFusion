@@ -92,19 +92,19 @@ class TextRedirector:
 class CaptureOptions:
     """GUI runtime options for live capture."""
 
-    source: str
     model: str
     language: str | None
     translate: str | None
-    device_index: int | None
+    microphone_device_id: str | int | None
+    system_device_id: str | int | None
 
 
 @dataclass(frozen=True)
 class RecordingOptions:
     """GUI runtime options for raw audio recording."""
 
-    source: str
-    device_index: int | None
+    microphone_device_id: str | int | None
+    system_device_id: str | int | None
     output_path: Path
 
 
@@ -113,26 +113,23 @@ class DeviceOption:
     """User-facing device selection option."""
 
     label: str
-    index: int | None
+    index: str | int | None
+    kind: str
+    is_default: bool = False
 
 
-def resolve_preferred_device_index(
-    options: list[DeviceOption],
-    selected_label: str,
-    source: str,
-) -> int | None:
-    """Resolve GUI device selection into an actual device index."""
-    selected_option = next(
-        (option for option in options if option.label == selected_label),
-        None,
-    )
-    if selected_option is not None and selected_option.index is not None:
-        return selected_option.index
-    if source != "system":
-        fallback = next((option for option in options if option.index is not None), None)
-        if fallback is not None:
-            return fallback.index
-    return None
+def derive_capture_source(
+    microphone_device_id: str | int | None,
+    system_device_id: str | int | None,
+) -> str:
+    """Derive capture mode from explicit mic/system selections."""
+    if microphone_device_id and system_device_id:
+        return "both"
+    if system_device_id:
+        return "system"
+    if microphone_device_id:
+        return "microphone"
+    return "none"
 
 
 class FileTranscribeWorker:
@@ -326,16 +323,25 @@ class RecordingWorker:
             "capture": {
                 "sources": (
                     ["microphone", "system"]
-                    if self._options.source == "both"
-                    else [self._options.source]
+                    if self._options.microphone_device_id and self._options.system_device_id
+                    else ["system"] if self._options.system_device_id else ["microphone"]
                 ),
             }
         }
         config = load_config(overrides)
         audio_source = create_recording_source(
-            self._options.source,
+            derive_capture_source(
+                self._options.microphone_device_id,
+                self._options.system_device_id,
+            ),
             config.capture,
-            device_index=self._options.device_index,
+            device_index=(
+                self._options.system_device_id
+                if self._options.system_device_id and not self._options.microphone_device_id
+                else self._options.microphone_device_id
+            ),
+            microphone_device_id=self._options.microphone_device_id,
+            system_device_id=self._options.system_device_id,
         )
         try:
             return await self._recorder.record(audio_source, self._options.output_path)
@@ -492,37 +498,34 @@ class CaptureWorker:
         self._pipeline = pipeline
 
         from voxfusion.capture.vad_chunker import VadChunker
-        from voxfusion.capture.wasapi import WASAPICapture
+        from voxfusion.capture.windows_factory import create_windows_capture_source
 
-        if self._options.source == "both":
+        source = derive_capture_source(
+            self._options.microphone_device_id,
+            self._options.system_device_id,
+        )
+        if source == "both":
             from voxfusion.capture.mixer import AudioMixer
-            from voxfusion.capture.wasapi import RobustLoopbackCapture
 
-            mic_source = WASAPICapture(
-                device_index=self._options.device_index,
-                loopback=False,
-                config=config.capture,
+            base_source = create_windows_capture_source(
+                source,
+                config.capture,
+                microphone_device_id=self._options.microphone_device_id,
+                system_device_id=self._options.system_device_id,
             )
-            sys_source: object = RobustLoopbackCapture(config=config.capture)
-            mic_vad = VadChunker(mic_source, max_duration_ms=5000)
-            sys_vad = VadChunker(sys_source, max_duration_ms=5000)
+            if not isinstance(base_source, AudioMixer):
+                raise RuntimeError("Expected AudioMixer for Windows 'both' capture source.")
+            mic_vad = VadChunker(base_source._sources[0], max_duration_ms=5000)
+            sys_vad = VadChunker(base_source._sources[1], max_duration_ms=5000)
             audio_source: object = AudioMixer(sources=[mic_vad, sys_vad])
         else:
-            if self._options.source == "system":
-                from voxfusion.capture.wasapi import RobustLoopbackCapture
-                audio_source = VadChunker(
-                    RobustLoopbackCapture(config=config.capture),
-                    max_duration_ms=5000,
-                )
-            else:
-                audio_source = VadChunker(
-                    WASAPICapture(
-                        device_index=self._options.device_index,
-                        loopback=False,
-                        config=config.capture,
-                    ),
-                    max_duration_ms=5000,
-                )
+            base_source = create_windows_capture_source(
+                source,
+                config.capture,
+                microphone_device_id=self._options.microphone_device_id,
+                system_device_id=self._options.system_device_id,
+            )
+            audio_source = VadChunker(base_source, max_duration_ms=5000)
 
         segment_progress = get_stage_progress("segments")
 
