@@ -237,6 +237,60 @@ ASR_MODEL_CATALOG: tuple[ASRModelInfo, ...] = (
     ),
 )
 
+# ---------------------------------------------------------------------------
+# Quality presets
+# These are merged into the ASR config overrides at transcription time.
+# Keys match ASRConfig field names; vad_parameters is a nested dict.
+# Only faster-whisper reads these fields; other engines ignore them silently.
+# ---------------------------------------------------------------------------
+
+#: Human-readable labels in the order shown in the UI dropdown.
+QUALITY_PRESET_LABELS: tuple[str, ...] = ("Fast", "Balanced", "Quality")
+
+#: Maps lowercase preset key → ASRConfig override dict.
+QUALITY_PRESETS: dict[str, dict[str, object]] = {
+    "fast": {
+        # Speed-optimised: greedy decoding, aggressive VAD, int8 quantisation.
+        "compute_type": "int8",
+        "beam_size": 1,
+        "best_of": 1,
+        "vad_filter": True,
+        "vad_parameters": {"threshold": 0.6, "min_silence_duration_ms": 1000},
+    },
+    "balanced": {
+        # Default: good accuracy/speed tradeoff.
+        "compute_type": "int8_float32",
+        "beam_size": 5,
+        "best_of": 5,
+        "vad_filter": True,
+        "vad_parameters": {"threshold": 0.5, "min_silence_duration_ms": 2000},
+    },
+    "quality": {
+        # Best accuracy: full-precision, wider beam, permissive VAD.
+        "compute_type": "float32",
+        "beam_size": 10,
+        "best_of": 5,
+        "vad_filter": True,
+        "vad_parameters": {"threshold": 0.3, "min_silence_duration_ms": 500},
+    },
+}
+
+#: Map label → key (e.g. "Balanced" → "balanced").
+_PRESET_LABEL_TO_KEY: dict[str, str] = {
+    label: label.lower() for label in QUALITY_PRESET_LABELS
+}
+
+
+def get_quality_preset(label_or_key: str) -> dict[str, object]:
+    """Return the ASRConfig overrides dict for *label_or_key*.
+
+    Accepts either a display label (``"Balanced"``) or a lowercase key
+    (``"balanced"``).  Falls back to ``"balanced"`` for unknown values.
+    """
+    key = _PRESET_LABEL_TO_KEY.get(label_or_key, label_or_key.lower())
+    return dict(QUALITY_PRESETS.get(key, QUALITY_PRESETS["balanced"]))
+
+
 _MODEL_BY_ID = {model.id: model for model in ASR_MODEL_CATALOG}
 
 

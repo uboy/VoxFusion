@@ -47,7 +47,7 @@ transformers = ">=4.55"
 torch = ">=2.4"
 optimum = {version = ">=1.27", extras = ["onnxruntime"]}
 onnxruntime = ">=1.19"
-nemo-toolkit-asr = ">=2.7.0rc1"
+nemo_toolkit = {version = ">=2.0", extras = ["asr"], optional = true}
 
 # Platform-specific dependencies
 pycaw = { version = ">=20230407", markers = "sys_platform == 'win32'", optional = true }
@@ -66,6 +66,7 @@ security = ["cryptography"]
 windows = ["pycaw", "comtypes", "pyaudiowpatch"]
 linux = ["pulsectl"]
 macos = ["pyobjc-framework-CoreAudio", "pyobjc-framework-ScreenCaptureKit"]
+parakeet = ["nemo_toolkit"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=7.0"
