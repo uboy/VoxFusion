@@ -106,6 +106,7 @@ class RecordingOptions:
     microphone_device_id: str | int | None
     system_device_id: str | int | None
     output_path: Path
+    output_format: str = "wav"
 
 
 @dataclass(frozen=True)
@@ -290,6 +291,17 @@ class RecordingWorker:
         self._on_finished = on_finished
         self._thread: threading.Thread | None = None
         self._recorder = AudioRecorder(on_status=on_status)
+        self._start_time: float | None = None
+
+    @property
+    def elapsed_s(self) -> float:
+        """Seconds elapsed since recording started."""
+        return monotonic() - self._start_time if self._start_time is not None else 0.0
+
+    @property
+    def is_running(self) -> bool:
+        """True while the recording thread is alive."""
+        return self._thread is not None and self._thread.is_alive()
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -344,7 +356,12 @@ class RecordingWorker:
             system_device_id=self._options.system_device_id,
         )
         try:
-            return await self._recorder.record(audio_source, self._options.output_path)
+            self._start_time = monotonic()
+            return await self._recorder.record(
+                audio_source,
+                self._options.output_path,
+                format=self._options.output_format,
+            )
         finally:
             # Cancel any residual tasks left by WASAPI background readers so that
             # asyncio.run() does not print "unhandled exception during shutdown".
