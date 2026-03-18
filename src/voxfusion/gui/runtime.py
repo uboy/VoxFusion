@@ -223,7 +223,7 @@ class FileTranscribeWorker:
         if _engine == "faster-whisper":
             _repo = f"Systran/faster-whisper-{self._model}"
         elif _engine == "gigaam":
-            _repo = "salute-developers/GigaAM-CTC-v3"
+            _repo = "ai-sage/GigaAM-v3"
         else:
             _repo = None
         print(f"[VoxFusion] Model: '{self._model}'  |  HF cache: {_cache}")

@@ -1,8 +1,10 @@
-"""ONNX/CTC ASR backend for GigaAM-style models."""
+"""PyTorch/CTC ASR backend for GigaAM-style models."""
 
 from __future__ import annotations
 
 import asyncio
+import os
+import tempfile
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
@@ -10,6 +12,7 @@ from functools import partial
 from pathlib import Path
 
 import numpy as np
+import soundfile as sf
 
 from voxfusion.config.models import ASRConfig
 from voxfusion.exceptions import ModelLoadError, TranscriptionError
@@ -19,15 +22,22 @@ from voxfusion.models.transcription import TranscriptionSegment
 
 log = get_logger(__name__)
 
-DEFAULT_GIGAAM_MODEL_REF = "salute-developers/GigaAM-CTC-v3"
+DEFAULT_GIGAAM_MODEL_REF = "ai-sage/GigaAM-v3"
+DEFAULT_GIGAAM_REVISION = "ctc"
+
+# GigaAM raises ValueError for audio longer than 25 s; chunk at 24 s to be safe.
+_SAMPLE_RATE = 16000
+_CHUNK_DURATION_S = 24
+_OVERLAP_DURATION_S = 1
+_CHUNK_SAMPLES = _CHUNK_DURATION_S * _SAMPLE_RATE
+_OVERLAP_SAMPLES = _OVERLAP_DURATION_S * _SAMPLE_RATE
 
 
 class GigaAMCTCEngine:
-    """Batch-friendly ONNX/CTC engine for Russian transcription."""
+    """PyTorch/CTC engine for Russian transcription via ai-sage/GigaAM-v3."""
 
     def __init__(self, config: ASRConfig | None = None) -> None:
         self._config = config or ASRConfig(model_size="gigaam-v3-e2e-ctc")
-        self._processor: object | None = None
         self._model: object | None = None
         self._executor: ThreadPoolExecutor | None = ThreadPoolExecutor(max_workers=1)
 
@@ -45,39 +55,32 @@ class GigaAMCTCEngine:
         return DEFAULT_GIGAAM_MODEL_REF
 
     def load_model(self) -> None:
-        """Load processor and ONNX model."""
-        if self._model is not None and self._processor is not None:
+        """Load the GigaAM PyTorch model via HuggingFace transformers."""
+        if self._model is not None:
             return
 
         model_ref = self._model_ref()
         local_only = Path(model_ref).exists()
         log.info("asr.loading_model", model=model_ref, engine="gigaam", local_only=local_only)
+
         try:
-            from optimum.onnxruntime import ORTModelForCTC
-            from transformers import AutoProcessor
+            from transformers import AutoModel
         except ImportError as exc:
             raise ModelLoadError(
-                "GigaAM requires optimum[onnxruntime] and transformers. "
+                "GigaAM requires the 'transformers' and 'torch' packages.\n"
                 "Install them with:\n"
-                "  pip install \"optimum[onnxruntime]\" transformers onnxruntime\n"
+                "  pip install transformers torch\n"
                 "or run: poetry install"
             ) from exc
 
-        import os
-
         token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN") or None
         try:
-            self._processor = AutoProcessor.from_pretrained(
-                model_ref,
-                local_files_only=local_only,
-                token=token,
-            )
-            self._model = ORTModelForCTC.from_pretrained(
-                model_ref,
-                local_files_only=local_only,
-                provider="CPUExecutionProvider",
-                token=token,
-            )
+            kwargs: dict = {"trust_remote_code": True, "token": token}
+            if local_only:
+                kwargs["local_files_only"] = True
+            else:
+                kwargs["revision"] = DEFAULT_GIGAAM_REVISION
+            self._model = AutoModel.from_pretrained(model_ref, **kwargs)
         except Exception as exc:
             err = str(exc).lower()
             if "401" in err or "unauthorized" in err or "authentication" in err:
@@ -90,7 +93,7 @@ class GigaAMCTCEngine:
             elif "403" in err or "gated" in err or "access" in err:
                 hint = (
                     "The model is gated — you must accept its license on HuggingFace first.\n"
-                    "  1. Visit https://huggingface.co/salute-developers/GigaAM-CTC-v3\n"
+                    "  1. Visit https://huggingface.co/ai-sage/GigaAM-v3\n"
                     "  2. Accept the model license\n"
                     "  3. Add your HF token in VoxFusion Settings → HuggingFace Token"
                 )
@@ -99,22 +102,20 @@ class GigaAMCTCEngine:
                     "Network error while downloading the model.\n"
                     "  - Check your internet connection\n"
                     "  - If behind a proxy, configure it in VoxFusion Settings → Network/Proxy\n"
-                    "  - Or pre-download: huggingface-cli download salute-developers/GigaAM-CTC-v3"
+                    "  - Or pre-download: huggingface-cli download ai-sage/GigaAM-v3 --revision ctc"
                 )
             else:
                 hint = (
-                    "  - To download manually: huggingface-cli download salute-developers/GigaAM-CTC-v3\n"
+                    "  - To download manually:\n"
+                    "      huggingface-cli download ai-sage/GigaAM-v3 --revision ctc\n"
                     "  - Or set VOXFUSION_ASR__MODEL_PATH to a local model directory"
                 )
-            raise ModelLoadError(
-                f"Failed to load GigaAM model: {exc}\n{hint}"
-            ) from exc
+            raise ModelLoadError(f"Failed to load GigaAM model: {exc}\n{hint}") from exc
 
         log.info("asr.model_loaded", model=model_ref, engine="gigaam")
 
     def unload_model(self) -> None:
         self._model = None
-        self._processor = None
         log.info("asr.model_unloaded", engine="gigaam")
 
     def close(self) -> None:
@@ -128,10 +129,10 @@ class GigaAMCTCEngine:
         with suppress(Exception):
             self.close()
 
-    def _ensure_model(self) -> tuple[object, object]:
-        if self._model is None or self._processor is None:
+    def _ensure_model(self) -> object:
+        if self._model is None:
             self.load_model()
-        return self._model, self._processor  # type: ignore[return-value]
+        return self._model  # type: ignore[return-value]
 
     def _transcribe_sync(
         self,
@@ -139,28 +140,29 @@ class GigaAMCTCEngine:
         *,
         language: str | None = None,
     ) -> list[TranscriptionSegment]:
-        model, processor = self._ensure_model()
         if language not in (None, "ru"):
             log.warning("gigaam.language_ignored", requested=language, supported="ru")
 
+        model = self._ensure_model()
+
         try:
-            inputs = processor(
-                audio,
-                sampling_rate=16000,
-                return_tensors="np",
-            )
-            outputs = model(**inputs)
-            raw_logits = outputs.logits
-            # Some ORT versions return a list/tuple of arrays instead of a
-            # single ndarray.  Unwrap one level so we always get an ndarray.
-            while isinstance(raw_logits, (list, tuple)):
-                raw_logits = raw_logits[0]
-            logits_arr = np.asarray(raw_logits, dtype=np.float32)
-            # Remove batch dimension if present (we always infer one sample)
-            if logits_arr.ndim == 3:
-                logits_arr = logits_arr[0]  # (time, vocab)
-            token_ids = logits_arr.argmax(axis=-1)  # (time,)
-            text = processor.decode(token_ids, skip_special_tokens=True).strip()
+            parts: list[str] = []
+            pos = 0
+            while pos < len(audio):
+                chunk = audio[pos : pos + _CHUNK_SAMPLES]
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                    tmp_path = f.name
+                try:
+                    sf.write(tmp_path, chunk, _SAMPLE_RATE, subtype="PCM_16")
+                    text = model.transcribe(tmp_path).strip()  # type: ignore[attr-defined]
+                    if text:
+                        parts.append(text)
+                finally:
+                    with suppress(OSError):
+                        os.unlink(tmp_path)
+                pos += _CHUNK_SAMPLES - _OVERLAP_SAMPLES
+
+            text = " ".join(parts).strip()
         except Exception as exc:
             raise TranscriptionError(f"GigaAM transcription failed: {exc}") from exc
 
@@ -172,7 +174,7 @@ class GigaAMCTCEngine:
                 text=text,
                 language="ru",
                 start_time=0.0,
-                end_time=len(audio) / 16000.0,
+                end_time=len(audio) / float(_SAMPLE_RATE),
                 confidence=0.0,
                 words=None,
                 no_speech_prob=0.0,
@@ -190,9 +192,9 @@ class GigaAMCTCEngine:
             audio = audio.reshape(audio.shape[0], -1).mean(axis=1, dtype=np.float32)
         audio = np.ascontiguousarray(audio.reshape(-1), dtype=np.float32)
 
-        if sample_rate != 16000:
+        if sample_rate != _SAMPLE_RATE:
             duration = len(audio) / sample_rate
-            target_samples = max(1, int(duration * 16000))
+            target_samples = max(1, int(duration * _SAMPLE_RATE))
             xs_old = np.linspace(0.0, 1.0, num=len(audio), endpoint=False)
             xs_new = np.linspace(0.0, 1.0, num=target_samples, endpoint=False)
             audio = np.interp(xs_new, xs_old, audio).astype(np.float32)
