@@ -1,4 +1,4 @@
-"""PyTorch/CTC ASR backend for GigaAM-style models."""
+"""PyTorch/CTC ASR backend for GigaAM-v3 via HuggingFace transformers."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from voxfusion.models.transcription import TranscriptionSegment
 log = get_logger(__name__)
 
 DEFAULT_GIGAAM_MODEL_REF = "ai-sage/GigaAM-v3"
-DEFAULT_GIGAAM_REVISION = "ctc"
+# The HF repo has only one branch (main) — no revision parameter needed.
 
 # GigaAM raises ValueError for audio longer than 25 s; chunk at 24 s to be safe.
 _SAMPLE_RATE = 16000
@@ -70,7 +70,7 @@ class GigaAMCTCEngine:
                 "GigaAM requires the 'transformers' and 'torch' packages.\n"
                 "Install them with:\n"
                 "  pip install transformers torch\n"
-                "or run: poetry install"
+                "or add the gigaam extra: poetry install --extras gigaam"
             ) from exc
 
         token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN") or None
@@ -78,8 +78,6 @@ class GigaAMCTCEngine:
             kwargs: dict = {"trust_remote_code": True, "token": token}
             if local_only:
                 kwargs["local_files_only"] = True
-            else:
-                kwargs["revision"] = DEFAULT_GIGAAM_REVISION
             self._model = AutoModel.from_pretrained(model_ref, **kwargs)
         except Exception as exc:
             err = str(exc).lower()
@@ -102,12 +100,11 @@ class GigaAMCTCEngine:
                     "Network error while downloading the model.\n"
                     "  - Check your internet connection\n"
                     "  - If behind a proxy, configure it in VoxFusion Settings → Network/Proxy\n"
-                    "  - Or pre-download: huggingface-cli download ai-sage/GigaAM-v3 --revision ctc"
+                    "  - Or pre-download: huggingface-cli download ai-sage/GigaAM-v3"
                 )
             else:
                 hint = (
-                    "  - To download manually:\n"
-                    "      huggingface-cli download ai-sage/GigaAM-v3 --revision ctc\n"
+                    "  - To download manually: huggingface-cli download ai-sage/GigaAM-v3\n"
                     "  - Or set VOXFUSION_ASR__MODEL_PATH to a local model directory"
                 )
             raise ModelLoadError(f"Failed to load GigaAM model: {exc}\n{hint}") from exc

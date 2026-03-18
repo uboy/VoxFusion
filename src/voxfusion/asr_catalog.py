@@ -28,6 +28,9 @@ class ASRModelInfo:
     supports_translation: bool = False
     recommended: bool = False
     supports_live_capture: bool = True
+    # Top-level package that must be importable for this model to work.
+    # None means always available (uses only core deps).
+    requires_package: str | None = None
 
 
 _WHISPER_LANGUAGE_ROWS: tuple[tuple[str, str], ...] = (
@@ -200,12 +203,13 @@ ASR_MODEL_CATALOG: tuple[ASRModelInfo, ...] = (
         id="gigaam-v3-e2e-ctc",
         name="GigaAM v3",
         engine="gigaam",
-        description="Russian-focused ONNX/CTC model for file transcription.",
+        description="Russian-focused model for file transcription.",
         accuracy_score=0.85,
         speed_score=0.75,
         supported_languages=("ru",),
         supports_translation=False,
         supports_live_capture=False,
+        requires_package="transformers",
     ),
     ASRModelInfo(
         id="parakeet-tdt-0.6b-v3",
@@ -223,6 +227,7 @@ ASR_MODEL_CATALOG: tuple[ASRModelInfo, ...] = (
         supports_translation=False,
         supports_live_capture=False,
         recommended=True,
+        requires_package="nemo",
     ),
     ASRModelInfo(
         id="breeze-asr",
@@ -234,6 +239,7 @@ ASR_MODEL_CATALOG: tuple[ASRModelInfo, ...] = (
         supported_languages=_WHISPER_LANGUAGE_CODES,
         supports_translation=False,
         supports_live_capture=False,
+        requires_package="transformers",
     ),
 )
 
@@ -349,3 +355,28 @@ def get_language_code(label: str, model_id: str | None = None) -> str | None:
     if info is None:
         return None
     return normalize_language_for_model(model_id, info.code)
+
+
+def is_model_available(model_id: str | None) -> bool:
+    """Return False when the model requires a package not bundled in this build.
+
+    In a frozen PyInstaller binary, optional backends (GigaAM, Parakeet, Breeze)
+    are only available if their required packages were included at build time.
+    In a normal Python environment they are always importable (lazy-loaded).
+    """
+    import importlib.util
+    import sys
+
+    model = get_model_info(model_id)
+    if model.requires_package is None:
+        return True
+    # In frozen mode, check whether the package was actually bundled.
+    # In dev mode, assume it will be lazily importable (don't block the UI).
+    if not getattr(sys, "frozen", False):
+        return True
+    return importlib.util.find_spec(model.requires_package) is not None
+
+
+def get_available_model_catalog() -> tuple[ASRModelInfo, ...]:
+    """Return only the models available in the current runtime environment."""
+    return tuple(m for m in ASR_MODEL_CATALOG if is_model_available(m.id))
