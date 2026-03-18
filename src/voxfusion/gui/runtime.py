@@ -216,7 +216,9 @@ class FileTranscribeWorker:
                     self._on_status(f"Failed: {event.message}", 0.0)
 
         # Emit model download / cache hints to the log before loading
-        _cache = Path.home() / ".cache" / "huggingface" / "hub"
+        import os as _os
+        _hf_home = _os.environ.get("HF_HOME")
+        _cache = Path(_hf_home) / "hub" if _hf_home else Path.home() / ".cache" / "huggingface" / "hub"
         _engine = config.asr.engine
         if _engine == "faster-whisper":
             _repo = f"Systran/faster-whisper-{self._model}"
@@ -229,6 +231,8 @@ class FileTranscribeWorker:
             print(f"[VoxFusion] Pre-download (avoids waiting at startup):")
             print(f"[VoxFusion]   huggingface-cli download {_repo}")
             print(f"[VoxFusion]   -- or place the folder directly in: {_cache}")
+            if not _os.environ.get("HF_TOKEN"):
+                print(f"[VoxFusion] If the model is gated, add your HF token in Settings → HuggingFace Token")
         print(f"[VoxFusion] Faster HF downloads: pip install hf-xet")
 
         orchestrator = PipelineOrchestrator(config, on_event=on_event)

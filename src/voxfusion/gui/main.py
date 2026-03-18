@@ -33,6 +33,7 @@ from voxfusion.gui.helpers import (
     get_system_proxies,
     install_ffmpeg_winget,
     load_gui_settings,
+    models_dir,
     save_gui_settings,
 )
 from voxfusion.gui.model_summary import ModelSummaryCard
@@ -143,6 +144,7 @@ class TranscriptionGUI:
         self._proxy_https_var = tk.StringVar(value="")
         self._proxy_no_var = tk.StringVar(value="")
         self._proxy_ca_var = tk.StringVar(value="")
+        self._hf_token_var = tk.StringVar(value="")
 
         # LLM summarize state
         self._llm_worker: LLMWorker | None = None
@@ -388,13 +390,13 @@ class TranscriptionGUI:
         self._file_workflow_label.pack(fill=tk.X, padx=8, pady=(0, 4))
 
         # -- File picker row --
-        top = ttk.Frame(parent)
+        # Use PanedWindow so column widths are driven by the sash position,
+        # not by widget content — switching models won't cause the layout to jump.
+        top = ttk.PanedWindow(parent, orient=tk.HORIZONTAL)
         top.pack(fill=tk.X, padx=8, pady=(0, 6))
-        top.columnconfigure(0, weight=3)
-        top.columnconfigure(1, weight=2)
 
         transcribe_box = ttk.LabelFrame(top, text="Transcription Setup", padding=12)
-        transcribe_box.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        top.add(transcribe_box, weight=3)
 
         picker = ttk.Frame(transcribe_box)
         picker.pack(fill=tk.X, pady=(0, 4))
@@ -464,7 +466,7 @@ class TranscriptionGUI:
         self._file_artifact_label.pack(fill=tk.X, pady=(0, 4))
 
         self._file_model_summary = ModelSummaryCard(top, title="Selected Model")
-        self._file_model_summary.grid(row=0, column=1, sticky="nsew")
+        top.add(self._file_model_summary, weight=2)
 
         # -- Results table --
         file_table_frame = ttk.Frame(parent)
@@ -1006,6 +1008,14 @@ class TranscriptionGUI:
         self._proxy_ca_var.set(settings.get("proxy_ca_bundle", ""))
         apply_proxy_settings(settings)
 
+        # HuggingFace token
+        token = settings.get("hf_token", "")
+        self._hf_token_var.set(token)
+        if token:
+            import os
+            os.environ["HF_TOKEN"] = token
+            os.environ["HUGGING_FACE_HUB_TOKEN"] = token
+
         last_rec = settings.get("last_recorded_file", "")
         if last_rec:
             p = Path(last_rec)
@@ -1035,6 +1045,8 @@ class TranscriptionGUI:
                 "proxy_https": self._proxy_https_var.get().strip(),
                 "proxy_no": self._proxy_no_var.get().strip(),
                 "proxy_ca_bundle": self._proxy_ca_var.get().strip(),
+                # HuggingFace
+                "hf_token": self._hf_token_var.get().strip(),
             }
         )
 
@@ -1102,7 +1114,7 @@ class TranscriptionGUI:
         """Open the application settings dialog (proxy / network)."""
         dlg = tk.Toplevel(self.root)
         dlg.title("Settings")
-        dlg.geometry("560x360")
+        dlg.geometry("580x480")
         dlg.resizable(False, False)
         dlg.grab_set()
 
@@ -1112,6 +1124,7 @@ class TranscriptionGUI:
         https_v = tk.StringVar(value=self._proxy_https_var.get())
         no_v = tk.StringVar(value=self._proxy_no_var.get())
         ca_v = tk.StringVar(value=self._proxy_ca_var.get())
+        hf_token_v = tk.StringVar(value=self._hf_token_var.get())
 
         pad = {"padx": 8, "pady": 3}
 
@@ -1175,6 +1188,27 @@ class TranscriptionGUI:
 
         _field_state()  # set initial enabled/disabled state
 
+        # -- HuggingFace Token --
+        hf_frame = ttk.LabelFrame(dlg, text="HuggingFace", padding=(10, 8))
+        hf_frame.pack(fill=tk.X, padx=10, pady=(0, 4))
+        hf_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(hf_frame, text="HF Token:").grid(row=0, column=0, sticky="w", **pad)
+        hf_entry = ttk.Entry(hf_frame, textvariable=hf_token_v, width=44, show="*")
+        hf_entry.grid(row=0, column=1, sticky="ew", **pad)
+
+        def _toggle_token_visibility() -> None:
+            hf_entry.configure(show="" if hf_entry.cget("show") == "*" else "*")
+
+        ttk.Button(hf_frame, text="Show", command=_toggle_token_visibility).grid(
+            row=0, column=2, padx=(0, 4), pady=3
+        )
+        ttk.Label(
+            hf_frame,
+            text="Required for gated models (e.g. GigaAM). Get a free token at huggingface.co/settings/tokens",
+            foreground="#777777",
+        ).grid(row=1, column=0, columnspan=3, sticky="w", padx=8)
+
         # -- Bottom buttons --
         btn_row = ttk.Frame(dlg)
         btn_row.pack(fill=tk.X, padx=10, pady=(4, 10))
@@ -1186,20 +1220,29 @@ class TranscriptionGUI:
             no_v.set(sys_p["no"])
 
         def _save() -> None:
+            import os
             self._proxy_use_system_var.set(use_sys.get())
             self._proxy_http_var.set(http_v.get().strip())
             self._proxy_https_var.set(https_v.get().strip())
             self._proxy_no_var.set(no_v.get().strip())
             self._proxy_ca_var.set(ca_v.get().strip())
+            self._hf_token_var.set(hf_token_v.get().strip())
             self._persist_gui_settings()
-            settings = {
+            proxy_settings = {
                 "proxy_use_system": "true" if use_sys.get() else "false",
                 "proxy_http": http_v.get().strip(),
                 "proxy_https": https_v.get().strip(),
                 "proxy_no": no_v.get().strip(),
                 "proxy_ca_bundle": ca_v.get().strip(),
             }
-            apply_proxy_settings(settings)
+            apply_proxy_settings(proxy_settings)
+            token = hf_token_v.get().strip()
+            if token:
+                os.environ["HF_TOKEN"] = token
+                os.environ["HUGGING_FACE_HUB_TOKEN"] = token
+            else:
+                os.environ.pop("HF_TOKEN", None)
+                os.environ.pop("HUGGING_FACE_HUB_TOKEN", None)
             dlg.destroy()
 
         ttk.Button(btn_row, text="Detect system proxy", command=_detect).pack(side=tk.LEFT)
@@ -1823,6 +1866,13 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     if sys.platform != "win32":
         print("Live capture requires Windows WASAPI. File transcription works on all platforms.")
+
+    # Redirect HuggingFace model cache next to the binary (or project root in dev mode).
+    # Must happen before any model library is imported.
+    _hf_home = str(models_dir())
+    os.environ.setdefault("HF_HOME", _hf_home)
+    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(models_dir() / "hub"))
+    os.environ.setdefault("TRANSFORMERS_CACHE", str(models_dir() / "hub"))
 
     options = CaptureOptions(
         model=args.model,
