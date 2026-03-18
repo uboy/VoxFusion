@@ -32,9 +32,34 @@ def default_transcript_path(audio_path: Path) -> Path:
     return audio_path.with_suffix(".transcript.txt")
 
 
+def app_base_dir() -> Path:
+    """Return the base directory for application data.
+
+    - PyInstaller bundle: directory containing the ``.exe``
+    - Python script: project root (four levels above ``src/voxfusion/gui/``)
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path(__file__).resolve().parents[3]
+
+
+def models_dir() -> Path:
+    """Return (and create) the directory where models are stored.
+
+    Resolves to ``<app_base_dir>/models/``.
+    """
+    path = app_base_dir() / "models"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def gui_settings_path() -> Path:
-    """Return the persistent GUI settings file path."""
-    return Path.home() / ".voxfusion" / "gui_settings.json"
+    """Return the persistent GUI settings file path.
+
+    - PyInstaller bundle: next to the ``.exe``
+    - Python script: project root
+    """
+    return app_base_dir() / "gui_settings.json"
 
 
 def load_gui_settings(path: Path | None = None) -> dict[str, str]:

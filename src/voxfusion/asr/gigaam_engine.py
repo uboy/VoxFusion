@@ -63,17 +63,51 @@ class GigaAMCTCEngine:
                 "or run: poetry install"
             ) from exc
 
+        import os
+
+        token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN") or None
         try:
-            self._processor = AutoProcessor.from_pretrained(model_ref, local_files_only=local_only)
+            self._processor = AutoProcessor.from_pretrained(
+                model_ref,
+                local_files_only=local_only,
+                token=token,
+            )
             self._model = ORTModelForCTC.from_pretrained(
                 model_ref,
                 local_files_only=local_only,
                 provider="CPUExecutionProvider",
+                token=token,
             )
         except Exception as exc:
+            err = str(exc).lower()
+            if "401" in err or "unauthorized" in err or "authentication" in err:
+                hint = (
+                    "The model requires a HuggingFace account token.\n"
+                    "  1. Create a free account at https://huggingface.co\n"
+                    "  2. Generate a token at https://huggingface.co/settings/tokens\n"
+                    "  3. Enter it in VoxFusion Settings → HuggingFace Token"
+                )
+            elif "403" in err or "gated" in err or "access" in err:
+                hint = (
+                    "The model is gated — you must accept its license on HuggingFace first.\n"
+                    "  1. Visit https://huggingface.co/salute-developers/GigaAM-CTC-v3\n"
+                    "  2. Accept the model license\n"
+                    "  3. Add your HF token in VoxFusion Settings → HuggingFace Token"
+                )
+            elif "connection" in err or "timeout" in err or "network" in err or "proxy" in err:
+                hint = (
+                    "Network error while downloading the model.\n"
+                    "  - Check your internet connection\n"
+                    "  - If behind a proxy, configure it in VoxFusion Settings → Network/Proxy\n"
+                    "  - Or pre-download: huggingface-cli download salute-developers/GigaAM-CTC-v3"
+                )
+            else:
+                hint = (
+                    "  - To download manually: huggingface-cli download salute-developers/GigaAM-CTC-v3\n"
+                    "  - Or set VOXFUSION_ASR__MODEL_PATH to a local model directory"
+                )
             raise ModelLoadError(
-                "Failed to load GigaAM model. Set VOXFUSION_ASR__MODEL_PATH to a local model "
-                f"directory or ensure the model is available in Hugging Face cache. Details: {exc}"
+                f"Failed to load GigaAM model: {exc}\n{hint}"
             ) from exc
 
         log.info("asr.model_loaded", model=model_ref, engine="gigaam")
