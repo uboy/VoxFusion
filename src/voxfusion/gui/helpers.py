@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 from voxfusion.logging import configure_logging
@@ -102,6 +104,70 @@ def install_ffmpeg_winget(on_output: "Callable[[str], None] | None" = None) -> b
         return proc.returncode == 0
     except Exception:
         return False
+
+
+def get_system_proxies() -> dict[str, str]:
+    """Return system-configured proxy URLs keyed by 'http' and 'https'.
+
+    On Windows reads IE/WinHTTP proxy settings from the registry via
+    ``urllib.request.getproxies()``.
+    """
+    proxies = urllib.request.getproxies()
+    return {
+        "http": proxies.get("http", ""),
+        "https": proxies.get("https", ""),
+        "no": proxies.get("no", "") or proxies.get("bypass", ""),
+    }
+
+
+def apply_proxy_settings(settings: dict[str, str]) -> None:
+    """Apply proxy configuration as environment variables.
+
+    HuggingFace Hub, ``requests``, and ``httpx`` all honour
+    ``HTTP_PROXY`` / ``HTTPS_PROXY`` / ``NO_PROXY`` / ``REQUESTS_CA_BUNDLE``.
+
+    Args:
+        settings: Dict with keys ``proxy_use_system``, ``proxy_http``,
+            ``proxy_https``, ``proxy_no``, ``proxy_ca_bundle``.
+    """
+    use_system = settings.get("proxy_use_system", "true").lower() != "false"
+
+    if use_system:
+        sys_proxies = get_system_proxies()
+        http_proxy = sys_proxies["http"]
+        https_proxy = sys_proxies["https"]
+        no_proxy = sys_proxies["no"]
+    else:
+        http_proxy = settings.get("proxy_http", "").strip()
+        https_proxy = settings.get("proxy_https", "").strip()
+        no_proxy = settings.get("proxy_no", "").strip()
+
+    ca_bundle = settings.get("proxy_ca_bundle", "").strip()
+
+    for key in ("HTTP_PROXY", "http_proxy"):
+        if http_proxy:
+            os.environ[key] = http_proxy
+        else:
+            os.environ.pop(key, None)
+
+    for key in ("HTTPS_PROXY", "https_proxy"):
+        if https_proxy:
+            os.environ[key] = https_proxy
+        else:
+            os.environ.pop(key, None)
+
+    for key in ("NO_PROXY", "no_proxy"):
+        if no_proxy:
+            os.environ[key] = no_proxy
+        else:
+            os.environ.pop(key, None)
+
+    if ca_bundle and Path(ca_bundle).exists():
+        os.environ["REQUESTS_CA_BUNDLE"] = ca_bundle
+        os.environ["SSL_CERT_FILE"] = ca_bundle
+    else:
+        os.environ.pop("REQUESTS_CA_BUNDLE", None)
+        os.environ.pop("SSL_CERT_FILE", None)
 
 
 def configure_gui_logging(level: int = logging.INFO) -> None:

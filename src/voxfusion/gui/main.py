@@ -11,6 +11,7 @@ import threading
 import tkinter as tk
 from contextlib import suppress
 from datetime import datetime
+from time import monotonic
 from pathlib import Path
 from tkinter import filedialog, scrolledtext, ttk
 
@@ -24,10 +25,12 @@ from voxfusion.asr_catalog import (
     normalize_language_for_model,
 )
 from voxfusion.gui.helpers import (
+    apply_proxy_settings,
     build_file_workflow_status,
     configure_gui_logging,
     default_transcript_path,
     find_ffmpeg,
+    get_system_proxies,
     install_ffmpeg_winget,
     load_gui_settings,
     save_gui_settings,
@@ -131,6 +134,15 @@ class TranscriptionGUI:
         self._file_seg_count = 0
         self._file_segments: list[TranslatedSegment] = []
         self._last_transcript_path: Path | None = None
+        self._file_start_time: float | None = None
+        self._file_current_progress: float = 0.0
+
+        # Proxy / network settings state
+        self._proxy_use_system_var = tk.BooleanVar(value=True)
+        self._proxy_http_var = tk.StringVar(value="")
+        self._proxy_https_var = tk.StringVar(value="")
+        self._proxy_no_var = tk.StringVar(value="")
+        self._proxy_ca_var = tk.StringVar(value="")
 
         # LLM summarize state
         self._llm_worker: LLMWorker | None = None
@@ -160,6 +172,12 @@ class TranscriptionGUI:
 
     def _build_layout(self) -> None:
         """Build the top-level layout with a two-tab Notebook and resizable log pane."""
+        toolbar = ttk.Frame(self.root)
+        toolbar.pack(fill=tk.X, padx=4, pady=(2, 0))
+        ttk.Button(toolbar, text="Settings", command=self._open_settings).pack(
+            side=tk.RIGHT, padx=(0, 2)
+        )
+
         paned = ttk.PanedWindow(self.root, orient=tk.VERTICAL)
         paned.pack(fill=tk.BOTH, expand=True, padx=4, pady=(4, 4))
 
@@ -414,20 +432,28 @@ class TranscriptionGUI:
             opts, text="Transcribe", command=self._start_file_transcribe, style="Accent.TButton"
         )
         self._file_transcribe_btn.pack(side=tk.LEFT, padx=(0, 4))
+        self._file_cancel_btn = ttk.Button(
+            opts, text="Cancel", command=self._cancel_file_transcribe, state=tk.DISABLED
+        )
+        self._file_cancel_btn.pack(side=tk.LEFT, padx=(0, 4))
 
         # -- Status + progress row --
+        # Pack right-anchored widgets first so the expanding status label fills the rest.
         prog_row = ttk.Frame(transcribe_box)
         prog_row.pack(fill=tk.X, pady=(0, 4))
+
+        self._file_progress = ttk.Progressbar(
+            prog_row, orient="horizontal", length=180, mode="determinate", maximum=100
+        )
+        self._file_progress.pack(side=tk.RIGHT)
+
+        self._file_time_label = ttk.Label(prog_row, text="", anchor="e", width=18)
+        self._file_time_label.pack(side=tk.RIGHT, padx=(0, 6))
 
         self._file_status_label = ttk.Label(
             prog_row, text="Select a file and click Transcribe.", anchor="w"
         )
         self._file_status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-        self._file_progress = ttk.Progressbar(
-            prog_row, orient="horizontal", length=220, mode="determinate", maximum=100
-        )
-        self._file_progress.pack(side=tk.RIGHT)
 
         self._file_artifact_label = ttk.Label(
             transcribe_box,
@@ -970,6 +996,16 @@ class TranscriptionGUI:
         self._llm_prompt_var.set(settings.get("llm_prompt", "summarize"))
         self._llm_custom_user_prompt = settings.get("llm_custom_user_prompt", "")
 
+        # Proxy settings
+        self._proxy_use_system_var.set(
+            settings.get("proxy_use_system", "true").lower() != "false"
+        )
+        self._proxy_http_var.set(settings.get("proxy_http", ""))
+        self._proxy_https_var.set(settings.get("proxy_https", ""))
+        self._proxy_no_var.set(settings.get("proxy_no", ""))
+        self._proxy_ca_var.set(settings.get("proxy_ca_bundle", ""))
+        apply_proxy_settings(settings)
+
         last_rec = settings.get("last_recorded_file", "")
         if last_rec:
             p = Path(last_rec)
@@ -993,6 +1029,12 @@ class TranscriptionGUI:
                 "llm_custom_user_prompt": self._llm_custom_user_prompt,
                 "last_recorded_file": str(self._last_recorded_file) if self._last_recorded_file else "",
                 "last_transcript_path": str(self._last_transcript_path) if self._last_transcript_path else "",
+                # Proxy
+                "proxy_use_system": "true" if self._proxy_use_system_var.get() else "false",
+                "proxy_http": self._proxy_http_var.get().strip(),
+                "proxy_https": self._proxy_https_var.get().strip(),
+                "proxy_no": self._proxy_no_var.get().strip(),
+                "proxy_ca_bundle": self._proxy_ca_var.get().strip(),
             }
         )
 
@@ -1055,6 +1097,114 @@ class TranscriptionGUI:
             self._llm_model_var.set(models[0])
         self._persist_gui_settings()
         self._llm_status_label.configure(text=f"Loaded {len(models)} model(s) from Open WebUI.")
+
+    def _open_settings(self) -> None:
+        """Open the application settings dialog (proxy / network)."""
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Settings")
+        dlg.geometry("560x360")
+        dlg.resizable(False, False)
+        dlg.grab_set()
+
+        # Local copies so changes are only applied on Save
+        use_sys = tk.BooleanVar(value=self._proxy_use_system_var.get())
+        http_v = tk.StringVar(value=self._proxy_http_var.get())
+        https_v = tk.StringVar(value=self._proxy_https_var.get())
+        no_v = tk.StringVar(value=self._proxy_no_var.get())
+        ca_v = tk.StringVar(value=self._proxy_ca_var.get())
+
+        pad = {"padx": 8, "pady": 3}
+
+        proxy_frame = ttk.LabelFrame(dlg, text="Network / Proxy", padding=(10, 8))
+        proxy_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 4))
+        proxy_frame.columnconfigure(1, weight=1)
+
+        ttk.Checkbutton(
+            proxy_frame,
+            text="Use system proxy  (Windows automatic / environment variables)",
+            variable=use_sys,
+        ).grid(row=0, column=0, columnspan=3, sticky="w", **pad)
+
+        ttk.Separator(proxy_frame, orient="horizontal").grid(
+            row=1, column=0, columnspan=3, sticky="ew", pady=4
+        )
+
+        def _field_state(*_: object) -> None:
+            state = tk.DISABLED if use_sys.get() else tk.NORMAL
+            for w in manual_widgets:
+                w.configure(state=state)
+
+        use_sys.trace_add("write", _field_state)
+
+        manual_widgets: list[ttk.Widget] = []
+
+        def _lbl_entry(row: int, label: str, var: tk.StringVar, hint: str = "") -> None:
+            ttk.Label(proxy_frame, text=label).grid(row=row, column=0, sticky="w", **pad)
+            e = ttk.Entry(proxy_frame, textvariable=var, width=44)
+            e.grid(row=row, column=1, columnspan=2, sticky="ew", **pad)
+            manual_widgets.append(e)
+            if hint:
+                ttk.Label(proxy_frame, text=hint, foreground="#777777").grid(
+                    row=row + 1, column=1, columnspan=2, sticky="w", padx=8
+                )
+
+        _lbl_entry(2, "HTTP Proxy:", http_v, "e.g. http://proxy.corp.ru:3128")
+        _lbl_entry(4, "HTTPS Proxy:", https_v, "e.g. http://proxy.corp.ru:3128")
+        _lbl_entry(6, "No proxy:", no_v, "comma-separated hosts, e.g. localhost,*.corp.ru")
+
+        ttk.Label(proxy_frame, text="CA Bundle:").grid(row=8, column=0, sticky="w", **pad)
+        ca_entry = ttk.Entry(proxy_frame, textvariable=ca_v, width=36)
+        ca_entry.grid(row=8, column=1, sticky="ew", **pad)
+        manual_widgets.append(ca_entry)
+
+        def _browse_ca() -> None:
+            path = filedialog.askopenfilename(
+                title="Select CA certificate",
+                filetypes=[("PEM/CRT certificate", "*.pem *.crt *.cer"), ("All files", "*.*")],
+            )
+            if path:
+                ca_v.set(path)
+
+        browse_ca_btn = ttk.Button(proxy_frame, text="Browse...", command=_browse_ca)
+        browse_ca_btn.grid(row=8, column=2, padx=(0, 4), pady=3)
+        manual_widgets.append(browse_ca_btn)
+
+        ttk.Label(proxy_frame, text="(path to .pem/.crt for corporate SSL)", foreground="#777777").grid(
+            row=9, column=1, columnspan=2, sticky="w", padx=8
+        )
+
+        _field_state()  # set initial enabled/disabled state
+
+        # -- Bottom buttons --
+        btn_row = ttk.Frame(dlg)
+        btn_row.pack(fill=tk.X, padx=10, pady=(4, 10))
+
+        def _detect() -> None:
+            sys_p = get_system_proxies()
+            http_v.set(sys_p["http"])
+            https_v.set(sys_p["https"])
+            no_v.set(sys_p["no"])
+
+        def _save() -> None:
+            self._proxy_use_system_var.set(use_sys.get())
+            self._proxy_http_var.set(http_v.get().strip())
+            self._proxy_https_var.set(https_v.get().strip())
+            self._proxy_no_var.set(no_v.get().strip())
+            self._proxy_ca_var.set(ca_v.get().strip())
+            self._persist_gui_settings()
+            settings = {
+                "proxy_use_system": "true" if use_sys.get() else "false",
+                "proxy_http": http_v.get().strip(),
+                "proxy_https": https_v.get().strip(),
+                "proxy_no": no_v.get().strip(),
+                "proxy_ca_bundle": ca_v.get().strip(),
+            }
+            apply_proxy_settings(settings)
+            dlg.destroy()
+
+        ttk.Button(btn_row, text="Detect system proxy", command=_detect).pack(side=tk.LEFT)
+        ttk.Button(btn_row, text="Cancel", command=dlg.destroy).pack(side=tk.RIGHT, padx=(4, 0))
+        ttk.Button(btn_row, text="Save", command=_save, style="Accent.TButton").pack(side=tk.RIGHT)
 
     def _open_prompt_editor(self) -> None:
         prompt_name = self._llm_prompt_var.get().strip() or "summarize"
@@ -1314,12 +1464,17 @@ class TranscriptionGUI:
         language = self._language_code_for_label(self._file_lang_var.get(), model)
 
         self._file_transcribe_btn.configure(state=tk.DISABLED)
+        self._file_cancel_btn.configure(state=tk.NORMAL)
         self._file_model_combo.configure(state="disabled")
         self._file_lang_combo.configure(state="disabled")
         self._file_progress["value"] = 0
         self._last_transcript_path = None
+        self._file_start_time = monotonic()
+        self._file_current_progress = 0.0
+        self._file_time_label.configure(text="")
         self._file_status_label.configure(text=f"Step 2: Transcribing {file_path.name}...")
         self._refresh_file_workflow()
+        self.root.after(500, self._tick_file_timer)
 
         self._file_worker = FileTranscribeWorker(
             file_path=file_path,
@@ -1351,6 +1506,7 @@ class TranscriptionGUI:
     def _update_file_status(self, msg: str, progress: float) -> None:
         self._file_status_label.configure(text=msg, foreground="")
         self._file_progress["value"] = int(progress * 100)
+        self._file_current_progress = progress
         self._refresh_file_workflow()
 
     def _show_file_error(self, message: str) -> None:
@@ -1359,6 +1515,30 @@ class TranscriptionGUI:
         timestamp = datetime.now().strftime("%H:%M:%S")
         self._append_log_line(f"{timestamp} | FILE ERROR | {message}\n")
         self._refresh_file_workflow()
+
+    def _cancel_file_transcribe(self) -> None:
+        if self._file_worker is not None:
+            self._file_cancel_btn.configure(state=tk.DISABLED)
+            self._file_status_label.configure(text="Cancelling...", foreground="")
+            self._file_worker.cancel()
+
+    def _tick_file_timer(self) -> None:
+        if self._file_worker is None or self._file_start_time is None:
+            return
+        elapsed = monotonic() - self._file_start_time
+        m, s = divmod(int(elapsed), 60)
+        h, m = divmod(m, 60)
+        elapsed_str = f"{h:02d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+        progress = self._file_current_progress
+        if progress > 0.05:
+            remaining = elapsed * (1.0 - progress) / progress
+            rm, rs = divmod(int(remaining), 60)
+            rh, rm = divmod(rm, 60)
+            eta_str = f"{rh:02d}:{rm:02d}:{rs:02d}" if rh else f"{rm:02d}:{rs:02d}"
+            self._file_time_label.configure(text=f"{elapsed_str} | ~{eta_str}")
+        else:
+            self._file_time_label.configure(text=elapsed_str)
+        self.root.after(500, self._tick_file_timer)
 
     def _add_file_segments(self, segments: list[TranslatedSegment]) -> None:
         for seg in segments:
@@ -1380,10 +1560,21 @@ class TranscriptionGUI:
         self._refresh_file_workflow()
 
     def _on_file_worker_finished(self) -> None:
+        was_cancelled = self._file_worker is not None and self._file_worker._cancelled
         self._file_worker = None
         self._file_transcribe_btn.configure(state=tk.NORMAL)
+        self._file_cancel_btn.configure(state=tk.DISABLED)
         self._file_model_combo.configure(state="readonly")
         self._file_lang_combo.configure(state="readonly")
+        self._file_start_time = None
+        self._file_time_label.configure(text="")
+        if was_cancelled:
+            self._file_status_label.configure(
+                text="Transcription cancelled.", foreground=""
+            )
+            self._file_progress["value"] = 0
+            self._refresh_file_workflow()
+            return
         if self._file_seg_count > 0:
             self._last_transcript_path = self._auto_save_transcript()
             self._persist_gui_settings()

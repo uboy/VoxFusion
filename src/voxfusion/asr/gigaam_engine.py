@@ -57,7 +57,10 @@ class GigaAMCTCEngine:
             from transformers import AutoProcessor
         except ImportError as exc:
             raise ModelLoadError(
-                "GigaAM backend requires optimum[onnxruntime] and transformers."
+                "GigaAM requires optimum[onnxruntime] and transformers. "
+                "Install them with:\n"
+                "  pip install \"optimum[onnxruntime]\" transformers onnxruntime\n"
+                "or run: poetry install"
             ) from exc
 
         try:
