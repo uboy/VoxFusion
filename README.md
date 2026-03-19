@@ -19,6 +19,59 @@ The default install now includes runtime dependencies for the built-in Whisper p
 
 Optional backends are exposed when their Python packages are present, but actual transcription still depends on model artifacts being available locally or downloadable from Hugging Face / NeMo. `GigaAM`, `Breeze`, and `Parakeet` remain file-transcription-only backends.
 
+## Install all dependencies
+
+### Recommended: Poetry
+
+Install everything needed for local development, tests, GUI, binary builds, and all currently supported ASR backends:
+
+```bash
+pip install poetry
+poetry install --extras parakeet
+```
+
+Run commands inside the same environment:
+
+```bash
+poetry run voxfusion --help
+poetry run python scripts/build_binaries.py --target all
+```
+
+### pip / venv
+
+If you do not use Poetry, install into your current virtual environment:
+
+```bash
+python -m pip install --upgrade pip
+
+# Windows
+python -m pip install -e .[windows,parakeet]
+
+# Linux
+python -m pip install -e .[linux,parakeet]
+
+# macOS
+python -m pip install -e .[macos,parakeet]
+```
+
+### What this includes
+
+- Whisper / faster-whisper backends
+- GigaAM v3 backend
+- Breeze ASR backend
+- Parakeet v3 backend
+- GUI runtime dependencies
+- PyInstaller for binary builds when using Poetry dev dependencies
+
+### Quick dependency check
+
+```bash
+python -c "import faster_whisper, transformers, torch; print('core backends ok')"
+python -c "from nemo.collections.asr.models import ASRModel; print('parakeet ok')"
+```
+
+If the second command fails, Parakeet support is not installed in the current environment.
+
 To also install PyInstaller for binary builds:
 ```bash
 # Poetry (included automatically in dev group)
