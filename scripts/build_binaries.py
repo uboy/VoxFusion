@@ -176,11 +176,17 @@ def _collect_all_packages() -> list[str]:
     # Always needed: pyaudiowpatch ships native DLLs that must be collected.
     candidates = ["pyaudiowpatch"]
 
-    # GigaAM backend: bundle tokenizer config JSONs, vocab files, etc.
-    # Only included when the user has installed the `gigaam` extra (transformers + torch).
+    # PyTorch: native DLLs must be collected for GigaAM/Breeze to work in the frozen bundle.
+    if _is_installed("torch"):
+        candidates.append("torch")
+        print("[deps] --collect-all torch  (installed — PyTorch backend active)")
+    else:
+        print("[deps] skipping --collect-all torch  (not installed — no PyTorch support)")
+
+    # GigaAM/Breeze backend: bundle tokenizer config JSONs, vocab files, etc.
     if _is_installed("transformers"):
         candidates.append("transformers")
-        print("[deps] --collect-all transformers  (installed — GigaAM backend active)")
+        print("[deps] --collect-all transformers  (installed — GigaAM/Breeze backend active)")
     else:
         print("[deps] skipping --collect-all transformers  (not installed — Whisper-only build)")
 
@@ -223,7 +229,8 @@ def _hidden_imports() -> list[str]:
 
     # Optional: engine-specific imports — only bundled when actually installed.
     optional: dict[str, list[str]] = {
-        "transformers": ["transformers"],   # GigaAM backend
+        "torch": ["torch", "torch.nn", "torch.nn.functional"],  # PyTorch — GigaAM/Breeze
+        "transformers": ["transformers"],   # GigaAM/Breeze backend
         "scipy": ["scipy", "scipy.signal"],
         "nemo": ["nemo.collections.asr"],   # Parakeet backend
     }

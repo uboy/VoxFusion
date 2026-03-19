@@ -98,13 +98,22 @@ def test_file_transcribe_clears_table_on_start(tmp_path: Path) -> None:
     gui._file_model_var = MagicMock(**{"get.return_value": "small"})
     gui._file_lang_var = MagicMock(**{"get.return_value": "Auto"})
     gui._file_transcribe_btn = MagicMock()
+    gui._file_cancel_btn = MagicMock()
     gui._file_model_combo = MagicMock()
     gui._file_lang_combo = MagicMock()
+    gui._file_quality_combo = MagicMock()
+    gui._file_quality_var = MagicMock(**{"get.return_value": "Balanced"})
     gui._file_progress = MagicMock()
+    gui._file_time_label = MagicMock()
     gui._last_transcript_path = None
+    gui._file_start_time = 0.0
+    gui._file_current_progress = 0.0
+    gui._file_progress_samples = []
     gui._file_status_label = MagicMock()
     gui._file_seg_count = 7  # stale data from a previous run
     gui._refresh_file_workflow = MagicMock()
+    gui._tick_file_timer = MagicMock()
+    gui.root = MagicMock()
     gui._language_code_for_label = lambda label, model: None
 
     cleared: list[bool] = []

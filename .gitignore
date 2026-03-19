@@ -60,6 +60,9 @@ transcription_*.vtt
 # User data directory
 .voxfusion/
 .agent-memory/
+.scratchpad/
+gui_settings.json
+coordination/reviews/
 
 # Logs
 *.log

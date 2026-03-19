@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import queue
 import sys
 import textwrap
 import threading
@@ -129,9 +130,11 @@ class TranscriptionGUI:
         # File tab state
         self._file_worker: FileTranscribeWorker | None = None
         self._file_path_var = tk.StringVar()
-        self._file_model_var = tk.StringVar(value=initial_model)
+        _available_ids = {m.id for m in get_available_model_catalog()}
+        _file_default = "gigaam-v3-e2e-ctc" if "gigaam-v3-e2e-ctc" in _available_ids else initial_model
+        self._file_model_var = tk.StringVar(value=_file_default)
         self._file_lang_var = tk.StringVar(
-            value=self._language_label_for_code(options.language, initial_model)
+            value=self._language_label_for_code(options.language, _file_default)
         )
         self._file_quality_var = tk.StringVar(value="Balanced")
         self._file_seg_count = 0
@@ -443,6 +446,11 @@ class TranscriptionGUI:
             values=list(QUALITY_PRESET_LABELS),
         )
         self._file_quality_combo.pack(side=tk.LEFT, padx=(0, 16))
+
+        self._file_download_btn = ttk.Button(
+            opts, text="↓ Download", command=self._download_file_model
+        )
+        self._file_download_btn.pack(side=tk.LEFT, padx=(0, 12))
 
         self._file_transcribe_btn = ttk.Button(
             opts, text="Transcribe", command=self._start_file_transcribe, style="Accent.TButton"
@@ -1055,6 +1063,14 @@ class TranscriptionGUI:
         if saved_quality in QUALITY_PRESET_LABELS:
             self._file_quality_var.set(saved_quality)
 
+        saved_file_model = settings.get("file_model", "")
+        _avail = {m.id for m in get_available_model_catalog()}
+        if saved_file_model and saved_file_model in _avail:
+            self._file_model_var.set(saved_file_model)
+            saved_file_lang = settings.get("file_language", "")
+            if saved_file_lang:
+                self._file_lang_var.set(saved_file_lang)
+
     def _persist_gui_settings(self) -> None:
         _save_gui_settings(
             {
@@ -1075,6 +1091,9 @@ class TranscriptionGUI:
                 "hf_token": self._hf_token_var.get().strip(),
                 # Transcription quality
                 "file_quality": self._file_quality_var.get(),
+                # File transcription model/language
+                "file_model": self._file_model_var.get().strip(),
+                "file_language": self._file_lang_var.get().strip(),
             }
         )
 
@@ -1111,20 +1130,28 @@ class TranscriptionGUI:
         self._llm_model_refreshing = True
         self._llm_status_label.configure(text="Loading models from Open WebUI...")
         self._persist_gui_settings()
+        base_url = self._llm_url_var.get().strip() or DEFAULT_BASE_URL
+        api_key = self._llm_key_var.get().strip()
+        result_q: queue.Queue[tuple[list[str], str | None]] = queue.Queue()
+
+        def _poll() -> None:
+            try:
+                models, error = result_q.get_nowait()
+            except queue.Empty:
+                with suppress(tk.TclError, RuntimeError):
+                    self.root.after(100, _poll)
+                return
+            self._on_llm_models_loaded(models, error)
 
         def _run() -> None:
             try:
-                models = asyncio.run(
-                    fetch_models(
-                        base_url=self._llm_url_var.get().strip() or DEFAULT_BASE_URL,
-                        api_key=self._llm_key_var.get().strip(),
-                    )
-                )
-                self.root.after(0, self._on_llm_models_loaded, models, None)
+                models = asyncio.run(fetch_models(base_url=base_url, api_key=api_key))
+                result_q.put((models, None))
             except Exception as exc:  # pragma: no cover
-                self.root.after(0, self._on_llm_models_loaded, [], str(exc))
+                result_q.put(([], str(exc)))
 
         threading.Thread(target=_run, daemon=True).start()
+        self.root.after(100, _poll)
 
     def _on_llm_models_loaded(self, models: list[str], error: str | None) -> None:
         self._llm_model_refreshing = False
@@ -1595,6 +1622,68 @@ class TranscriptionGUI:
             self._file_cancel_btn.configure(state=tk.DISABLED)
             self._file_status_label.configure(text="Cancelling...", foreground="")
             self._file_worker.cancel()
+
+    def _download_file_model(self) -> None:
+        """Download the currently selected file-transcription model in a background thread."""
+        model_id = self._file_model_var.get() or "small"
+        model_info = get_model_info(model_id)
+
+        self._file_download_btn.configure(state=tk.DISABLED)
+        self._file_status_label.configure(
+            text=f"Downloading {model_info.name}…", foreground=""
+        )
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self._append_log_line(f"{timestamp} | DOWNLOAD | Starting download of {model_info.name}…\n")
+
+        result_q: queue.Queue[Exception | None] = queue.Queue()
+
+        def _on_done(error: Exception | None) -> None:
+            self._file_download_btn.configure(state=tk.NORMAL)
+            ts = datetime.now().strftime("%H:%M:%S")
+            if error:
+                msg = f"Download failed: {error}"
+                self._file_status_label.configure(text=msg, foreground="red")
+                self._append_log_line(f"{ts} | DOWNLOAD ERROR | {error}\n")
+            else:
+                msg = f"{model_info.name} downloaded successfully."
+                self._file_status_label.configure(text=msg, foreground="")
+                self._append_log_line(f"{ts} | DOWNLOAD | {model_info.name} ready.\n")
+
+        def _poll() -> None:
+            try:
+                error = result_q.get_nowait()
+            except queue.Empty:
+                self.root.after(100, _poll)
+                return
+            _on_done(error)
+
+        def _run() -> None:
+            try:
+                if model_info.engine == "gigaam":
+                    import os
+                    from transformers import AutoModel
+                    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+                    AutoModel.from_pretrained(
+                        "ai-sage/GigaAM-v3", trust_remote_code=True, token=token
+                    )
+                elif model_info.engine == "breeze":
+                    from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+                    ref = "MediaTek-Research/Breeze-ASR-25"
+                    AutoProcessor.from_pretrained(ref)
+                    AutoModelForSpeechSeq2Seq.from_pretrained(ref)
+                elif model_info.engine == "parakeet":
+                    from nemo.collections.asr.models import ASRModel
+                    ASRModel.from_pretrained(model_name="nvidia/parakeet-tdt-0.6b-v3")
+                else:
+                    # faster-whisper downloads on first use; trigger it here explicitly
+                    from faster_whisper import WhisperModel
+                    WhisperModel(model_info.id, device="cpu", compute_type="int8")
+                result_q.put(None)
+            except Exception as exc:
+                result_q.put(exc)
+
+        threading.Thread(target=_run, daemon=True).start()
+        self.root.after(100, _poll)
 
     def _tick_file_timer(self) -> None:
         if self._file_worker is None or self._file_start_time is None:

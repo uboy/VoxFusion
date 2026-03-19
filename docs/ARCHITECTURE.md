@@ -582,6 +582,20 @@ def create_capture_source(
 
 ## 6. ASR Integration Strategy
 
+### Current Implementation Notes
+
+- `faster-whisper` remains the default backend for live capture and general-purpose transcription.
+- `GigaAM v3`, `Breeze ASR`, and `Parakeet v3` are integrated as batch/file-only engines. The GUI and CLI guard live capture against these models.
+- Backend visibility in the GUI is dependency-driven, not cache-driven:
+  - if the required Python package is importable, the model appears as selectable;
+  - actual transcription still requires model weights/artifacts to be present locally or downloadable at runtime.
+- Model download flows are backend-specific:
+  - Whisper: first-use download via `faster-whisper`
+  - GigaAM: Hugging Face `AutoModel.from_pretrained("ai-sage/GigaAM-v3", trust_remote_code=True)`
+  - Breeze: `AutoProcessor` + `AutoModelForSpeechSeq2Seq`
+  - Parakeet: `nemo.collections.asr.models.ASRModel.from_pretrained(...)`
+- Verified limitation: optional backend routing and GUI/CLI integration are covered by unit/integration tests, but true end-to-end transcription still depends on local model availability and platform/runtime prerequisites.
+
 ### 6.1 Primary Engine: faster-whisper
 
 **Why faster-whisper**:
@@ -1109,6 +1123,26 @@ Configuration is resolved in the following order (later overrides earlier):
 ### 11.2 Configuration Schema
 
 Configuration is defined using Pydantic models for validation and serialization.
+
+### Runtime-Persisted GUI State
+
+- GUI-specific user state is persisted separately from the Pydantic config tree.
+- Current default location: `~/.voxfusion/gui_settings.json`
+- Supported override: `VOXFUSION_GUI_SETTINGS_PATH`
+- Persisted fields include:
+  - Open WebUI endpoint/model settings
+  - last recorded file / transcript path
+  - selected file-transcription model and language
+  - quality preset and Hugging Face token
+
+### Current Operational Constraints
+
+- Persisted GUI settings can override first-launch defaults for the file-transcription tab.
+- File-transcription model availability means "runtime dependency is present", not "weights are already cached locally".
+- Real end-to-end verification for Hugging Face / NeMo backends must account for:
+  - network access or pre-cached artifacts,
+  - provider-specific auth/license gates,
+  - platform-specific audio/display availability for GUI flows.
 
 ```python
 from pydantic import BaseModel, Field

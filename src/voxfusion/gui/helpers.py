@@ -56,10 +56,14 @@ def models_dir() -> Path:
 def gui_settings_path() -> Path:
     """Return the persistent GUI settings file path.
 
-    - PyInstaller bundle: next to the ``.exe``
-    - Python script: project root
+    Prefers an explicit override via ``VOXFUSION_GUI_SETTINGS_PATH``.
+    Otherwise stores settings in a user-scoped directory to avoid
+    polluting the repo/worktree during development.
     """
-    return app_base_dir() / "gui_settings.json"
+    override = os.environ.get("VOXFUSION_GUI_SETTINGS_PATH", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".voxfusion" / "gui_settings.json"
 
 
 def load_gui_settings(path: Path | None = None) -> dict[str, str]:

@@ -49,29 +49,58 @@ def models_download(
 
     if asr_model:
         click.echo(f"Downloading ASR model: {asr_model}")
-        if asr_model == "gigaam-v3-e2e-ctc":
+        if asr_model in ("gigaam-v3-e2e-ctc", "gigaam"):
             try:
-                from optimum.onnxruntime import ORTModelForCTC
-                from transformers import AutoProcessor
-
-                ref = "ai-forever/gigaam-v3-e2e-ctc"
-                click.echo("  Downloading GigaAM processor...")
-                AutoProcessor.from_pretrained(ref)
-                click.echo("  Downloading GigaAM ONNX model...")
-                ORTModelForCTC.from_pretrained(ref, provider="CPUExecutionProvider")
-                echo_success(f"  GigaAM model '{asr_model}' ready.")
+                from transformers import AutoModel
             except ImportError:
                 raise click.ClickException(
-                    "GigaAM requires optimum[onnxruntime] and transformers. "
-                    "Install with: pip install 'optimum[onnxruntime]' transformers"
+                    "GigaAM requires the 'transformers' and 'torch' packages.\n"
+                    "Install with: pip install transformers torch"
                 )
+            try:
+                import os
+                token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+                click.echo("  Downloading ai-sage/GigaAM-v3 from HuggingFace...")
+                click.echo("  This may take several minutes (~1.5 GB)...")
+                AutoModel.from_pretrained("ai-sage/GigaAM-v3", trust_remote_code=True, token=token)
+                echo_success("  GigaAM v3 model ready.")
             except Exception as exc:
                 raise click.ClickException(f"Failed to download GigaAM model: {exc}") from exc
+        elif asr_model == "breeze-asr":
+            try:
+                from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+            except ImportError:
+                raise click.ClickException(
+                    "Breeze requires the 'transformers' and 'torch' packages.\n"
+                    "Install with: pip install transformers torch"
+                )
+            try:
+                ref = "MediaTek-Research/Breeze-ASR-25"
+                click.echo(f"  Downloading {ref} from HuggingFace...")
+                AutoProcessor.from_pretrained(ref)
+                AutoModelForSpeechSeq2Seq.from_pretrained(ref)
+                echo_success("  Breeze ASR model ready.")
+            except Exception as exc:
+                raise click.ClickException(f"Failed to download Breeze model: {exc}") from exc
+        elif asr_model == "parakeet-tdt-0.6b-v3":
+            try:
+                from nemo.collections.asr.models import ASRModel
+            except ImportError:
+                raise click.ClickException(
+                    "Parakeet requires the NeMo ASR toolkit.\n"
+                    'Install with: pip install "nemo_toolkit[asr]" torchaudio'
+                )
+            try:
+                click.echo("  Downloading nvidia/parakeet-tdt-0.6b-v3 via NeMo...")
+                ASRModel.from_pretrained(model_name="nvidia/parakeet-tdt-0.6b-v3")
+                echo_success("  Parakeet v3 model ready.")
+            except Exception as exc:
+                raise click.ClickException(f"Failed to download Parakeet model: {exc}") from exc
         else:
             try:
                 from faster_whisper import WhisperModel
 
-                click.echo("  Loading model (this may download it)...")
+                click.echo(f"  Loading model (this may download it)...")
                 WhisperModel(asr_model, device="cpu", compute_type="int8")
                 echo_success(f"  ASR model '{asr_model}' ready.")
             except ImportError:

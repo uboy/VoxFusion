@@ -170,6 +170,7 @@ markers = [
     "integration: marks tests that require models or external resources",
     "platform: marks tests that are platform-specific",
     "slow: marks tests that take > 5 seconds",
+    "download: marks tests that actively download models from the internet",
 ]
 filterwarnings = [
     "ignore::DeprecationWarning",
