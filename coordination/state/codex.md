@@ -157,3 +157,47 @@
   - `.\venv\Scripts\python.exe -m pytest tests\unit tests\integration\test_gui_smoke.py -q` -> pass (171 passed)
 - Remaining limitation:
   - no real local GigaAM model/tokenizer artifact was available in project scope, so backend was verified through routing/tests/fakes rather than a true audio-to-text run with the actual model.
+
+2026-03-19
+
+- Task type: non-trivial implementation audit and architecture/limitations capture.
+- Startup ritual:
+  - `coordination/tasks.jsonl` checked; no prior in-progress codex task was present.
+  - `coordination/state/codex.md` resumed successfully.
+  - `%USERPROFILE%/AGENTS-cold.md` loaded for startup/session rules.
+- Policy observations:
+  - `policy/team-lead-orchestrator.md` is referenced by project policy but missing in the repo.
+  - `coordination/templates/` is also referenced by project policy but missing in the repo.
+- Scope for current audit:
+  - validate the current worktree implementation,
+  - confirm what is actually covered by tests,
+  - record architecture and explicit operational limitations.
+- Current worktree status before audit:
+  - modified: `pyproject.toml`, `scripts/build_binaries.py`, `src/voxfusion/asr_catalog.py`, `src/voxfusion/cli/models_cmd.py`, `src/voxfusion/gui/main.py`, `tests/unit/test_extra_asr_backends.py`, `tests/unit/test_gui_flow.py`
+  - untracked: `gui_settings.json`, `tests/integration/test_all_models_e2e.py`, `tests/integration/test_realworld_e2e.py`
+- Artifacts for this task:
+  - `.scratchpad/research.md`
+  - `.scratchpad/plan.md`
+- Current checkpoint:
+  - architecture document exists but may lag the latest model-catalog and multi-backend work,
+  - next step is targeted inspection of changed files plus verification commands, then doc/review updates.
+- Audit findings and fixes:
+  - integration failure root cause: GUI settings were loaded from the repo-root `gui_settings.json`, which made "first launch" behavior depend on workspace-local state.
+  - fix applied: GUI settings now default to `~/.voxfusion/gui_settings.json` and support override via `VOXFUSION_GUI_SETTINGS_PATH`.
+  - integration warning root cause: `_refresh_llm_models()` accessed Tk state and scheduled `root.after(...)` from a worker thread.
+  - fix applied: LLM model refresh now captures inputs on the main thread and uses a queue polled from the Tk thread.
+- Documentation updated:
+  - `README.md`
+  - `docs/ARCHITECTURE.md`
+- Remaining limitations explicitly documented:
+  - optional file-only backends are shown when runtime dependencies are present, not when model weights are already cached,
+  - true E2E verification for GigaAM/Breeze/Parakeet still depends on local artifacts/network/auth/display availability.
+- Verification:
+  - `.\venv\Scripts\python.exe -m pytest tests\unit\test_extra_asr_backends.py tests\unit\test_gui_flow.py -q` -> pass (19 passed)
+  - `.\venv\Scripts\python.exe -m pytest tests\integration\test_all_models_e2e.py -k "gui_can_select_model_in_file_tab or gui_file_tab_defaults_to_gigaam_when_available" -q` -> pass (5 passed, 1 skipped)
+  - `.\venv\Scripts\python.exe -m pytest tests\integration\test_realworld_e2e.py -k "recording_pipeline_writes_valid_wav or recording_pipeline_pause_resume or recording_pipeline_writes_ogg or gui_download_button_triggers_whisper_download_without_crash" -q` -> pass (4 passed)
+  - `git diff --check -- README.md docs\ARCHITECTURE.md src\voxfusion\gui\helpers.py src\voxfusion\gui\main.py coordination\tasks.jsonl coordination\state\codex.md .scratchpad\research.md .scratchpad\plan.md` -> pass (CRLF normalization warnings only)
+- Missing verification gate:
+  - `scripts/validate-review-report.ps1` and `scripts/validate-review-report.sh` are referenced by policy but do not exist in this repo, so review-report validation could not be executed.
+- Review artifact:
+  - `coordination/reviews/2026-03-19-implementation-audit.md`

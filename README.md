@@ -17,6 +17,8 @@ pip install -e .
 
 The default install now includes runtime dependencies for the built-in Whisper path plus file-only backends such as GigaAM, Breeze, and Parakeet. The first install is heavier because it pulls model runtimes like `torch`, `transformers`, `onnxruntime`, and NeMo ASR support.
 
+Optional backends are exposed when their Python packages are present, but actual transcription still depends on model artifacts being available locally or downloadable from Hugging Face / NeMo. `GigaAM`, `Breeze`, and `Parakeet` remain file-transcription-only backends.
+
 To also install PyInstaller for binary builds:
 ```bash
 # Poetry (included automatically in dev group)
@@ -90,6 +92,9 @@ See `docs/BINARY_BUILD.md` for packaging details and Windows notes.
 | `VOXFUSION_ASR__MODEL_PATH` | Path to local model directory (e.g. GigaAM) |
 | `VOXFUSION_ASR__LANGUAGE` | Force language code (e.g. `ru`, `en`) |
 | `VOXFUSION_DIARIZATION__HF_AUTH_TOKEN` | HuggingFace token for pyannote diarization |
+| `VOXFUSION_GUI_SETTINGS_PATH` | Override the GUI settings file location |
+
+GUI settings are persisted by default in `~/.voxfusion/gui_settings.json`.
 
 ## Docs
 

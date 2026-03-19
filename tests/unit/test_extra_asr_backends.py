@@ -138,7 +138,7 @@ def test_parakeet_engine_reports_missing_dependency_cleanly(monkeypatch: pytest.
 
     monkeypatch.setattr(builtins, "__import__", _fake_import)
     engine = ParakeetASREngine(ASRConfig(model_size="parakeet-tdt-0.6b-v3"))
-    with pytest.raises(ModelLoadError, match="nemo_toolkit\\['asr'\\]"):
+    with pytest.raises(ModelLoadError, match=r"nemo_toolkit\[asr\]"):
         engine.load_model()
     engine.close()
 
