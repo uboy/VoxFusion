@@ -1,9 +1,15 @@
 """Unit tests for ASR catalog metadata and compatibility helpers."""
 
+import importlib.util
+
+import pytest
+
 from voxfusion.asr_catalog import (
     get_language_code,
     get_language_label,
+    get_available_model_catalog,
     get_model_info,
+    is_model_available,
     list_languages_for_model,
     list_model_ids,
     normalize_language_for_model,
@@ -39,3 +45,33 @@ def test_language_label_and_code_roundtrip_for_supported_language() -> None:
     label = get_language_label("ru", "small")
     assert label == "Russian"
     assert get_language_code(label, "small") == "ru"
+
+
+def test_gigaam_requires_both_transformers_and_torch(monkeypatch: pytest.MonkeyPatch) -> None:
+    real_find_spec = importlib.util.find_spec
+
+    def _fake_find_spec(name: str):
+        if name == "transformers":
+            return object()
+        if name == "torch":
+            return None
+        return real_find_spec(name)
+
+    monkeypatch.setattr(importlib.util, "find_spec", _fake_find_spec)
+    assert is_model_available("gigaam-v3-e2e-ctc") is False
+
+
+def test_available_model_catalog_hides_backends_with_missing_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    real_find_spec = importlib.util.find_spec
+
+    def _fake_find_spec(name: str):
+        if name in {"transformers", "torch", "nemo"}:
+            return None
+        return real_find_spec(name)
+
+    monkeypatch.setattr(importlib.util, "find_spec", _fake_find_spec)
+    ids = {model.id for model in get_available_model_catalog()}
+    assert "small" in ids
+    assert "gigaam-v3-e2e-ctc" not in ids
+    assert "breeze-asr" not in ids
+    assert "parakeet-tdt-0.6b-v3" not in ids

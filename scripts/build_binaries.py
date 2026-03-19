@@ -255,8 +255,10 @@ def _install_dependencies() -> None:
     if platform.system().lower() == "windows":
         extras.append("windows")
 
-    # Try poetry first (handles version constraints best)
-    if shutil.which("poetry"):
+    # Only use poetry when the script itself is already running inside the
+    # poetry-managed environment. Otherwise `poetry install` may populate a
+    # different interpreter than the one that later runs PyInstaller.
+    if shutil.which("poetry") and os.environ.get("POETRY_ACTIVE") == "1":
         cmd = ["poetry", "install", "--no-interaction"]
         print(f"[deps] {' '.join(cmd)}")
         result = subprocess.run(cmd, cwd=PROJECT_ROOT)
@@ -264,6 +266,11 @@ def _install_dependencies() -> None:
             print("[deps] poetry install succeeded.")
             return
         print("[deps] poetry install failed — falling back to pip.")
+    elif shutil.which("poetry"):
+        print(
+            "[deps] poetry detected but this script is not running inside `poetry run`.\n"
+            "[deps] Installing into the current interpreter via pip to keep build/install environments aligned."
+        )
 
     # Fall back to pip install -e .
     extra_str = f"[{','.join(extras)}]" if extras else ""
