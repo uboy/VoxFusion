@@ -210,7 +210,15 @@ ASR_MODEL_CATALOG: tuple[ASRModelInfo, ...] = (
         supports_translation=False,
         supports_live_capture=False,
         recommended=True,
-        requires_packages=("transformers", "torch"),
+        requires_packages=(
+            "transformers",
+            "torch",
+            "torchaudio",
+            "sentencepiece",
+            "omegaconf",
+            "hydra",
+            "pyannote.audio",
+        ),
     ),
     ASRModelInfo(
         id="parakeet-tdt-0.6b-v3",

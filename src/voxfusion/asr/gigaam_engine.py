@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import tempfile
+import types
+import warnings
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
@@ -31,6 +34,74 @@ _CHUNK_DURATION_S = 24
 _OVERLAP_DURATION_S = 1
 _CHUNK_SAMPLES = _CHUNK_DURATION_S * _SAMPLE_RATE
 _OVERLAP_SAMPLES = _OVERLAP_DURATION_S * _SAMPLE_RATE
+
+
+def _prepare_huggingface_runtime_env() -> None:
+    """Normalize Hugging Face cache env vars without deprecated aliases."""
+    hf_home = os.environ.get("HF_HOME", "").strip()
+    if hf_home:
+        os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(Path(hf_home) / "hub"))
+    # Avoid transformers deprecation warning in GUI/binary mode.
+    os.environ.pop("TRANSFORMERS_CACHE", None)
+    warnings.filterwarnings(
+        "ignore",
+        message=".*TRANSFORMERS_CACHE.*deprecated.*",
+        category=FutureWarning,
+    )
+
+
+def _install_megatron_compat_shim() -> None:
+    """Provide a minimal Megatron shim for third-party imports expecting it."""
+    if "megatron.core.num_microbatches_calculator" in sys.modules:
+        return
+
+    megatron_mod = sys.modules.setdefault("megatron", types.ModuleType("megatron"))
+    core_mod = sys.modules.setdefault("megatron.core", types.ModuleType("megatron.core"))
+    calc_mod = types.ModuleType("megatron.core.num_microbatches_calculator")
+
+    def _return_one(*_args: object, **_kwargs: object) -> int:
+        return 1
+
+    calc_mod.get_num_microbatches = _return_one  # type: ignore[attr-defined]
+    calc_mod.update_num_microbatches = _return_one  # type: ignore[attr-defined]
+    calc_mod.reconfigure_num_microbatches_calculator = _return_one  # type: ignore[attr-defined]
+    calc_mod.destroy_num_microbatches_calculator = lambda: None  # type: ignore[attr-defined]
+
+    setattr(megatron_mod, "core", core_mod)
+    setattr(core_mod, "num_microbatches_calculator", calc_mod)
+    sys.modules["megatron.core.num_microbatches_calculator"] = calc_mod
+
+
+def _install_torchscript_source_fallback(torch_module: object) -> None:
+    """Fallback to eager objects when TorchScript cannot access source code."""
+    jit = getattr(torch_module, "jit", None)
+    if jit is None:
+        return
+    original_script = getattr(jit, "script", None)
+    if original_script is None or getattr(original_script, "_voxfusion_safe_wrapper", False):
+        return
+
+    def _safe_script(obj: object, *args: object, **kwargs: object) -> object:
+        try:
+            return original_script(obj, *args, **kwargs)
+        except (OSError, RuntimeError) as exc:
+            if "requires source access" not in str(exc).lower():
+                raise
+            log.warning("gigaam.torchscript_source_fallback", error=str(exc))
+            return obj
+
+    setattr(_safe_script, "_voxfusion_safe_wrapper", True)
+    jit.script = _safe_script  # type: ignore[assignment]
+
+
+def _prepare_gigaam_runtime() -> None:
+    _prepare_huggingface_runtime_env()
+    _install_megatron_compat_shim()
+    try:
+        import torch
+    except ImportError:
+        return
+    _install_torchscript_source_fallback(torch)
 
 
 class GigaAMCTCEngine:
@@ -62,15 +133,16 @@ class GigaAMCTCEngine:
         model_ref = self._model_ref()
         local_only = Path(model_ref).exists()
         log.info("asr.loading_model", model=model_ref, engine="gigaam", local_only=local_only)
+        _prepare_gigaam_runtime()
 
         try:
             from transformers import AutoModel
         except ImportError as exc:
             raise ModelLoadError(
-                "GigaAM requires the 'transformers' and 'torch' packages.\n"
+                "GigaAM requires these packages:\n"
+                "  transformers torch torchaudio sentencepiece omegaconf hydra-core pyannote.audio\n"
                 "Install them with:\n"
-                "  pip install transformers torch\n"
-                "or add the gigaam extra: poetry install --extras gigaam"
+                "  pip install transformers torch torchaudio sentencepiece omegaconf hydra-core pyannote.audio\n"
             ) from exc
 
         token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN") or None

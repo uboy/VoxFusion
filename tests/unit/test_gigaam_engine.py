@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import types
 
@@ -9,7 +10,12 @@ import numpy as np
 import pytest
 
 from voxfusion.asr.factory import create_asr_engine
-from voxfusion.asr.gigaam_engine import GigaAMCTCEngine
+from voxfusion.asr.gigaam_engine import (
+    GigaAMCTCEngine,
+    _install_megatron_compat_shim,
+    _install_torchscript_source_fallback,
+    _prepare_huggingface_runtime_env,
+)
 from voxfusion.config.models import ASRConfig
 from voxfusion.models.audio import AudioChunk
 
@@ -73,3 +79,38 @@ def test_gigaam_normalize_audio_flattens_deep_arrays() -> None:
     assert normalized.ndim == 1
     assert normalized.shape[0] == 8
     engine.close()
+
+
+def test_prepare_huggingface_runtime_env_removes_deprecated_transformers_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HF_HOME", "C:/hf-home")
+    monkeypatch.setenv("TRANSFORMERS_CACHE", "C:/old-cache")
+
+    _prepare_huggingface_runtime_env()
+
+    assert os.environ["HUGGINGFACE_HUB_CACHE"].endswith("hf-home\\hub") or os.environ["HUGGINGFACE_HUB_CACHE"].endswith("hf-home/hub")
+    assert "TRANSFORMERS_CACHE" not in os.environ
+
+
+def test_install_megatron_compat_shim_registers_num_microbatches_module() -> None:
+    sys.modules.pop("megatron.core.num_microbatches_calculator", None)
+    sys.modules.pop("megatron.core", None)
+    sys.modules.pop("megatron", None)
+
+    _install_megatron_compat_shim()
+
+    mod = sys.modules["megatron.core.num_microbatches_calculator"]
+    assert mod.get_num_microbatches() == 1
+
+
+def test_install_torchscript_source_fallback_returns_original_object_on_source_error() -> None:
+    class _FakeJit:
+        def script(self, obj, *args, **kwargs):
+            del args, kwargs
+            raise RuntimeError(f"Can't get source for {obj}. TorchScript requires source access in order to carry out compilation")
+
+    fake_torch = types.SimpleNamespace(jit=_FakeJit())
+    _install_torchscript_source_fallback(fake_torch)
+    marker = object()
+    assert fake_torch.jit.script(marker) is marker

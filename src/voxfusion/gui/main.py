@@ -2011,7 +2011,7 @@ def main(argv: list[str] | None = None) -> int:
     _hf_home = str(models_dir())
     os.environ.setdefault("HF_HOME", _hf_home)
     os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(models_dir() / "hub"))
-    os.environ.setdefault("TRANSFORMERS_CACHE", str(models_dir() / "hub"))
+    os.environ.pop("TRANSFORMERS_CACHE", None)
 
     options = CaptureOptions(
         model=args.model,
