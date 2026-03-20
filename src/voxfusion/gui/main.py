@@ -1667,10 +1667,17 @@ class TranscriptionGUI:
                         "ai-sage/GigaAM-v3", trust_remote_code=True, token=token
                     )
                 elif model_info.engine == "breeze":
-                    from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
-                    ref = "MediaTek-Research/Breeze-ASR-25"
-                    AutoProcessor.from_pretrained(ref)
-                    AutoModelForSpeechSeq2Seq.from_pretrained(ref)
+                    from huggingface_hub import snapshot_download
+                    snapshot_download(
+                        "MediaTek-Research/Breeze-ASR-25",
+                        ignore_patterns=[
+                            "optimizer.bin",
+                            "scheduler.bin",
+                            "random_states_*.pkl",
+                            "*.png",
+                            "*.pt",
+                        ],
+                    )
                 elif model_info.engine == "parakeet":
                     from nemo.collections.asr.models import ASRModel
                     ASRModel.from_pretrained(model_name="nvidia/parakeet-tdt-0.6b-v3")

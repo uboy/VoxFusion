@@ -53,6 +53,17 @@ class ParakeetASREngine:
         local_path = Path(model_ref)
         log.info("asr.loading_model", model=model_ref, engine="parakeet", local_only=local_path.exists())
         try:
+            import torch as _torch
+            from voxfusion.asr.gigaam_engine import (
+                _install_torchscript_source_fallback,
+                _suppress_subprocess_windows,
+            )
+            _suppress_subprocess_windows()
+            _install_torchscript_source_fallback(_torch)
+        except Exception:
+            pass
+
+        try:
             from nemo.collections.asr.models import ASRModel
         except ImportError as exc:
             raise ModelLoadError(

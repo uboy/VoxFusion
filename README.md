@@ -1,156 +1,170 @@
 # VoxFusion
 
-VoxFusion captures any system audio — mic input, calls, music, browser or app playback — and turns it into high-quality speech transcriptions with speaker diarization and automatic translation. Built for Windows, macOS and Linux.
+Cross-platform audio capture and transcription. Records any audio — microphone, system playback, calls, browser tabs — and produces text transcriptions with speaker diarization and optional translation.
+
+Runs on Windows, macOS, and Linux. Comes with a GUI and a CLI.
+
+## Features
+
+- **Live transcription** — real-time speech-to-text from mic, system audio, or both simultaneously
+- **File transcription** — WAV, FLAC, and (with FFmpeg) MP3, MP4, MKV, AAC, and more
+- **Multiple ASR backends**
+  - Whisper via faster-whisper — live and file, 99 languages
+  - GigaAM v3 — best accuracy for Russian, file only
+  - Breeze ASR — Whisper-based multilingual, file only
+  - Parakeet v3 — 25 European languages incl. Russian/Ukrainian, file only
+  - OpenVINO Whisper — automatic when Intel Iris Xe / Arc GPU is detected
+- **Speaker diarization** — identifies who said what (pyannote.audio or channel-based)
+- **Offline translation** — no API keys required (Argos Translate)
+- **Output formats** — JSON, SRT, VTT, plain text
+- **GUI** — multi-step workflow: record → transcribe → send to LLM (Open WebUI compatible)
+- **CLI** — scriptable, composable subcommands
+- **Binary builds** — self-contained executables via PyInstaller
+
+## Requirements
+
+- Python 3.11+
+- FFmpeg (optional — needed only for video and compressed audio files)
+
+## Quick start
+
+**Run (GUI):**
+
+```bash
+# bash / macOS / Linux
+pip install poetry && poetry install && poetry run voxfusion-gui
+```
+
+```powershell
+# PowerShell (Windows)
+pip install poetry; poetry install; poetry run voxfusion-gui
+```
+
+**Build standalone binary (GUI):**
+
+```bash
+# bash
+pip install poetry && poetry install && poetry run python scripts/build_binaries.py --target gui --skip-install
+```
+
+```powershell
+# PowerShell (Windows)
+pip install poetry; poetry install; poetry run python scripts/build_binaries.py --target gui --skip-install
+```
 
 ## Installation
 
-**Requires Python 3.11+**
+### Poetry
 
 ```bash
-# With Poetry (recommended — installs all deps including dev tools)
 pip install poetry
 poetry install
-
-# Or with pip directly
-pip install -e .
 ```
 
-The default install now includes runtime dependencies for the built-in Whisper path plus file-only backends such as GigaAM, Breeze, and Parakeet. The first install is heavier because it pulls model runtimes like `torch`, `transformers`, `onnxruntime`, and NeMo ASR support.
-
-Optional backends are exposed when their Python packages are present, but actual transcription still depends on model artifacts being available locally or downloadable from Hugging Face / NeMo. `GigaAM`, `Breeze`, and `Parakeet` remain file-transcription-only backends.
-
-## Install all dependencies
-
-### Recommended: Poetry
-
-Install everything needed for local development, tests, GUI, binary builds, and all currently supported ASR backends:
+To add optional ASR backends:
 
 ```bash
-pip install poetry
-poetry install --extras parakeet
-```
-
-Run commands inside the same environment:
-
-```bash
-poetry run voxfusion --help
-poetry run python scripts/build_binaries.py --target all
+poetry install --extras gigaam      # GigaAM v3 (Russian)
+poetry install --extras parakeet    # Parakeet v3 (25 languages, ~2 GB)
 ```
 
 ### pip / venv
 
-If you do not use Poetry, install into your current virtual environment:
-
 ```bash
-python -m pip install --upgrade pip
+pip install -e .                          # Windows
+pip install -e .[linux]                   # Linux
+pip install -e .[macos]                   # macOS
 
-# Windows
-python -m pip install -e .[windows,parakeet]
-
-# Linux
-python -m pip install -e .[linux,parakeet]
-
-# macOS
-python -m pip install -e .[macos,parakeet]
+pip install -e .[gigaam]                  # + GigaAM backend
+pip install -e .[linux,gigaam,parakeet]   # multiple extras
 ```
 
-### What this includes
+Available extras: `gigaam`, `parakeet`, `diarization`, `translation-offline`, `audio-quality`, `noise-reduction`, `security`, `linux`, `macos`.
 
-- Whisper / faster-whisper backends
-- GigaAM v3 backend
-- Breeze ASR backend
-- Parakeet v3 backend
-- GUI runtime dependencies
-- PyInstaller for binary builds when using Poetry dev dependencies
+### FFmpeg
 
-### Quick dependency check
+Required for transcribing video files and compressed audio (MP3, MP4, MKV, AAC…). WAV and FLAC work without it.
 
-```bash
-python -c "import faster_whisper, transformers, torch; print('core backends ok')"
-python -c "from nemo.collections.asr.models import ASRModel; print('parakeet ok')"
-```
+- **Windows:** download from [gyan.dev/ffmpeg/builds](https://www.gyan.dev/ffmpeg/builds/) and add to PATH
+- **Linux:** `sudo apt install ffmpeg`
+- **macOS:** `brew install ffmpeg`
 
-If the second command fails, Parakeet support is not installed in the current environment.
-
-To also install PyInstaller for binary builds:
-```bash
-# Poetry (included automatically in dev group)
-poetry install
-
-# pip
-pip install pyinstaller
-```
-
-## Run
+## Running
 
 ```bash
 # GUI
 voxfusion-gui
-# or: python -m voxfusion.gui.main
+python -m voxfusion.gui.main
 
-# CLI help
+# CLI
 voxfusion --help
-# or: python -m voxfusion --help
 ```
 
-## Common commands
+## CLI usage
 
 ```bash
-# Live transcription (mic)
+# Live transcription from microphone
 voxfusion capture
 
-# Live transcription (mic + system audio)
+# Live transcription from mic + system audio simultaneously
 voxfusion capture --source both
 
-# Raw audio recording to WAV (no transcription)
+# Record to WAV without transcription
 voxfusion record --source microphone --output recording.wav
 
-# Batch transcription from file
-voxfusion transcribe recording.wav --output-format json
-
-# Download ASR model
-voxfusion models download --asr small
-voxfusion models download --asr gigaam-v3-e2e-ctc
+# Transcribe a file
+voxfusion transcribe recording.wav
+voxfusion transcribe recording.wav --output-format srt
+voxfusion transcribe interview.mp4 --output-format json   # requires FFmpeg
 
 # List audio devices
 voxfusion devices
-
-# Record Windows system audio from an explicit loopback device
 voxfusion devices --type loopback
+
+# Record Windows system audio via explicit loopback device
 voxfusion record --source system --device pa:3 --output system.wav
+
+# Download ASR model
+voxfusion models download --asr large-v3
+voxfusion models download --asr gigaam-v3-e2e-ctc
 ```
 
-On Windows, `voxfusion devices` now prints explicit device ids such as `pa:3` (PyAudioWPatch loopback) and `sd:7` (sounddevice/WASAPI). For system-audio capture, `pa:*` devices are the preferred path.
+On Windows, `voxfusion devices` prints device IDs like `pa:3` (PyAudioWPatch loopback) and `sd:7` (WASAPI). Use `pa:*` IDs for system-audio capture.
 
 ## Build binaries
 
+Produces self-contained `--onedir` bundles and ZIP archives under `dist/binaries/`.
+
 ```bash
-# Install PyInstaller first if using pip (not Poetry)
-pip install pyinstaller
-
-# Build GUI + CLI + ZIP archives
-python scripts/build_binaries.py --target all
-
-# GUI only
-python scripts/build_binaries.py --target gui
+python scripts/build_binaries.py --target gui   # GUI only
+python scripts/build_binaries.py --target cli   # CLI only
+python scripts/build_binaries.py --target all   # both + ZIPs
 ```
 
-See `docs/BINARY_BUILD.md` for packaging details and Windows notes.
+PyInstaller is included in Poetry dev dependencies. For pip installs: `pip install pyinstaller` first.
 
-## Environment variables
+See `docs/BINARY_BUILD.md` for platform-specific packaging notes.
+
+## Configuration
+
+All settings can be set via environment variables (prefix `VOXFUSION_`, double underscore for nesting) or a YAML config file.
 
 | Variable | Description |
 |---|---|
-| `VOXFUSION_ASR__MODEL_SIZE` | ASR model (tiny, small, medium, large-v3) |
-| `VOXFUSION_ASR__MODEL_PATH` | Path to local model directory (e.g. GigaAM) |
-| `VOXFUSION_ASR__LANGUAGE` | Force language code (e.g. `ru`, `en`) |
-| `VOXFUSION_DIARIZATION__HF_AUTH_TOKEN` | HuggingFace token for pyannote diarization |
-| `VOXFUSION_GUI_SETTINGS_PATH` | Override the GUI settings file location |
+| `VOXFUSION_ASR__MODEL_SIZE` | ASR model: `tiny`, `small`, `medium`, `large-v3`, `gigaam-v3-e2e-ctc` |
+| `VOXFUSION_ASR__MODEL_PATH` | Path to a local model directory |
+| `VOXFUSION_ASR__LANGUAGE` | Force language code, e.g. `ru`, `en` |
+| `VOXFUSION_DIARIZATION__HF_AUTH_TOKEN` | HuggingFace token for pyannote diarization models |
+| `VOXFUSION_GUI_SETTINGS_PATH` | Override GUI settings file location |
 
-GUI settings are persisted by default in `~/.voxfusion/gui_settings.json`.
+GUI settings persist to `~/.voxfusion/gui_settings.json`.
 
 ## Docs
 
-- `docs/ARCHITECTURE.md` — full architecture document
-- `docs/BINARY_BUILD.md` — packaging and Windows notes
-- `docs/QUICK_START_RU.md` — quick start guide (Russian)
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — pipeline design, module interfaces, ADRs
+- [`docs/BINARY_BUILD.md`](docs/BINARY_BUILD.md) — binary packaging and Windows notes
+- [`docs/QUICK_START_RU.md`](docs/QUICK_START_RU.md) — quick start guide in Russian
+
+## License
+
+GPLv2. All contributions and derivative works must remain open-source under the same license.
