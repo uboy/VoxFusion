@@ -68,17 +68,25 @@ def models_download(
                 raise click.ClickException(f"Failed to download GigaAM model: {exc}") from exc
         elif asr_model == "breeze-asr":
             try:
-                from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+                from huggingface_hub import snapshot_download
             except ImportError:
                 raise click.ClickException(
-                    "Breeze requires the 'transformers' and 'torch' packages.\n"
-                    "Install with: pip install transformers torch"
+                    "huggingface_hub is required. Install with: pip install huggingface_hub"
                 )
             try:
                 ref = "MediaTek-Research/Breeze-ASR-25"
                 click.echo(f"  Downloading {ref} from HuggingFace...")
-                AutoProcessor.from_pretrained(ref)
-                AutoModelForSpeechSeq2Seq.from_pretrained(ref)
+                click.echo("  Skipping training artifacts (optimizer, scheduler, random states)...")
+                snapshot_download(
+                    ref,
+                    ignore_patterns=[
+                        "optimizer.bin",
+                        "scheduler.bin",
+                        "random_states_*.pkl",
+                        "*.png",
+                        "*.pt",
+                    ],
+                )
                 echo_success("  Breeze ASR model ready.")
             except Exception as exc:
                 raise click.ClickException(f"Failed to download Breeze model: {exc}") from exc

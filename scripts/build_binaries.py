@@ -230,7 +230,15 @@ def _hidden_imports() -> list[str]:
     # Optional: engine-specific imports — only bundled when actually installed.
     optional: dict[str, list[str]] = {
         "torch": ["torch", "torch.nn", "torch.nn.functional"],  # PyTorch — GigaAM/Breeze
-        "transformers": ["transformers"],   # GigaAM/Breeze backend
+        "transformers": [
+            "transformers",
+            # Breeze uses WhisperProcessor directly — explicit import avoids
+            # AutoProcessor auto-class resolution which fails in frozen binaries.
+            "transformers.models.whisper.processing_whisper",
+            "transformers.models.whisper.modeling_whisper",
+            "transformers.pipelines.automatic_speech_recognition",
+        ],
+        "huggingface_hub": ["huggingface_hub"],  # snapshot_download for model downloads
         "scipy": ["scipy", "scipy.signal"],
         "nemo": ["nemo.collections.asr"],   # Parakeet backend
     }

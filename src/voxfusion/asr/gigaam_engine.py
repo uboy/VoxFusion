@@ -94,9 +94,52 @@ def _install_torchscript_source_fallback(torch_module: object) -> None:
     jit.script = _safe_script  # type: ignore[assignment]
 
 
+def _suppress_subprocess_windows() -> None:
+    """Patch subprocess.Popen to suppress console flash in frozen Windows builds.
+
+    In a --windowed PyInstaller binary any subprocess spawned without
+    CREATE_NO_WINDOW briefly shows a console.  GigaAM's custom model code
+    uses torchaudio which may spawn external helpers (SoX fallback) on Windows.
+    This patch makes CREATE_NO_WINDOW the default for all subprocesses started
+    inside the frozen process.
+    """
+    if not (getattr(sys, "frozen", False) and sys.platform == "win32"):
+        return
+    import subprocess
+    _CREATE_NO_WINDOW = 0x08000000
+    _orig = subprocess.Popen.__init__
+    if getattr(_orig, "_voxfusion_no_window", False):
+        return
+
+    def _patched(self: object, *args: object, **kwargs: object) -> None:
+        if "creationflags" not in kwargs:
+            kwargs["creationflags"] = _CREATE_NO_WINDOW
+        _orig(self, *args, **kwargs)  # type: ignore[call-arg]
+
+    setattr(_patched, "_voxfusion_no_window", True)
+    subprocess.Popen.__init__ = _patched  # type: ignore[method-assign]
+
+
+def _force_torchaudio_soundfile_backend() -> None:
+    """Prefer soundfile over SoX for torchaudio audio I/O.
+
+    SoX is an external process; using it in a frozen binary causes a console
+    window flash on Windows for every audio file read.  soundfile is a pure
+    Python/C extension and works correctly in frozen builds.
+    """
+    try:
+        import torchaudio
+        if hasattr(torchaudio, "set_audio_backend"):
+            torchaudio.set_audio_backend("soundfile")
+    except Exception:
+        pass
+
+
 def _prepare_gigaam_runtime() -> None:
     _prepare_huggingface_runtime_env()
     _install_megatron_compat_shim()
+    _suppress_subprocess_windows()
+    _force_torchaudio_soundfile_backend()
     try:
         import torch
     except ImportError:
@@ -215,10 +258,29 @@ class GigaAMCTCEngine:
         model = self._ensure_model()
 
         try:
+            total_duration_s = len(audio) / _SAMPLE_RATE
+            total_chunks = max(1, -(-len(audio) // (_CHUNK_SAMPLES - _OVERLAP_SAMPLES)))
+            log.info(
+                "gigaam.transcribe_start",
+                duration_s=round(total_duration_s, 1),
+                chunks=total_chunks,
+            )
+
             parts: list[str] = []
             pos = 0
+            chunk_idx = 0
             while pos < len(audio):
+                chunk_idx += 1
                 chunk = audio[pos : pos + _CHUNK_SAMPLES]
+                chunk_start_s = round(pos / _SAMPLE_RATE, 1)
+                chunk_end_s = round(min(pos + _CHUNK_SAMPLES, len(audio)) / _SAMPLE_RATE, 1)
+                log.info(
+                    "gigaam.chunk_start",
+                    chunk=chunk_idx,
+                    of=total_chunks,
+                    start_s=chunk_start_s,
+                    end_s=chunk_end_s,
+                )
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                     tmp_path = f.name
                 try:
@@ -226,12 +288,16 @@ class GigaAMCTCEngine:
                     text = model.transcribe(tmp_path).strip()  # type: ignore[attr-defined]
                     if text:
                         parts.append(text)
+                        log.info("gigaam.chunk_done", chunk=chunk_idx, of=total_chunks, text=text[:80])
+                    else:
+                        log.info("gigaam.chunk_done", chunk=chunk_idx, of=total_chunks, text="(silence)")
                 finally:
                     with suppress(OSError):
                         os.unlink(tmp_path)
                 pos += _CHUNK_SAMPLES - _OVERLAP_SAMPLES
 
             text = " ".join(parts).strip()
+            log.info("gigaam.transcribe_done", chunks=chunk_idx, result_chars=len(text))
         except Exception as exc:
             raise TranscriptionError(f"GigaAM transcription failed: {exc}") from exc
 

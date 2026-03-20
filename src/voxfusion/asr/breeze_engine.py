@@ -54,7 +54,7 @@ class BreezeASREngine:
             import torch
             from transformers import (
                 AutoModelForSpeechSeq2Seq,
-                AutoProcessor,
+                WhisperProcessor,
                 pipeline,
             )
         except ImportError as exc:
@@ -64,7 +64,7 @@ class BreezeASREngine:
             ) from exc
 
         try:
-            processor = AutoProcessor.from_pretrained(model_ref, local_files_only=local_only)
+            processor = WhisperProcessor.from_pretrained(model_ref, local_files_only=local_only)
             model = AutoModelForSpeechSeq2Seq.from_pretrained(
                 model_ref,
                 local_files_only=local_only,
