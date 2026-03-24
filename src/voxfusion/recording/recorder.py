@@ -90,15 +90,18 @@ class AudioRecorder:
     def request_stop(self) -> None:
         """Stop recording after the current chunk."""
         self._stop_requested = True
+        log.info("recording.stop_requested")
 
     def request_pause(self) -> None:
         """Pause recording and drop captured chunks until resumed."""
         self._pause_requested = True
+        log.info("recording.pause_requested")
 
     def request_resume(self) -> None:
         """Resume recording after a pause."""
         self._pause_requested = False
         self._pause_state_emitted = False
+        log.info("recording.resume_requested")
 
     @property
     def is_paused(self) -> bool:
@@ -124,10 +127,23 @@ class AudioRecorder:
         self._pause_requested = False
         self._pause_state_emitted = False
         self._on_status("Starting audio capture...")
+        log.info(
+            "recording.started",
+            output=str(output_path),
+            format=format.lower(),
+            duration_limit_s=deadline,
+            source_type=type(source).__name__,
+            device_name=getattr(source, "device_name", None),
+            active_source_count=getattr(source, "active_source_count", None),
+        )
         await source.start()
         if isinstance(source, AudioMixer) and source.active_source_count < 2:
             self._on_status(
                 "Warning: only one audio source started. Recording will continue with the available source."
+            )
+            log.warning(
+                "recording.partial_source_start",
+                active_source_count=source.active_source_count,
             )
         try:
             async for chunk in source.stream(chunk_duration_ms=self._chunk_duration_ms):
@@ -178,6 +194,7 @@ class AudioRecorder:
                 import os
                 os.close(tmp_fd)
                 sf.write(str(tmp_wav), mixed, sample_rate, subtype="PCM_16")
+                log.info("recording.mp3_encode_start", ffmpeg=ffmpeg, temp_wav=str(tmp_wav))
                 _encode_mp3(tmp_wav, output_path, ffmpeg=ffmpeg)
             finally:
                 tmp_wav.unlink(missing_ok=True)
@@ -204,6 +221,9 @@ class AudioRecorder:
             output=str(output_path),
             duration_s=duration_actual,
             chunks=len(chunks),
+            sample_rate=sample_rate,
+            channels=(mixed.shape[1] if mixed.ndim == 2 else 1),
+            format=format.lower(),
         )
         return stats
 
@@ -215,12 +235,15 @@ def _mix_chunks(
     channels: int,
     duration_s: float | None = None,
 ) -> np.ndarray:
-    """Mix chunks into a single float32 waveform aligned by timestamps."""
+    """Mix chunks into a single float32 waveform aligned by timestamps.
+
+    Chunks from different sources (mic + system) are summed, not averaged,
+    so each source retains its full amplitude in the final recording.
+    """
     max_end_s = max(chunk.timestamp_end for chunk in chunks)
     total_duration = min(max_end_s, duration_s) if duration_s is not None else max_end_s
     total_samples = max(1, int(np.ceil(total_duration * sample_rate)))
     output = np.zeros((total_samples, channels), dtype=np.float32)
-    overlap = np.zeros((total_samples, channels), dtype=np.float32)
 
     for chunk in chunks:
         start_idx = max(0, int(round(chunk.timestamp_start * sample_rate)))
@@ -231,11 +254,8 @@ def _mix_chunks(
         end_idx = min(total_samples, start_idx + samples.shape[0])
         if end_idx <= start_idx:
             continue
-        usable = samples[: end_idx - start_idx]
-        output[start_idx:end_idx] += usable
-        overlap[start_idx:end_idx] += 1.0
+        output[start_idx:end_idx] += samples[: end_idx - start_idx]
 
-    np.divide(output, np.maximum(overlap, 1.0), out=output)
     clipped = np.clip(output, -1.0, 1.0)
     if channels == 1:
         return clipped[:, 0]

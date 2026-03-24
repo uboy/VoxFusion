@@ -20,6 +20,7 @@ from voxfusion.asr_catalog import (
     DEFAULT_LANGUAGE_CODE,
     QUALITY_PRESET_LABELS,
     get_available_model_catalog,
+    get_default_model_id,
     get_language_code,
     get_language_label,
     get_model_info,
@@ -66,6 +67,7 @@ from voxfusion.recording import RecordingStats
 
 ASR_MODEL_CHOICES: tuple[str, ...] = tuple(m.id for m in get_available_model_catalog())
 GUI_DEFAULT_LANGUAGE = DEFAULT_LANGUAGE_CODE
+FILE_DIARIZATION_CHOICES: tuple[str, ...] = ("auto", "channel", "ml", "hybrid")
 
 # File dialog filter for supported media files
 _AUDIO_EXTENSIONS = " ".join(
@@ -111,7 +113,8 @@ class TranscriptionGUI:
         self._segment_count = 0
         self._stdout = sys.stdout
         self._stderr = sys.stderr
-        initial_model = get_model_info(options.model).id
+        _live_default = options.model or get_default_model_id(for_live_capture=True)
+        initial_model = get_model_info(_live_default).id
         self._model_var = tk.StringVar(value=initial_model)
         self._language_var = tk.StringVar(
             value=self._language_label_for_code(options.language, initial_model)
@@ -123,6 +126,7 @@ class TranscriptionGUI:
         self._device_check_vars: dict[str, tk.BooleanVar] = {}
         self._selected_microphone_id: str | int | None = options.microphone_device_id
         self._selected_system_id: str | int | None = options.system_device_id
+        self._device_list_fingerprint: frozenset = frozenset()
         self._last_recorded_file: Path | None = None
         self._ffmpeg_path: Path | None = find_ffmpeg()
         self._rec_format_var = tk.StringVar(value="wav")
@@ -130,13 +134,15 @@ class TranscriptionGUI:
         # File tab state
         self._file_worker: FileTranscribeWorker | None = None
         self._file_path_var = tk.StringVar()
-        _available_ids = {m.id for m in get_available_model_catalog()}
-        _file_default = "gigaam-v3-e2e-ctc" if "gigaam-v3-e2e-ctc" in _available_ids else initial_model
+        _file_default = get_default_model_id(for_live_capture=False)
         self._file_model_var = tk.StringVar(value=_file_default)
         self._file_lang_var = tk.StringVar(
             value=self._language_label_for_code(options.language, _file_default)
         )
         self._file_quality_var = tk.StringVar(value="Balanced")
+        self._file_diarization_var = tk.StringVar(value="auto")
+        self._file_min_speakers_var = tk.StringVar(value="")
+        self._file_max_speakers_var = tk.StringVar(value="")
         self._file_seg_count = 0
         self._file_segments: list[TranslatedSegment] = []
         self._last_transcript_path: Path | None = None
@@ -174,6 +180,7 @@ class TranscriptionGUI:
         self._refresh_file_workflow()
         self._set_live_status("Select devices/model and click Start or Record Audio.")
         self.root.after(250, self._refresh_llm_models)
+        self.root.after(5000, self._poll_device_changes)
 
     # ------------------------------------------------------------------
     # Layout builders
@@ -447,6 +454,45 @@ class TranscriptionGUI:
         )
         self._file_quality_combo.pack(side=tk.LEFT, padx=(0, 16))
 
+        diar_opts = ttk.Frame(transcribe_box)
+        diar_opts.pack(fill=tk.X, pady=(0, 4))
+
+        ttk.Label(diar_opts, text="Speaker Separation:").pack(side=tk.LEFT, padx=(0, 6))
+        self._file_diarization_combo = ttk.Combobox(
+            diar_opts,
+            textvariable=self._file_diarization_var,
+            state="readonly",
+            width=9,
+            values=FILE_DIARIZATION_CHOICES,
+        )
+        self._file_diarization_combo.pack(side=tk.LEFT, padx=(0, 12))
+        self._file_diarization_combo.bind(
+            "<<ComboboxSelected>>",
+            self._on_file_diarization_changed,
+        )
+
+        ttk.Label(diar_opts, text="Min:").pack(side=tk.LEFT, padx=(0, 4))
+        self._file_min_speakers_entry = ttk.Entry(
+            diar_opts,
+            textvariable=self._file_min_speakers_var,
+            width=5,
+        )
+        self._file_min_speakers_entry.pack(side=tk.LEFT, padx=(0, 10))
+
+        ttk.Label(diar_opts, text="Max:").pack(side=tk.LEFT, padx=(0, 4))
+        self._file_max_speakers_entry = ttk.Entry(
+            diar_opts,
+            textvariable=self._file_max_speakers_var,
+            width=5,
+        )
+        self._file_max_speakers_entry.pack(side=tk.LEFT, padx=(0, 10))
+
+        ttk.Label(
+            diar_opts,
+            text="`auto` prefers ML when pyannote + token are available.",
+            foreground="#666666",
+        ).pack(side=tk.LEFT)
+
         self._file_download_btn = ttk.Button(
             opts, text="↓ Download", command=self._download_file_model
         )
@@ -598,6 +644,7 @@ class TranscriptionGUI:
             state=tk.DISABLED,
         )
         self._llm_output.pack(fill=tk.BOTH, expand=True)
+        self._refresh_file_diarization_controls()
         self._refresh_file_workflow()
 
     # ------------------------------------------------------------------
@@ -695,7 +742,7 @@ class TranscriptionGUI:
         self.stop_button.configure(state=tk.NORMAL)
         self.pause_button.configure(state=tk.NORMAL)
         self.pause_button.configure(text="Pause")
-        self.queue_label.configure(text="Recording: 00:00:00")
+        self.record_button.configure(state=tk.NORMAL, text="00:00:00")
         self._set_live_status(f"Recording audio to {options.output_path.name}...")
         self._record_worker = RecordingWorker(
             options=options,
@@ -729,10 +776,10 @@ class TranscriptionGUI:
         elapsed = self._record_worker.elapsed_s
         h, rem = divmod(int(elapsed), 3600)
         m, s = divmod(rem, 60)
-        label = f"Recording: {h:02d}:{m:02d}:{s:02d}"
+        time_str = f"{h:02d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
         if self._record_worker._recorder.is_paused:
-            label += " (paused)"
-        self.queue_label.configure(text=label)
+            time_str += " ⏸"
+        self.record_button.configure(text=time_str)
         self.root.after(500, self._tick_recording_timer)
 
     def _on_close(self) -> None:
@@ -959,7 +1006,7 @@ class TranscriptionGUI:
         self.stop_button.configure(state=tk.DISABLED)
         self.pause_button.configure(state=tk.DISABLED)
         self.pause_button.configure(text="Pause")
-        self.queue_label.configure(text="Queue: —  |  ASR: —  |  Dropped: 0")
+        self.record_button.configure(text="Record Audio")
         if stats is None:
             self._refresh_file_workflow()
             return
@@ -1005,6 +1052,7 @@ class TranscriptionGUI:
         self._file_lang_combo.configure(values=file_values)
         self._file_lang_var.set(self._language_label_for_code(current_file, file_model))
         self._file_model_summary.set_model(file_model)
+        self._refresh_file_diarization_controls()
 
     def _on_model_changed(self, _event: object | None = None) -> None:
         self._model_var.set(get_model_info(self._model_var.get()).id)
@@ -1013,6 +1061,38 @@ class TranscriptionGUI:
     def _on_file_model_changed(self, _event: object | None = None) -> None:
         self._file_model_var.set(get_model_info(self._file_model_var.get()).id)
         self._refresh_language_choices()
+
+    def _on_file_diarization_changed(self, _event: object | None = None) -> None:
+        strategy = (self._file_diarization_var.get() or "auto").strip().lower()
+        if strategy not in FILE_DIARIZATION_CHOICES:
+            strategy = "auto"
+        self._file_diarization_var.set(strategy)
+        self._refresh_file_diarization_controls()
+
+    def _refresh_file_diarization_controls(self) -> None:
+        strategy = (self._file_diarization_var.get() or "auto").strip().lower()
+        if strategy not in FILE_DIARIZATION_CHOICES:
+            strategy = "auto"
+            self._file_diarization_var.set(strategy)
+
+        combo_state = "disabled" if self._file_worker is not None else "readonly"
+        entry_state = "normal" if self._file_worker is None and strategy in {"auto", "ml", "hybrid"} else "disabled"
+        self._file_diarization_combo.configure(state=combo_state)
+        self._file_min_speakers_entry.configure(state=entry_state)
+        self._file_max_speakers_entry.configure(state=entry_state)
+
+    @staticmethod
+    def _parse_optional_positive_int(raw: str, field_name: str) -> int | None:
+        value = raw.strip()
+        if not value:
+            return None
+        try:
+            parsed = int(value)
+        except ValueError as exc:
+            raise ValueError(f"{field_name} must be a whole number.") from exc
+        if parsed < 1:
+            raise ValueError(f"{field_name} must be at least 1.")
+        return parsed
 
     def _append_log_line(self, text: str) -> None:
         self.log_widget.configure(state=tk.NORMAL)
@@ -1063,6 +1143,12 @@ class TranscriptionGUI:
         if saved_quality in QUALITY_PRESET_LABELS:
             self._file_quality_var.set(saved_quality)
 
+        saved_diarization = settings.get("file_diarization_strategy", "auto").strip().lower()
+        if saved_diarization in FILE_DIARIZATION_CHOICES:
+            self._file_diarization_var.set(saved_diarization)
+        self._file_min_speakers_var.set(settings.get("file_min_speakers", "").strip())
+        self._file_max_speakers_var.set(settings.get("file_max_speakers", "").strip())
+
         saved_file_model = settings.get("file_model", "")
         _avail = {m.id for m in get_available_model_catalog()}
         if saved_file_model and saved_file_model in _avail:
@@ -1091,6 +1177,9 @@ class TranscriptionGUI:
                 "hf_token": self._hf_token_var.get().strip(),
                 # Transcription quality
                 "file_quality": self._file_quality_var.get(),
+                "file_diarization_strategy": self._file_diarization_var.get().strip(),
+                "file_min_speakers": self._file_min_speakers_var.get().strip(),
+                "file_max_speakers": self._file_max_speakers_var.get().strip(),
                 # File transcription model/language
                 "file_model": self._file_model_var.get().strip(),
                 "file_language": self._file_lang_var.get().strip(),
@@ -1352,6 +1441,21 @@ class TranscriptionGUI:
         ttk.Button(button_row, text="Save Prompt", command=_save).pack(side=tk.RIGHT)
         ttk.Button(button_row, text="Close", command=dialog.destroy).pack(side=tk.RIGHT, padx=(0, 6))
 
+    def _poll_device_changes(self) -> None:
+        """Check every 5 s if the audio device list has changed and refresh the menu."""
+        try:
+            devices = list_windows_capture_devices()
+            fingerprint: frozenset = frozenset(
+                (d.id, d.label, d.kind, d.is_default) for d in devices
+            )
+        except Exception:
+            fingerprint = frozenset()
+
+        if fingerprint != self._device_list_fingerprint:
+            self._refresh_device_options()
+
+        self.root.after(5000, self._poll_device_changes)
+
     def _refresh_device_options(self) -> None:
         options: list[DeviceOption] = []
 
@@ -1369,6 +1473,9 @@ class TranscriptionGUI:
                     is_default=device.is_default,
                 )
                 for device in devices
+            )
+            self._device_list_fingerprint = frozenset(
+                (d.id, d.label, d.kind, d.is_default) for d in devices
             )
         except Exception:
             pass
@@ -1560,12 +1667,34 @@ class TranscriptionGUI:
 
         model = get_model_info(self._file_model_var.get() or "small").id
         language = self._language_code_for_label(self._file_lang_var.get(), model)
+        diarization_strategy = (self._file_diarization_var.get() or "auto").strip().lower()
+        try:
+            min_speakers = self._parse_optional_positive_int(
+                self._file_min_speakers_var.get(),
+                "Min speakers",
+            )
+            max_speakers = self._parse_optional_positive_int(
+                self._file_max_speakers_var.get(),
+                "Max speakers",
+            )
+        except ValueError as exc:
+            self._file_status_label.configure(text=f"Error: {exc}", foreground="red")
+            self._refresh_file_workflow()
+            return
+        if min_speakers is not None and max_speakers is not None and min_speakers > max_speakers:
+            self._file_status_label.configure(
+                text="Error: Min speakers must be less than or equal to max speakers.",
+                foreground="red",
+            )
+            self._refresh_file_workflow()
+            return
 
         self._file_transcribe_btn.configure(state=tk.DISABLED)
         self._file_cancel_btn.configure(state=tk.NORMAL)
         self._file_model_combo.configure(state="disabled")
         self._file_lang_combo.configure(state="disabled")
         self._file_quality_combo.configure(state="disabled")
+        self._refresh_file_diarization_controls()
         self._file_progress["value"] = 0
         self._last_transcript_path = None
         self._file_start_time = monotonic()
@@ -1580,6 +1709,9 @@ class TranscriptionGUI:
             file_path=file_path,
             model=model,
             language=language,
+            diarization_strategy=diarization_strategy,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
             quality=self._file_quality_var.get(),
             on_status=self._schedule_file_status,
             on_segments=self._schedule_file_segments,
@@ -1755,6 +1887,7 @@ class TranscriptionGUI:
         self._file_model_combo.configure(state="readonly")
         self._file_lang_combo.configure(state="readonly")
         self._file_quality_combo.configure(state="readonly")
+        self._refresh_file_diarization_controls()
         self._file_start_time = None
         self._file_time_label.configure(text="")
         if was_cancelled:
@@ -1990,8 +2123,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--model",
-        default="small",
-        help="ASR model size.",
+        default=None,
+        help="ASR model size (default: auto-selected by quality from installed backends).",
     )
     parser.add_argument(
         "--language",

@@ -41,10 +41,20 @@ def test_default_transcript_path_is_next_to_audio() -> None:
 
 def test_gui_settings_roundtrip(tmp_path: Path) -> None:
     path = tmp_path / "gui_settings.json"
-    _save_gui_settings({"llm_url": "http://localhost:3000", "llm_model": "qwen"}, path)
+    _save_gui_settings(
+        {
+            "llm_url": "http://localhost:3000",
+            "llm_model": "qwen",
+            "file_diarization_strategy": "auto",
+            "file_min_speakers": "2",
+        },
+        path,
+    )
     loaded = _load_gui_settings(path)
     assert loaded["llm_url"] == "http://localhost:3000"
     assert loaded["llm_model"] == "qwen"
+    assert loaded["file_diarization_strategy"] == "auto"
+    assert loaded["file_min_speakers"] == "2"
 
 
 def test_gui_settings_invalid_json_returns_empty(tmp_path: Path) -> None:
@@ -80,6 +90,11 @@ def test_language_helper_returns_auto_for_unsupported_model_language_pair() -> N
     assert TranscriptionGUI._language_code_for_label("English", "gigaam-v3-e2e-ctc") is None
 
 
+def test_parse_optional_positive_int_accepts_blank_and_positive_values() -> None:
+    assert TranscriptionGUI._parse_optional_positive_int("", "Min speakers") is None
+    assert TranscriptionGUI._parse_optional_positive_int("3", "Min speakers") == 3
+
+
 def test_file_transcribe_clears_table_on_start(tmp_path: Path) -> None:
     """_start_file_transcribe must reset stale segment data before starting the worker."""
     import voxfusion.gui.main as _gui_mod
@@ -102,6 +117,9 @@ def test_file_transcribe_clears_table_on_start(tmp_path: Path) -> None:
     gui._file_model_combo = MagicMock()
     gui._file_lang_combo = MagicMock()
     gui._file_quality_combo = MagicMock()
+    gui._file_diarization_var = MagicMock(**{"get.return_value": "auto"})
+    gui._file_min_speakers_var = MagicMock(**{"get.return_value": ""})
+    gui._file_max_speakers_var = MagicMock(**{"get.return_value": ""})
     gui._file_quality_var = MagicMock(**{"get.return_value": "Balanced"})
     gui._file_progress = MagicMock()
     gui._file_time_label = MagicMock()
@@ -112,6 +130,7 @@ def test_file_transcribe_clears_table_on_start(tmp_path: Path) -> None:
     gui._file_status_label = MagicMock()
     gui._file_seg_count = 7  # stale data from a previous run
     gui._refresh_file_workflow = MagicMock()
+    gui._refresh_file_diarization_controls = MagicMock()
     gui._tick_file_timer = MagicMock()
     gui.root = MagicMock()
     gui._language_code_for_label = lambda label, model: None

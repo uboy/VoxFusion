@@ -102,6 +102,17 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip dependency installation step (use current environment as-is).",
     )
+    parser.add_argument(
+        "--backends",
+        default="whisper",
+        metavar="LIST",
+        help=(
+            "Comma-separated list of ASR backends to bundle. "
+            "Default: 'whisper' (~140 MB, fast build). "
+            "Options: whisper, gigaam, breeze, parakeet, all. "
+            "Example: --backends gigaam  or  --backends gigaam,breeze"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -167,7 +178,24 @@ def _is_installed(package: str) -> bool:
     return importlib.util.find_spec(package.replace("-", "_")) is not None
 
 
-def _collect_all_packages() -> list[str]:
+def _parse_backends(backends_arg: str) -> set[str]:
+    """Return the normalised set of requested backend names.
+
+    Accepts a comma-separated string such as ``"gigaam,breeze"`` or ``"all"``.
+    ``"all"`` expands to every known backend.
+    """
+    known = {"whisper", "gigaam", "breeze", "parakeet"}
+    raw = {b.strip().lower() for b in backends_arg.split(",") if b.strip()}
+    if "all" in raw:
+        return known
+    unknown = raw - known
+    if unknown:
+        print(f"[backends] WARNING: unknown backend(s): {', '.join(sorted(unknown))}. "
+              f"Known: {', '.join(sorted(known))}")
+    return raw
+
+
+def _collect_all_packages(*, backends: set[str]) -> list[str]:
     """Return the list of packages that need --collect-all.
 
     Only packages that are actually installed are included so that
@@ -176,24 +204,30 @@ def _collect_all_packages() -> list[str]:
     # Always needed: pyaudiowpatch ships native DLLs that must be collected.
     candidates = ["pyaudiowpatch"]
 
-    # PyTorch: native DLLs must be collected for GigaAM/Breeze to work in the frozen bundle.
-    if _is_installed("torch"):
-        candidates.append("torch")
-        print("[deps] --collect-all torch  (installed — PyTorch backend active)")
-    else:
-        print("[deps] skipping --collect-all torch  (not installed — no PyTorch support)")
+    needs_torch = backends & {"gigaam", "breeze", "parakeet"}
+    needs_transformers = backends & {"gigaam", "breeze"}
 
-    # GigaAM/Breeze backend: bundle tokenizer config JSONs, vocab files, etc.
-    if _is_installed("transformers"):
-        candidates.append("transformers")
-        print("[deps] --collect-all transformers  (installed — GigaAM/Breeze backend active)")
-    else:
-        print("[deps] skipping --collect-all transformers  (not installed — Whisper-only build)")
+    if needs_torch:
+        if _is_installed("torch"):
+            candidates.append("torch")
+            print(f"[deps] --collect-all torch  (backends: {', '.join(sorted(needs_torch))})")
+        else:
+            print(f"[deps] WARNING: torch not installed — backends {', '.join(sorted(needs_torch))} won't work")
+
+    if needs_transformers:
+        if _is_installed("transformers"):
+            candidates.append("transformers")
+            print(f"[deps] --collect-all transformers  (backends: {', '.join(sorted(needs_transformers))})")
+        else:
+            print(f"[deps] WARNING: transformers not installed — backends {', '.join(sorted(needs_transformers))} won't work")
+
+    if not needs_torch:
+        print(f"[deps] skipping --collect-all torch/transformers  (backends: {', '.join(sorted(backends))})")
 
     return candidates
 
 
-def _hidden_imports() -> list[str]:
+def _hidden_imports(*, backends: set[str]) -> list[str]:
     """Return hidden imports, adding optional ones only when installed."""
     base: list[str] = [
         # Core inference
@@ -227,21 +261,28 @@ def _hidden_imports() -> list[str]:
         "tkinter.filedialog",
     ]
 
-    # Optional: engine-specific imports — only bundled when actually installed.
-    optional: dict[str, list[str]] = {
-        "torch": ["torch", "torch.nn", "torch.nn.functional"],  # PyTorch — GigaAM/Breeze
-        "transformers": [
+    # Optional: engine-specific imports — only bundled for selected backends.
+    optional: dict[str, list[str]] = {}
+
+    if backends & {"gigaam", "breeze", "parakeet"}:
+        optional["torch"] = ["torch", "torch.nn", "torch.nn.functional"]
+
+    if backends & {"gigaam", "breeze"}:
+        optional["transformers"] = [
             "transformers",
             # Breeze uses WhisperProcessor directly — explicit import avoids
             # AutoProcessor auto-class resolution which fails in frozen binaries.
             "transformers.models.whisper.processing_whisper",
             "transformers.models.whisper.modeling_whisper",
             "transformers.pipelines.automatic_speech_recognition",
-        ],
-        "huggingface_hub": ["huggingface_hub"],  # snapshot_download for model downloads
-        "scipy": ["scipy", "scipy.signal"],
-        "nemo": ["nemo.collections.asr"],   # Parakeet backend
-    }
+        ]
+        optional["huggingface_hub"] = ["huggingface_hub"]  # snapshot_download for model downloads
+
+    if "parakeet" in backends:
+        optional["nemo"] = ["nemo.collections.asr"]
+
+    optional["scipy"] = ["scipy", "scipy.signal"]
+
     for check_pkg, imports in optional.items():
         if _is_installed(check_pkg):
             base.extend(imports)
@@ -413,6 +454,7 @@ def build_target(
     *,
     version_file: Path,
     include_zip: bool,
+    backends: set[str],
 ) -> Path:
     """Build one binary target and optionally package to ZIP."""
     DIST_DIR.mkdir(parents=True, exist_ok=True)
@@ -453,12 +495,12 @@ def build_target(
 
     command.append("--windowed" if target.windowed else "--console")
 
-    for imp in _hidden_imports():
+    for imp in _hidden_imports(backends=backends):
         command.extend(["--hidden-import", imp])
 
     # Collect all files (including native DLLs) from packages that need it.
     # Only packages that are actually installed are included.
-    for pkg in _collect_all_packages():
+    for pkg in _collect_all_packages(backends=backends):
         command.extend(["--collect-all", pkg])
 
     for entry in _default_data_entries():
@@ -514,11 +556,15 @@ def main() -> int:
     else:
         selected_targets = [TARGETS[args.target]]
 
+    backends = _parse_backends(args.backends)
+    print(f"[backends] building with: {', '.join(sorted(backends))}")
+
     for target in selected_targets:
         build_target(
             target,
             version_file=version_file,
             include_zip=not args.no_zip,
+            backends=backends,
         )
 
     print("\nBuild completed.")

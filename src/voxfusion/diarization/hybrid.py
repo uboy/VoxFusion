@@ -9,6 +9,7 @@ channel.
 from collections.abc import AsyncIterator
 
 from voxfusion.config.models import DiarizationConfig
+from voxfusion.diarization.alignment import SpeakerTurn
 from voxfusion.diarization.channel import ChannelDiarizer
 from voxfusion.exceptions import DiarizationError
 from voxfusion.logging import get_logger
@@ -87,3 +88,10 @@ class HybridDiarizer:
             result = await self.diarize([seg], audio)
             for d in result:
                 yield d
+
+    async def diarize_turns(self, audio: AudioChunk) -> list[SpeakerTurn]:
+        """Return ML speaker turns for file-style hybrid workflows."""
+        ml_engine = self._get_ml_engine()
+        if ml_engine is None:
+            raise DiarizationError("ML diarization is not available for hybrid mode.")
+        return await ml_engine.diarize_turns(audio)  # type: ignore[union-attr]

@@ -379,3 +379,30 @@ def is_model_available(model_id: str | None) -> bool:
 def get_available_model_catalog() -> tuple[ASRModelInfo, ...]:
     """Return only the models available in the current runtime environment."""
     return tuple(m for m in ASR_MODEL_CATALOG if is_model_available(m.id))
+
+
+def get_default_model_id(*, for_live_capture: bool = False) -> str:
+    """Return the best default model id for the current runtime environment.
+
+    Specialty backends (gigaam, parakeet, breeze) are preferred over Whisper
+    when their packages are installed.  Within each group models are ranked by
+    accuracy_score descending.  For live capture only live-capable models are
+    considered (specialty backends are file-only, so the result is always a
+    Whisper model).
+    """
+    available = get_available_model_catalog()
+    if for_live_capture:
+        available = tuple(m for m in available if m.supports_live_capture)
+    if not available:
+        return "small"
+
+    specialty = sorted(
+        (m for m in available if m.engine != "faster-whisper"),
+        key=lambda m: (-m.accuracy_score, m.id),
+    )
+    whisper = sorted(
+        (m for m in available if m.engine == "faster-whisper"),
+        key=lambda m: (-m.accuracy_score, m.id),
+    )
+    ordered = specialty + whisper
+    return ordered[0].id

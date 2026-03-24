@@ -62,9 +62,19 @@ class DiarizationMLConfig(BaseModel):
     model: str = "pyannote/speaker-diarization-3.1"
     hf_auth_token: str | None = None
     device: str = "auto"
-    min_speakers: int | None = None
-    max_speakers: int | None = None
+    min_speakers: int | None = Field(default=None, ge=1)
+    max_speakers: int | None = Field(default=None, ge=1)
     min_segment_duration: float = Field(default=0.5, ge=0.0)
+
+    @model_validator(mode="after")
+    def _validate_speaker_hints(self) -> "DiarizationMLConfig":
+        if (
+            self.min_speakers is not None
+            and self.max_speakers is not None
+            and self.min_speakers > self.max_speakers
+        ):
+            raise ValueError("diarization.ml.min_speakers must be <= max_speakers")
+        return self
 
 
 class DiarizationConfig(BaseModel):

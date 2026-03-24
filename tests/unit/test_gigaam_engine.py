@@ -70,6 +70,15 @@ async def test_gigaam_engine_transcribes_with_fake_modules(monkeypatch: pytest.M
     engine.close()
 
 
+def test_gigaam_engine_returns_empty_for_too_short_audio() -> None:
+    engine = GigaAMCTCEngine()
+
+    segments = engine._transcribe_sync(np.ones(100, dtype=np.float32), language="ru")
+
+    assert segments == []
+    engine.close()
+
+
 def test_gigaam_normalize_audio_flattens_deep_arrays() -> None:
     engine = GigaAMCTCEngine()
     samples = np.ones((8, 1, 1), dtype=np.float32)
@@ -102,6 +111,11 @@ def test_install_megatron_compat_shim_registers_num_microbatches_module() -> Non
 
     mod = sys.modules["megatron.core.num_microbatches_calculator"]
     assert mod.get_num_microbatches() == 1
+    assert mod.get_current_global_batch_size() == 1
+    assert mod.get_micro_batch_size() == 1
+    assert mod.init_num_microbatches_calculator() is None
+    calculator = mod.ConstantNumMicroBatchesCalculator()
+    assert calculator.num_microbatches == 1
 
 
 def test_install_torchscript_source_fallback_returns_original_object_on_source_error() -> None:

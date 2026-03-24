@@ -26,6 +26,7 @@ class EventType(StrEnum):
     PIPELINE_STARTED = "pipeline_started"
     PIPELINE_COMPLETED = "pipeline_completed"
     PIPELINE_FAILED = "pipeline_failed"
+    WARNING = "warning"
     STAGE_STARTED = "stage_started"
     STAGE_COMPLETED = "stage_completed"
     STAGE_FAILED = "stage_failed"

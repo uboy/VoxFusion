@@ -9,6 +9,29 @@ import sys
 
 import structlog
 
+_SUPPRESSED_LOG_MESSAGE_FRAGMENTS = (
+    "deprecate positional args:",
+    "NumExpr defaulting to ",
+    "NOTE: Redirects are currently not supported in Windows or MacOs.",
+    "Megatron num_microbatches_calculator not found, using Apex version.",
+    "OneLogger: Setting error_handling_strategy to DISABLE_QUIETLY_AND_REPORT_METRIC_ERROR",
+    "No exporters were provided. This means that no telemetry data will be collected.",
+    "Final configuration contains 0 exporter(s)",
+    "Initializing DefaultRecorder with no exporters, exporting is disabled",
+)
+
+
+def _should_suppress_log_message(message: str) -> bool:
+    """Return True when a third-party log message is known-safe noise."""
+    return any(fragment in message for fragment in _SUPPRESSED_LOG_MESSAGE_FRAGMENTS)
+
+
+class _NoisyDependencyFilter(logging.Filter):
+    """Drop known-safe third-party noise while keeping real warnings/errors."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not _should_suppress_log_message(record.getMessage())
+
 
 def configure_logging(
     log_level: str = "INFO",
@@ -60,6 +83,7 @@ def configure_logging(
 
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(formatter)
+    handler.addFilter(_NoisyDependencyFilter())
 
     root = logging.getLogger()
     root.handlers.clear()
@@ -67,8 +91,24 @@ def configure_logging(
     root.setLevel(level)
 
     # Quiet noisy third-party loggers
-    for name in ("faster_whisper", "ctranslate2", "urllib3", "httpx"):
+    for name in (
+        "faster_whisper",
+        "ctranslate2",
+        "urllib3",
+        "httpx",
+        "graphviz",
+        "numexpr.utils",
+    ):
         logging.getLogger(name).setLevel(max(level, logging.WARNING))
+    for name in (
+        "torch.distributed.elastic.multiprocessing.redirects",
+        "nv_one_logger",
+        "nv_one_logger.api.config",
+        "nv_one_logger.training_telemetry.api.training_telemetry_provider",
+        "nemo",
+        "nemo_logger",
+    ):
+        logging.getLogger(name).setLevel(max(level, logging.ERROR))
 
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:
