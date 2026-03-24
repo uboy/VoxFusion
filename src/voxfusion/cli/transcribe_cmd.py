@@ -33,6 +33,8 @@ def _event_printer(event: PipelineEvent) -> None:
                 click.echo(f"  {event.message}", err=True)
             case EventType.PIPELINE_FAILED:
                 click.echo(f"  FAILED: {event.message}", err=True)
+            case EventType.WARNING:
+                click.echo(f"  WARNING: {event.message}", err=True)
     except (OSError, IOError):
         # Ignore console output errors
         pass
@@ -68,6 +70,25 @@ def _event_printer(event: PipelineEvent) -> None:
     default=False,
     help="Include word-level timestamps in output.",
 )
+@click.option(
+    "--diarization-strategy",
+    type=click.Choice(["auto", "channel", "ml", "hybrid"]),
+    default="auto",
+    show_default=True,
+    help="Speaker diarization mode for file transcription.",
+)
+@click.option(
+    "--min-speakers",
+    type=click.IntRange(1),
+    default=None,
+    help="Optional lower hint for ML diarization speaker count.",
+)
+@click.option(
+    "--max-speakers",
+    type=click.IntRange(1),
+    default=None,
+    help="Optional upper hint for ML diarization speaker count.",
+)
 @click.pass_context
 def transcribe(
     ctx: click.Context,
@@ -77,6 +98,9 @@ def transcribe(
     language: str | None,
     model: str | None,
     word_timestamps: bool,
+    diarization_strategy: str,
+    min_speakers: int | None,
+    max_speakers: int | None,
 ) -> None:
     """Transcribe an audio file to text.
 
@@ -90,6 +114,13 @@ def transcribe(
     log_level = "DEBUG" if verbose else ("ERROR" if quiet else "INFO")
     configure_logging(log_level)
 
+    if (
+        min_speakers is not None
+        and max_speakers is not None
+        and min_speakers > max_speakers
+    ):
+        raise click.ClickException("--min-speakers must be <= --max-speakers")
+
     # Build config with CLI overrides
     overrides: dict = {}  # type: ignore[type-arg]
     if language:
@@ -100,6 +131,13 @@ def transcribe(
         overrides.setdefault("asr", {})["word_timestamps"] = True
     if output_format:
         overrides.setdefault("output", {})["format"] = output_format
+    overrides.setdefault("diarization", {})["strategy"] = diarization_strategy
+    if min_speakers is not None or max_speakers is not None:
+        overrides["diarization"].setdefault("ml", {})
+        if min_speakers is not None:
+            overrides["diarization"]["ml"]["min_speakers"] = min_speakers
+        if max_speakers is not None:
+            overrides["diarization"]["ml"]["max_speakers"] = max_speakers
 
     try:
         config = load_config(overrides if overrides else None)
@@ -117,8 +155,10 @@ def transcribe(
 
     fmt = output_format or config.output.format
     event_cb = _event_printer if not quiet else None
-
-    orchestrator = PipelineOrchestrator(config, on_event=event_cb)
+    try:
+        orchestrator = PipelineOrchestrator(config, on_event=event_cb)
+    except Exception as exc:
+        raise click.ClickException(str(exc)) from exc
 
     if not quiet:
         try:

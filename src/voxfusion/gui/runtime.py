@@ -23,12 +23,45 @@ from voxfusion.diarization.channel import ChannelDiarizer
 from voxfusion.gui.progress import close_all_progress, get_stage_progress
 from voxfusion.llm.client import LLMError, stream_completion
 from voxfusion.llm.prompts import build_messages
+from voxfusion.logging import get_logger
 from voxfusion.models.translation import TranslatedSegment
 from voxfusion.pipeline.streaming import StreamingPipeline
 from voxfusion.preprocessing.normalize import Normalizer
 from voxfusion.preprocessing.pipeline import PreProcessingPipeline
 from voxfusion.preprocessing.resample import Resampler
 from voxfusion.recording import AudioRecorder, RecordingStats, create_recording_source
+
+log = get_logger(__name__)
+
+_GUI_NOISE_LINE_FRAGMENTS = (
+    "Megatron num_microbatches_calculator not found, using Apex version.",
+    "NOTE: Redirects are currently not supported in Windows or MacOs.",
+    "deprecate positional args:",
+    "NumExpr defaulting to ",
+    "OneLogger: Setting error_handling_strategy to DISABLE_QUIETLY_AND_REPORT_METRIC_ERROR",
+    "No exporters were provided. This means that no telemetry data will be collected.",
+    "Final configuration contains 0 exporter(s)",
+    "Initializing DefaultRecorder with no exporters, exporting is disabled",
+)
+
+
+def _configure_gui_noise_controls() -> None:
+    """Suppress safe third-party noise and set runtime env defaults for the GUI."""
+    os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    thread_count = min(os.cpu_count() or 4, 16)
+    os.environ.setdefault("NUMEXPR_MAX_THREADS", str(thread_count))
+    os.environ.setdefault("NUMEXPR_NUM_THREADS", str(thread_count))
+    warnings.filterwarnings(
+        "ignore",
+        message="`huggingface_hub` cache-system uses symlinks by default.*",
+        category=UserWarning,
+    )
+    warnings.filterwarnings(
+        "ignore",
+        message=".*torchcodec is not installed correctly so built-in audio decoding will fail.*",
+        category=UserWarning,
+    )
 
 
 class TextRedirector:
@@ -85,7 +118,11 @@ class TextRedirector:
             return ""
         text = self._buffer + text
         self._buffer = ""
-        return text
+        kept_lines = [
+            line for line in text.splitlines(keepends=True)
+            if not any(fragment in line for fragment in _GUI_NOISE_LINE_FRAGMENTS)
+        ]
+        return "".join(kept_lines)
 
 
 @dataclass(frozen=True)
@@ -145,11 +182,18 @@ class FileTranscribeWorker:
         on_segments: Callable[[list[TranslatedSegment]], None],
         on_error: Callable[[str], None],
         on_finished: Callable[[], None],
+        *,
+        diarization_strategy: str = "auto",
+        min_speakers: int | None = None,
+        max_speakers: int | None = None,
         quality: str = "balanced",
     ) -> None:
         self._file_path = file_path
         self._model = model
         self._language = language
+        self._diarization_strategy = diarization_strategy
+        self._min_speakers = min_speakers
+        self._max_speakers = max_speakers
         self._quality = quality
         self._on_status = on_status
         self._on_segments = on_segments
@@ -180,6 +224,8 @@ class FileTranscribeWorker:
 
         from voxfusion.asr_catalog import get_quality_preset
 
+        _configure_gui_noise_controls()
+
         # Start with quality preset (compute_type, beam_size, best_of, vad_*),
         # then override model-level settings that always take priority.
         asr_overrides: dict[str, Any] = get_quality_preset(self._quality)
@@ -189,9 +235,39 @@ class FileTranscribeWorker:
         })
         if self._language:
             asr_overrides["language"] = self._language
-        overrides: dict[str, Any] = {"asr": asr_overrides}
+        overrides: dict[str, Any] = {
+            "asr": asr_overrides,
+            "diarization": {"strategy": self._diarization_strategy},
+        }
+        if self._min_speakers is not None or self._max_speakers is not None:
+            overrides["diarization"]["ml"] = {}
+            if self._min_speakers is not None:
+                overrides["diarization"]["ml"]["min_speakers"] = self._min_speakers
+            if self._max_speakers is not None:
+                overrides["diarization"]["ml"]["max_speakers"] = self._max_speakers
 
         config = load_config(overrides)
+        token_source = None
+        if config.diarization.ml.hf_auth_token:
+            token_source = "config-or-env:VOXFUSION"
+        elif os.environ.get("HF_TOKEN"):
+            token_source = "env:HF_TOKEN"
+        elif os.environ.get("HUGGING_FACE_HUB_TOKEN"):
+            token_source = "env:HUGGING_FACE_HUB_TOKEN"
+        log.info(
+            "gui.file_transcribe_requested",
+            file=str(self._file_path),
+            model=self._model,
+            asr_engine=config.asr.engine,
+            language=self._language,
+            quality=self._quality,
+            diarization_strategy_requested=self._diarization_strategy,
+            diarization_strategy_config=config.diarization.strategy,
+            min_speakers=config.diarization.ml.min_speakers,
+            max_speakers=config.diarization.ml.max_speakers,
+            hf_token_present=token_source is not None,
+            hf_token_source=token_source,
+        )
         stage_started_pct: dict[PipelineStage, float] = {
             PipelineStage.CAPTURE: 0.05,
             PipelineStage.PREPROCESSING: 0.30,
@@ -207,18 +283,31 @@ class FileTranscribeWorker:
 
         from voxfusion.pipeline.events import PipelineEvent
 
+        last_progress = 0.0
+
         def on_event(event: PipelineEvent) -> None:
+            nonlocal last_progress
             match event.event_type:
                 case EventType.PIPELINE_STARTED:
-                    self._on_status(event.message, 0.02)
+                    last_progress = 0.02
+                    self._on_status(event.message, last_progress)
                 case EventType.STAGE_STARTED:
-                    self._on_status(event.message, stage_started_pct.get(event.stage, 0.0))
+                    last_progress = stage_started_pct.get(event.stage, last_progress)
+                    self._on_status(event.message, last_progress)
                 case EventType.STAGE_COMPLETED:
-                    self._on_status(event.message, stage_done_pct.get(event.stage, 0.0))
+                    last_progress = stage_done_pct.get(event.stage, last_progress)
+                    self._on_status(event.message, last_progress)
                 case EventType.PIPELINE_COMPLETED:
-                    self._on_status(event.message, 1.0)
+                    last_progress = 1.0
+                    self._on_status(event.message, last_progress)
+                case EventType.PROGRESS:
+                    if event.progress > 0:
+                        last_progress = max(last_progress, event.progress)
+                    self._on_status(event.message, last_progress)
                 case EventType.PIPELINE_FAILED:
                     self._on_status(f"Failed: {event.message}", 0.0)
+                case EventType.WARNING:
+                    self._on_status(f"Warning: {event.message}", last_progress)
 
         # Emit model download / cache hints to the log before loading
         import os as _os
@@ -253,6 +342,12 @@ class FileTranscribeWorker:
                     return
                 await asyncio.sleep(0.2)
             result = task.result()
+            log.info(
+                "gui.file_transcribe_completed",
+                file=str(self._file_path),
+                segments=len(result.segments),
+                processing_info=result.processing_info,
+            )
             self._on_segments(result.segments)
         finally:
             orchestrator.close()
@@ -465,12 +560,7 @@ class CaptureWorker:
         if sys.platform != "win32":
             raise RuntimeError("GUI live capture currently requires Windows WASAPI.")
 
-        os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
-        warnings.filterwarnings(
-            "ignore",
-            message="`huggingface_hub` cache-system uses symlinks by default.*",
-            category=UserWarning,
-        )
+        _configure_gui_noise_controls()
 
         self._on_status("Loading configuration...")
         cpu_threads = os.cpu_count() or 4

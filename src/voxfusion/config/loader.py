@@ -11,6 +11,8 @@ Resolution order (later overrides earlier):
 
 import copy
 import importlib.resources
+import json
+import os
 import sys
 from pathlib import Path
 
@@ -21,6 +23,65 @@ from voxfusion.exceptions import ConfigurationError
 from voxfusion.logging import get_logger
 
 log = get_logger(__name__)
+
+
+def _gui_settings_path() -> Path:
+    override = os.environ.get("VOXFUSION_GUI_SETTINGS_PATH", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".voxfusion" / "gui_settings.json"
+
+
+def _load_gui_settings_hf_token() -> str | None:
+    target = _gui_settings_path()
+    if not target.is_file():
+        return None
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    token = str(data.get("hf_token", "")).strip()
+    return token or None
+
+
+def _apply_gui_settings_token_environment_fallback() -> None:
+    """Expose GUI-saved HF token to CLI/runtime code when no stronger source exists."""
+    if os.environ.get("VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN"):
+        return
+    if os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"):
+        return
+    token = _load_gui_settings_hf_token()
+    if not token:
+        return
+    os.environ["HF_TOKEN"] = token
+    os.environ["HUGGING_FACE_HUB_TOKEN"] = token
+
+
+def _apply_environment_compatibility_overrides(merged: dict) -> dict:  # type: ignore[type-arg]
+    """Backfill env-driven settings that nested dict merging can shadow.
+
+    Pydantic BaseSettings does not reliably inject nested env values once the
+    corresponding nested object is already provided via our merged dict layers.
+    Keep this helper narrowly scoped to documented env knobs that must behave
+    consistently in both config preflight and runtime code paths.
+    """
+    token = os.environ.get("VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN")
+    if token:
+        merged.setdefault("diarization", {})
+        merged["diarization"].setdefault("ml", {})
+        merged["diarization"]["ml"]["hf_auth_token"] = token
+    return merged
+
+
+def _resolve_diarization_token_source(config: PipelineConfig) -> str | None:
+    if config.diarization.ml.hf_auth_token:
+        return "config-or-env:VOXFUSION"
+    for env_name in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
+        if os.environ.get(env_name):
+            return f"env:{env_name}"
+    return None
 
 
 def _deep_merge(base: dict, override: dict) -> dict:  # type: ignore[type-arg]
@@ -104,20 +165,44 @@ def load_config(overrides: dict | None = None) -> PipelineConfig:  # type: ignor
     Raises:
         ConfigurationError: If the merged config fails validation.
     """
+    _apply_gui_settings_token_environment_fallback()
     layers = [load_defaults()]
-    for loader in (load_system_config, load_user_config, load_project_config):
+    layer_names = ["defaults"]
+    for name, loader in (
+        ("system", load_system_config),
+        ("user", load_user_config),
+        ("project", load_project_config),
+    ):
         layer = loader()
         if layer:
             layers.append(layer)
+            layer_names.append(name)
     if overrides:
         layers.append(overrides)
+        layer_names.append("overrides")
 
-    merged = merge_configs(*layers)
+    merged = _apply_environment_compatibility_overrides(merge_configs(*layers))
 
     try:
-        return PipelineConfig(**merged)
+        config = PipelineConfig(**merged)
     except Exception as exc:
         raise ConfigurationError(f"Invalid configuration: {exc}") from exc
+    token_source = _resolve_diarization_token_source(config)
+    log.info(
+        "config.loaded",
+        layers=layer_names,
+        overrides_applied=bool(overrides),
+        asr_model=config.asr.model_size,
+        asr_engine=config.asr.engine,
+        language=config.asr.language,
+        diarization_strategy=config.diarization.strategy,
+        diarization_token_present=token_source is not None,
+        diarization_token_source=token_source,
+        min_speakers=config.diarization.ml.min_speakers,
+        max_speakers=config.diarization.ml.max_speakers,
+        output_format=config.output.format,
+    )
+    return config
 
 
 def save_user_config(config: PipelineConfig) -> None:

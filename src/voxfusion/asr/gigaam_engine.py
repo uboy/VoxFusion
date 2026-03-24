@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import sys
 import tempfile
@@ -34,6 +35,7 @@ _CHUNK_DURATION_S = 24
 _OVERLAP_DURATION_S = 1
 _CHUNK_SAMPLES = _CHUNK_DURATION_S * _SAMPLE_RATE
 _OVERLAP_SAMPLES = _OVERLAP_DURATION_S * _SAMPLE_RATE
+_MIN_TRANSCRIBE_SAMPLES = 320
 
 
 def _prepare_huggingface_runtime_env() -> None:
@@ -50,6 +52,18 @@ def _prepare_huggingface_runtime_env() -> None:
     )
 
 
+def _suppress_gigaam_dependency_noise() -> None:
+    """Reduce known-safe third-party noise emitted during GigaAM model import."""
+    logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLevel(logging.ERROR)
+    logging.getLogger("nv_one_logger").setLevel(logging.ERROR)
+    logging.getLogger("nemo").setLevel(logging.ERROR)
+    logging.getLogger("nemo_logger").setLevel(logging.ERROR)
+    with suppress(Exception):
+        from nemo.utils import logging as nemo_logging
+
+        nemo_logging.set_verbosity(nemo_logging.ERROR)
+
+
 def _install_megatron_compat_shim() -> None:
     """Provide a minimal Megatron shim for third-party imports expecting it."""
     if "megatron.core.num_microbatches_calculator" in sys.modules:
@@ -59,10 +73,20 @@ def _install_megatron_compat_shim() -> None:
     core_mod = sys.modules.setdefault("megatron.core", types.ModuleType("megatron.core"))
     calc_mod = types.ModuleType("megatron.core.num_microbatches_calculator")
 
+    class _ConstantNumMicroBatchesCalculator:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            self.current_global_batch_size = 1
+            self.micro_batch_size = 1
+            self.num_microbatches = 1
+
     def _return_one(*_args: object, **_kwargs: object) -> int:
         return 1
 
+    calc_mod.ConstantNumMicroBatchesCalculator = _ConstantNumMicroBatchesCalculator  # type: ignore[attr-defined]
+    calc_mod.get_current_global_batch_size = _return_one  # type: ignore[attr-defined]
+    calc_mod.get_micro_batch_size = _return_one  # type: ignore[attr-defined]
     calc_mod.get_num_microbatches = _return_one  # type: ignore[attr-defined]
+    calc_mod.init_num_microbatches_calculator = lambda *_args, **_kwargs: None  # type: ignore[attr-defined]
     calc_mod.update_num_microbatches = _return_one  # type: ignore[attr-defined]
     calc_mod.reconfigure_num_microbatches_calculator = _return_one  # type: ignore[attr-defined]
     calc_mod.destroy_num_microbatches_calculator = lambda: None  # type: ignore[attr-defined]
@@ -138,6 +162,7 @@ def _force_torchaudio_soundfile_backend() -> None:
 def _prepare_gigaam_runtime() -> None:
     _prepare_huggingface_runtime_env()
     _install_megatron_compat_shim()
+    _suppress_gigaam_dependency_noise()
     _suppress_subprocess_windows()
     _force_torchaudio_soundfile_backend()
     try:
@@ -254,6 +279,14 @@ class GigaAMCTCEngine:
     ) -> list[TranscriptionSegment]:
         if language not in (None, "ru"):
             log.warning("gigaam.language_ignored", requested=language, supported="ru")
+
+        if len(audio) < _MIN_TRANSCRIBE_SAMPLES:
+            log.warning(
+                "gigaam.audio_too_short",
+                samples=len(audio),
+                min_samples=_MIN_TRANSCRIBE_SAMPLES,
+            )
+            return []
 
         model = self._ensure_model()
 

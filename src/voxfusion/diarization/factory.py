@@ -1,0 +1,188 @@
+"""Helpers for choosing the effective diarization engine."""
+
+from __future__ import annotations
+
+import importlib.util
+import os
+from dataclasses import dataclass
+
+from voxfusion.config.models import DiarizationConfig
+from voxfusion.diarization.base import DiarizationEngine
+from voxfusion.diarization.channel import ChannelDiarizer
+from voxfusion.diarization.hybrid import HybridDiarizer
+from voxfusion.diarization.pyannote_engine import PyAnnoteDiarizer
+from voxfusion.exceptions import DiarizationError
+from voxfusion.logging import get_logger
+
+log = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class DiarizerSelection:
+    """Resolved diarization engine plus user-visible metadata."""
+
+    engine: DiarizationEngine
+    requested_strategy: str
+    resolved_strategy: str
+    warnings: tuple[str, ...] = ()
+
+
+def _resolve_hf_token(config: DiarizationConfig) -> tuple[str | None, str | None]:
+    if config.ml.hf_auth_token:
+        return config.ml.hf_auth_token, "config"
+
+    env_candidates = (
+        ("VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN", "env:VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN"),
+        ("HF_TOKEN", "env:HF_TOKEN"),
+        ("HUGGING_FACE_HUB_TOKEN", "env:HUGGING_FACE_HUB_TOKEN"),
+    )
+    for env_name, source in env_candidates:
+        token = os.environ.get(env_name)
+        if token:
+            return token, source
+    return None, None
+
+
+def _ml_prerequisites(config: DiarizationConfig) -> tuple[bool, str | None, str | None]:
+    try:
+        spec = importlib.util.find_spec("pyannote.audio")
+    except (ImportError, ModuleNotFoundError):
+        spec = None
+    if spec is None:
+        return False, "ML diarization requires the optional 'pyannote.audio' package.", None
+    token, token_source = _resolve_hf_token(config)
+    if not token:
+        return False, "ML diarization requires a HuggingFace token for pyannote models.", None
+    return True, None, token_source
+
+
+def _log_selection(
+    *,
+    mode: str,
+    requested: str,
+    selection: DiarizerSelection,
+    ml_ready: bool,
+    ml_reason: str | None,
+    token_source: str | None,
+    config: DiarizationConfig,
+) -> DiarizerSelection:
+    log.info(
+        "diarization.selection",
+        mode=mode,
+        requested_strategy=requested,
+        resolved_strategy=selection.resolved_strategy,
+        ml_ready=ml_ready,
+        fallback_reason=ml_reason,
+        token_present=token_source is not None,
+        token_source=token_source,
+        min_speakers=config.ml.min_speakers,
+        max_speakers=config.ml.max_speakers,
+        warnings=list(selection.warnings),
+    )
+    return selection
+
+
+def create_diarizer(
+    config: DiarizationConfig,
+    *,
+    mode: str,
+) -> DiarizerSelection:
+    """Resolve the effective diarizer for the given workflow mode."""
+    requested = (config.strategy or "channel").strip().lower()
+    if requested not in {"auto", "channel", "ml", "hybrid"}:
+        raise DiarizationError(f"Unknown diarization strategy: {config.strategy!r}")
+
+    ml_ready, ml_reason, token_source = _ml_prerequisites(config)
+
+    if requested == "channel":
+        return _log_selection(
+            mode=mode,
+            requested=requested,
+            selection=DiarizerSelection(ChannelDiarizer(config), requested, "channel"),
+            ml_ready=ml_ready,
+            ml_reason=ml_reason,
+            token_source=token_source,
+            config=config,
+        )
+
+    if requested == "ml":
+        if not ml_ready:
+            log.warning(
+                "diarization.selection_failed",
+                mode=mode,
+                requested_strategy=requested,
+                reason=ml_reason,
+                token_present=token_source is not None,
+                token_source=token_source,
+            )
+            raise DiarizationError(ml_reason or "ML diarization is not available.")
+        return _log_selection(
+            mode=mode,
+            requested=requested,
+            selection=DiarizerSelection(PyAnnoteDiarizer(config.ml), requested, "ml"),
+            ml_ready=ml_ready,
+            ml_reason=ml_reason,
+            token_source=token_source,
+            config=config,
+        )
+
+    if requested == "hybrid":
+        if mode == "file" and not ml_ready:
+            return _log_selection(
+                mode=mode,
+                requested=requested,
+                selection=DiarizerSelection(
+                    ChannelDiarizer(config),
+                    requested,
+                    "channel",
+                    warnings=(f"{ml_reason} Falling back to channel diarization.",),
+                ),
+                ml_ready=ml_ready,
+                ml_reason=ml_reason,
+                token_source=token_source,
+                config=config,
+            )
+        return _log_selection(
+            mode=mode,
+            requested=requested,
+            selection=DiarizerSelection(HybridDiarizer(config), requested, "hybrid"),
+            ml_ready=ml_ready,
+            ml_reason=ml_reason,
+            token_source=token_source,
+            config=config,
+        )
+
+    if mode == "file" and ml_ready:
+        return _log_selection(
+            mode=mode,
+            requested=requested,
+            selection=DiarizerSelection(PyAnnoteDiarizer(config.ml), requested, "ml"),
+            ml_ready=ml_ready,
+            ml_reason=ml_reason,
+            token_source=token_source,
+            config=config,
+        )
+    if mode == "file" and ml_reason:
+        return _log_selection(
+            mode=mode,
+            requested=requested,
+            selection=DiarizerSelection(
+                ChannelDiarizer(config),
+                requested,
+                "channel",
+                warnings=(f"{ml_reason} Speaker separation is disabled; using channel fallback.",),
+            ),
+            ml_ready=ml_ready,
+            ml_reason=ml_reason,
+            token_source=token_source,
+            config=config,
+        )
+    return _log_selection(
+        mode=mode,
+        requested=requested,
+        selection=DiarizerSelection(ChannelDiarizer(config), requested, "channel"),
+        ml_ready=ml_ready,
+        ml_reason=ml_reason,
+        token_source=token_source,
+        config=config,
+    )

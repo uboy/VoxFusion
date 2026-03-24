@@ -56,6 +56,7 @@ transcription_*.txt
 transcription_*.json
 transcription_*.srt
 transcription_*.vtt
+fulltest_*.json
 
 # User data directory
 .voxfusion/
@@ -63,6 +64,7 @@ transcription_*.vtt
 .scratchpad/
 gui_settings.json
 coordination/reviews/
+models/
 
 # Logs
 *.log

@@ -653,6 +653,7 @@ class RobustLoopbackCapture:
         self._device_id = device_id
         self._config = config or CaptureConfig()
         self._delegate: object | None = None
+        self._started_default_device_name: str | None = None
 
     # ------------------------------------------------------------------
     # Protocol properties — delegate once started
@@ -676,6 +677,17 @@ class RobustLoopbackCapture:
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
+    def _current_default_output_name(self) -> str | None:
+        """Return the current default output device name, or None on error."""
+        try:
+            import sounddevice as sd
+            idx = sd.default.device[1]
+            if isinstance(idx, int) and idx >= 0:
+                return str(sd.query_devices(idx).get("name", ""))
+        except Exception:
+            pass
+        return None
+
     async def start(self) -> None:
         """Try each loopback backend in priority order."""
         errors: list[str] = []
@@ -692,6 +704,7 @@ class RobustLoopbackCapture:
                 )
                 await candidate.start()  # type: ignore[union-attr]
                 self._delegate = candidate
+                self._started_default_device_name = self._current_default_output_name()
                 log.info("robust_loopback.backend", backend="pyaudiowpatch")
                 return
             except Exception as exc:
@@ -712,6 +725,7 @@ class RobustLoopbackCapture:
                 )
                 await candidate.start()  # type: ignore[union-attr]
                 self._delegate = candidate
+                self._started_default_device_name = self._current_default_output_name()
                 log.info("robust_loopback.backend", backend="wasapi_loopback")
                 return
             except Exception as exc:
@@ -735,6 +749,7 @@ class RobustLoopbackCapture:
                     )
                     await candidate.start()  # type: ignore[union-attr]
                     self._delegate = candidate
+                    self._started_default_device_name = self._current_default_output_name()
                     log.info("robust_loopback.backend", backend="virtual_input", device_index=virtual_idx)
                     return
                 except Exception as exc:
@@ -755,10 +770,48 @@ class RobustLoopbackCapture:
             self._delegate = None
 
     async def stream(self, chunk_duration_ms: int = 500) -> AsyncIterator[AudioChunk]:
-        if self._delegate is None:
-            raise AudioCaptureError("RobustLoopbackCapture is not active")
-        async for chunk in self._delegate.stream(chunk_duration_ms=chunk_duration_ms):  # type: ignore[union-attr]
-            yield chunk
+        # Check default device every 60 chunks (~30 s with 500 ms chunks).
+        # When a new audio output device becomes the system default (e.g. headphones
+        # plugged in), restart capture on the new device automatically.
+        _CHECK_EVERY = 60
+        while self._delegate is not None:
+            device_changed = False
+            chunk_count = 0
+            async for chunk in self._delegate.stream(chunk_duration_ms=chunk_duration_ms):  # type: ignore[union-attr]
+                yield chunk
+                chunk_count += 1
+                if chunk_count % _CHECK_EVERY == 0 and self._device_id is None:
+                    # Only auto-switch when no explicit device was requested.
+                    current = self._current_default_output_name()
+                    if (
+                        current
+                        and self._started_default_device_name
+                        and current != self._started_default_device_name
+                    ):
+                        log.info(
+                            "robust_loopback.default_device_changed",
+                            old=self._started_default_device_name,
+                            new=current,
+                        )
+                        device_changed = True
+                        break
+
+            if not device_changed or self._delegate is None:
+                break
+
+            # Restart on the new default device.
+            try:
+                await self._delegate.stop()  # type: ignore[union-attr]
+            except Exception:
+                pass
+            self._delegate = None
+            try:
+                await self.start()
+                log.info("robust_loopback.restarted_on_new_device", device=self._started_default_device_name)
+            except Exception as exc:
+                raise AudioCaptureError(
+                    f"Failed to restart loopback after default device change: {exc}"
+                ) from exc
 
 
 class PyAudioLoopbackCapture:

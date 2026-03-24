@@ -88,6 +88,8 @@ def extract_audio(
         source=str(source_path),
         target=str(tmp_path),
         sample_rate=sample_rate,
+        channels=channels,
+        ffmpeg_binary=ffmpeg_binary,
     )
 
     try:
@@ -123,6 +125,9 @@ def extract_audio(
         "extractor.done",
         source=str(source_path),
         size_bytes=tmp_path.stat().st_size,
+        target=str(tmp_path),
+        channels=channels,
+        sample_rate=sample_rate,
     )
     return tmp_path
 

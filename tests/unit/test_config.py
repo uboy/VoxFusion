@@ -1,5 +1,8 @@
 """Unit tests for voxfusion.config models and loader."""
 
+import json
+import os
+
 import pytest
 
 from voxfusion.config.loader import (
@@ -12,6 +15,7 @@ from voxfusion.config.models import (
     ASRConfig,
     CaptureConfig,
     DiarizationConfig,
+    DiarizationMLConfig,
     OutputConfig,
     PipelineConfig,
     SecurityConfig,
@@ -63,6 +67,10 @@ class TestPipelineConfig:
         with pytest.raises(Exception):
             VADParameters(threshold=2.0)  # must be <= 1.0
 
+    def test_diarization_ml_rejects_inverted_speaker_hints(self) -> None:
+        with pytest.raises(Exception):
+            DiarizationMLConfig(min_speakers=4, max_speakers=2)
+
 
 class TestConfigLoader:
     def test_load_defaults(self) -> None:
@@ -97,3 +105,44 @@ class TestConfigLoader:
     def test_load_config_with_overrides(self) -> None:
         config = load_config({"asr": {"model_size": "large-v3"}})
         assert config.asr.model_size == "large-v3"
+
+    def test_load_config_reads_documented_voxfusion_diarization_token_env(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN", "hf-test-token")
+        config = load_config()
+        assert config.diarization.ml.hf_auth_token == "hf-test-token"
+
+    def test_load_config_uses_gui_settings_hf_token_as_process_fallback(
+        self,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        settings_path = tmp_path / "gui_settings.json"
+        settings_path.write_text(json.dumps({"hf_token": "hf-gui-token"}), encoding="utf-8")
+        monkeypatch.setenv("VOXFUSION_GUI_SETTINGS_PATH", str(settings_path))
+        monkeypatch.delenv("VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN", raising=False)
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+
+        load_config()
+
+        assert os.environ["HF_TOKEN"] == "hf-gui-token"
+        assert os.environ["HUGGING_FACE_HUB_TOKEN"] == "hf-gui-token"
+
+    def test_load_config_does_not_override_existing_hf_env_with_gui_settings(
+        self,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        settings_path = tmp_path / "gui_settings.json"
+        settings_path.write_text(json.dumps({"hf_token": "hf-gui-token"}), encoding="utf-8")
+        monkeypatch.setenv("VOXFUSION_GUI_SETTINGS_PATH", str(settings_path))
+        monkeypatch.setenv("HF_TOKEN", "hf-env-token")
+        monkeypatch.delenv("VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN", raising=False)
+        monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+
+        load_config()
+
+        assert os.environ["HF_TOKEN"] == "hf-env-token"

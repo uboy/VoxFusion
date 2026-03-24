@@ -15,6 +15,9 @@ Runs on Windows, macOS, and Linux. Comes with a GUI and a CLI.
   - Parakeet v3 — 25 European languages incl. Russian/Ukrainian, file only
   - OpenVINO Whisper — automatic when Intel Iris Xe / Arc GPU is detected
 - **Speaker diarization** — identifies who said what (pyannote.audio or channel-based)
+  - file transcription can use `auto`, `ml`, `hybrid`, or `channel`
+  - `auto` prefers ML diarization when pyannote + Hugging Face token are available
+  - pyannote diarization requires gated Hugging Face access not only to `pyannote/speaker-diarization-3.1`, but also to its dependent gated models such as `pyannote/segmentation-3.0`
 - **Offline translation** — no API keys required (Argos Translate)
 - **Output formats** — JSON, SRT, VTT, plain text
 - **GUI** — multi-step workflow: record → transcribe → send to LLM (Open WebUI compatible)
@@ -89,6 +92,19 @@ Required for transcribing video files and compressed audio (MP3, MP4, MKV, AAC�
 - **Linux:** `sudo apt install ffmpeg`
 - **macOS:** `brew install ffmpeg`
 
+### pyannote gated models
+
+ML speaker diarization uses `pyannote.audio` and downloads gated models from Hugging Face on first use.
+
+Before running diarization, make sure you:
+
+- created a Hugging Face token
+- accepted access for `pyannote/speaker-diarization-3.1`
+- accepted access for `pyannote/segmentation-3.0`
+- entered the token in GUI `Settings -> HuggingFace Token` or set `HF_TOKEN` / `VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN`
+
+After the first successful download, the models are cached locally and can be reused offline.
+
 ## Running
 
 ```bash
@@ -116,6 +132,8 @@ voxfusion record --source microphone --output recording.wav
 voxfusion transcribe recording.wav
 voxfusion transcribe recording.wav --output-format srt
 voxfusion transcribe interview.mp4 --output-format json   # requires FFmpeg
+voxfusion transcribe meeting.wav --diarization-strategy auto
+voxfusion transcribe meeting.wav --diarization-strategy ml --min-speakers 2 --max-speakers 6
 
 # List audio devices
 voxfusion devices
@@ -154,10 +172,12 @@ All settings can be set via environment variables (prefix `VOXFUSION_`, double u
 | `VOXFUSION_ASR__MODEL_SIZE` | ASR model: `tiny`, `small`, `medium`, `large-v3`, `gigaam-v3-e2e-ctc` |
 | `VOXFUSION_ASR__MODEL_PATH` | Path to a local model directory |
 | `VOXFUSION_ASR__LANGUAGE` | Force language code, e.g. `ru`, `en` |
-| `VOXFUSION_DIARIZATION__HF_AUTH_TOKEN` | HuggingFace token for pyannote diarization models |
+| `VOXFUSION_DIARIZATION__STRATEGY` | Diarization mode: `auto`, `channel`, `ml`, `hybrid` |
+| `VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN` | HuggingFace token for pyannote diarization models |
 | `VOXFUSION_GUI_SETTINGS_PATH` | Override GUI settings file location |
 
 GUI settings persist to `~/.voxfusion/gui_settings.json`.
+The GUI file-transcription tab also persists speaker-separation settings and reuses the same Hugging Face token for gated models and pyannote diarization.
 
 ## Docs
 

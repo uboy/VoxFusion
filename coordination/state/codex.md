@@ -201,3 +201,382 @@
   - `scripts/validate-review-report.ps1` and `scripts/validate-review-report.sh` are referenced by policy but do not exist in this repo, so review-report validation could not be executed.
 - Review artifact:
   - `coordination/reviews/2026-03-19-implementation-audit.md`
+
+2026-03-23
+
+- Task type: non-trivial root-cause investigation for missing diarization speaker separation with GigaAM.
+- Startup ritual:
+  - `coordination/tasks.jsonl` checked; no in-progress task to resume for this issue.
+  - `coordination/state/codex.md` resumed successfully.
+  - `%USERPROFILE%/AGENTS-cold.md` loaded for startup/session rules.
+- Policy observations:
+  - `policy/team-lead-orchestrator.md` is still referenced by policy but missing in the repo.
+  - `cycle-contract.json` is absent in the repo root.
+- User-reported symptom:
+  - transcript output shows only `[00:00:00] [SPEAKER_00]` even though the source audio should contain more than five speakers.
+  - selected ASR model is `gigaam`.
+- Coordination artifacts for this investigation:
+  - `.scratchpad/research.md`
+  - `.scratchpad/plan.md`
+- Current checkpoint:
+  - next step is code-path inspection around diarization, segmentation, and GigaAM backend handling to determine whether speaker attribution is unsupported, bypassed, or misconfigured.
+- Root-cause findings:
+  - batch/file transcription currently always builds `ChannelDiarizer`, not `PyAnnoteDiarizer` or `HybridDiarizer`:
+    - `src/voxfusion/pipeline/orchestrator.py`
+    - `src/voxfusion/gui/runtime.py`
+    - `src/voxfusion/cli/capture_cmd.py`
+  - default config keeps `diarization.strategy: channel`, and no active CLI/GUI path switches the worker/orchestrator to ML or hybrid diarization:
+    - `src/voxfusion/config/defaults.yaml`
+    - `src/voxfusion/cli/transcribe_cmd.py`
+  - `ChannelDiarizer` intentionally maps unknown/file sources to `SPEAKER_00`; for file input `audio.source == "file"` so every segment gets the same label:
+    - `src/voxfusion/diarization/channel.py`
+  - `GigaAMCTCEngine` returns exactly one `TranscriptionSegment` spanning the whole file, with `words=None`:
+    - `src/voxfusion/asr/gigaam_engine.py`
+    - `tests/unit/test_gigaam_engine.py`
+  - even if ML diarization were wired in, current `align_segments(...)` only assigns one speaker per ASR segment and does not split a long segment by speaker turns:
+    - `src/voxfusion/diarization/alignment.py`
+- User-visible explanation:
+  - current output like `[00:00:00] SPEAKER_00: ...` is expected for file transcription through the present pipeline; it does not mean GigaAM detected one speaker, it means the project is falling back to channel/file labeling.
+- Verification:
+  - `pytest tests\unit\test_diarization.py tests\unit\test_gigaam_engine.py tests\unit\test_alignment.py -q` -> pass (22 passed)
+  - warning only: `pytest-asyncio` loop-scope deprecation from environment; unrelated to the investigated behavior.
+- Docs/policy gate note:
+  - README claims speaker diarization support, but the currently wired batch/file path does not expose ML/hybrid diarization in the active runtime path.
+  - no functional code change was made, so review-report generation/validation was not applicable for this investigation-only task.
+- New follow-up task:
+  - user requested a design for fixing diarization, plus an independent review of that design by a separate agent.
+- Additional design-relevant findings:
+  - file transcription UI already has a natural place for gated-model credentials via the existing HuggingFace token settings block in `src/voxfusion/gui/main.py`.
+  - file transcription results are displayed and auto-saved from `_file_segments`; adding richer speaker segmentation can remain local to the file worker/result path without changing the output widgets.
+  - `FileTranscribeWorker` currently only passes ASR overrides; there is no user-facing diarization override path in GUI or `voxfusion transcribe`.
+  - `FasterWhisperEngine` can emit multiple ASR segments and optional word timings, but `GigaAMCTCEngine` currently emits one full-file segment with `words=None`.
+- Current design direction:
+  - the fix likely needs two layers:
+    1. actual diarizer selection in batch/file flows (`channel` / `ml` / `hybrid`)
+    2. a post-ASR segmentation strategy for long monolithic GigaAM segments so ML diarization can produce multiple visible speakers.
+- Verification-surface findings for the design:
+  - there is currently no dedicated `tests/unit/test_transcribe_cli.py`; CLI diarization flag coverage will likely need a new test file.
+  - existing integration tests under `tests/integration/test_realworld_e2e.py` instantiate `ChannelDiarizer()` directly for batch pipelines, so regression coverage for ML/hybrid routing will need new tests or targeted updates.
+  - current alignment tests cover overlap selection but not multi-turn splitting of a single ASR segment.
+- Independent review:
+  - spawned reviewer agent `Jason` (`019d1b18-a999-7331-9dd8-fbb6ed14e9dc`) to critique the design for regressions, missing edge cases, and semantic risks.
+- Reviewer findings integrated into the design:
+  - removed the unsafe idea of duplicating full transcript text across multiple speakers when `words is None`
+  - added file-mode `auto` strategy resolution so GigaAM users do not silently stay on `channel`
+  - added explicit validation/warning plumbing requirements for ML/hybrid controls
+  - added separate ASR vs diarized segment accounting in the plan
+  - shifted first-step GigaAM improvement toward returning chunk-level timed segments
+- Current checkpoint:
+  - reviewer found one remaining blocker in chunk granularity for GigaAM.
+  - design was updated again toward a diarization-first file path for coarse/no-word backends:
+    - run ML diarization first
+    - normalize speaker turns
+    - transcribe each speaker-homogeneous window with GigaAM
+  - sent the revised design back to the same reviewer for a final blocker-level re-check.
+- Final review outcome:
+  - reviewer confirmed that no blocker-level design issues remain after:
+    - removing text-duplication fallback,
+    - introducing file-mode `auto`,
+    - adding warning/validation requirements,
+    - switching GigaAM ML/hybrid file mode to diarization-first processing,
+    - adding absolute-timeline rebasing invariants.
+- Current status:
+  - design phase is complete and ready for the annotation cycle / user `CC`.
+- User approved implementation after reviewing the design.
+- Implementation phase scope:
+  - diarizer factory and file-mode `auto` resolution
+  - warning plumbing
+  - CLI/GUI diarization controls
+  - diarization-first GigaAM batch path
+  - safe alignment/output behavior and regression coverage
+- Worktree note before edits:
+  - unrelated existing modifications are present in:
+    - `scripts/build_binaries.py`
+    - `src/voxfusion/asr_catalog.py`
+    - `src/voxfusion/capture/wasapi.py`
+    - `src/voxfusion/gui/main.py`
+    - `src/voxfusion/recording/recorder.py`
+  - implementation should avoid reverting or trampling those edits.
+- Implementation progress:
+  - added config validation for diarization speaker hints
+  - added warning event type and diarizer factory with `auto/channel/ml/hybrid` resolution
+  - batch file pipeline now supports a diarization-first GigaAM path with absolute timeline rebasing
+  - CLI `transcribe` now accepts diarization strategy and speaker-count hints
+  - GUI file flow now exposes diarization controls and persists them in GUI settings
+  - alignment now splits multi-speaker segments only when word timings exist
+- Verification so far:
+  - `python -m py_compile ...` over changed source/test files -> pass
+  - `pytest tests\unit\test_config.py tests\unit\test_alignment.py tests\unit\test_diarization_factory.py tests\unit\test_batch_pipeline.py tests\unit\test_transcribe_cli.py tests\unit\test_gui_flow.py -q` -> pass (`48 passed`)
+  - `pytest tests\unit\test_gigaam_engine.py tests\unit\test_diarization.py tests\unit\test_output_formatters.py -q` -> pass (`33 passed`)
+  - `pytest tests\integration\test_realworld_e2e.py -k test_file_transcribe_worker_whisper_small -q`:
+    - initial run failed because `importlib.util.find_spec("pyannote.audio")` raised `ModuleNotFoundError` on systems without the parent package
+    - fixed in `src/voxfusion/diarization/factory.py` by treating missing `pyannote` as a normal unavailable-ML case
+    - rerun -> pass (`1 passed, 21 deselected`)
+  - `git diff --check -- ...` on changed implementation files -> pass (CRLF normalization warnings only)
+- Independent code review:
+  - sent the implementation diff to reviewer agent `Jason` and waiting for findings.
+- Code review findings and follow-up:
+  - reviewer found a high-severity overlap bug in the diarization-first batch path: overlapping speaker turns could be transcribed twice.
+  - fix applied in `src/voxfusion/pipeline/batch.py`:
+    - overlapping turns are flattened into one non-overlapping timeline before ASR windows are generated.
+  - regression coverage added in `tests/unit/test_batch_pipeline.py` for overlapping turns.
+  - post-fix verification:
+    - `pytest tests\unit\test_batch_pipeline.py tests\unit\test_alignment.py tests\unit\test_diarization_factory.py tests\unit\test_transcribe_cli.py tests\unit\test_gui_flow.py -q` -> pass (`33 passed`)
+    - `pytest tests\integration\test_realworld_e2e.py -k test_file_transcribe_worker_whisper_small -q` -> pass (`1 passed, 21 deselected`)
+  - updated diff sent back to reviewer agent `Jason` for a final blocker-level re-check.
+- Final implementation review outcome:
+  - reviewer confirmed that no blocker-level issues remain.
+  - residual risk noted by reviewer:
+    - overlap winner policy is still heuristic for dense crosstalk cases
+    - no real GigaAM diarization-first E2E run was executed in the current environment
+- Artifacts:
+  - review report: `coordination/reviews/2026-03-23-gigaam-diarization-implementation.md`
+- Final verification set:
+  - `pytest tests\unit\test_config.py tests\unit\test_alignment.py tests\unit\test_diarization_factory.py tests\unit\test_batch_pipeline.py tests\unit\test_transcribe_cli.py tests\unit\test_gui_flow.py -q` -> pass (`48 passed`)
+  - `pytest tests\unit\test_gigaam_engine.py tests\unit\test_diarization.py tests\unit\test_output_formatters.py -q` -> pass (`33 passed`)
+  - `pytest tests\integration\test_realworld_e2e.py -k test_file_transcribe_worker_whisper_small -q` -> pass (`1 passed, 21 deselected`)
+  - `git diff --check -- README.md ... coordination\reviews\2026-03-23-gigaam-diarization-implementation.md` -> pass (CRLF normalization warnings only)
+- Review-report validation gate:
+  - `scripts/validate-review-report.ps1` and `scripts/validate-review-report.sh` are still missing, so the policy-referenced validation step could not be executed.
+
+- Independent design review task started for the proposed multi-speaker diarization fix.
+- Startup/resumption notes for this review:
+  - `coordination/tasks.jsonl` contains `codex-2026-03-23-diarization-design` with status `in_progress`.
+  - `%USERPROFILE%/AGENTS-cold.md` confirms startup ritual and continuous persistence requirements.
+  - `policy/team-lead-orchestrator.md` is referenced by project policy but missing from the repo.
+- Review inputs loaded:
+  - `.scratchpad/research.md`
+  - `.scratchpad/plan.md`
+  - code-review skill instructions
+- Current checkpoint:
+  - inspecting requested runtime/diarization files to validate whether the proposed design is coherent with the actual code paths and to identify correctness/regression risks before reporting findings.
+- Independent design review findings checkpoint:
+  - likely blocking issue in `.scratchpad/plan.md`: for `words is None`, the plan proposes duplicating the full ASR text into every diarized split segment. With current GigaAM output (`words=None`, one full-file `TranscriptionSegment`), that would create materially false per-speaker transcripts and repeat content in GUI/CLI exports.
+  - default-behavior gap: the plan keeps diarization strategy defaulting to `channel`, so the reported GigaAM/file symptom can remain the default path unless the user explicitly changes diarization mode.
+  - warning/validation gap: the plan promises explicit hybrid fallback warnings and min/max speaker controls, but the current runtime surfaces only status/errors while `HybridDiarizer` falls back through logs; `min_speakers` / `max_speakers` also have no current validation.
+  - residual regression risk: if alignment starts splitting one ASR segment into many diarized segments, `BatchPipeline` metadata and completion messages still report the original ASR segment count rather than the final diarized count.
+- Quick re-check of revised design artifacts completed:
+  - previous blocker about text duplication is closed in the design.
+  - file-mode `auto` behavior, warning plumbing, min/max validation, and separate ASR vs diarized counters are now explicitly covered.
+  - one blocker-level concern remains in the design text: it still relies on one `TranscriptionSegment` per existing GigaAM internal chunk and only splits further when word timings exist. Given current GigaAM chunking is coarse, this can still collapse multiple speaker turns inside a chunk to one dominant-speaker label, which weakens the core goal of meaningful multi-speaker diarization.
+- Second revised design re-check completed:
+  - the previous chunk-granularity blocker is addressed by the new diarization-first GigaAM path.
+  - one blocker-level design gap remains: the docs still do not explicitly define that diarization-first window transcription must produce a single non-overlapping absolute-time timeline.
+  - current GigaAM engine returns local segment times starting at `0.0` per `transcribe(...)` call, so the design must require rebasing returned segments by window start and must define how overlapping diarization turns are flattened/resolved before transcription.
+- Final blocker-only design re-check completed:
+  - `.scratchpad/research.md` now explicitly defines timeline invariants for the diarization-first path.
+  - `.scratchpad/plan.md` now requires rebasing window-local ASR segments to absolute file time and preserving one monotonic file timeline for GUI/export/LLM consumers.
+  - blocker-level verdict: no blocker-level design issues remain in the reviewed design artifacts.
+- Independent implementation review started for the diarization changes listed by the user.
+- Current review findings:
+  - likely high-severity correctness bug in `src/voxfusion/pipeline/batch.py`: `_normalize_turns(...)` sorts/merges/splits turns but does not resolve overlapping turns from different speakers before `_transcribe_diarized_windows(...)` slices and transcribes each window, so overlapping diarization output can cause duplicated audio transcription in the diarization-first path.
+  - test coverage is thin around the new windowed path: `tests/unit/test_batch_pipeline.py` only covers a simple non-overlapping two-turn rebasing case and does not exercise overlapping turns, warning emission, or fallback semantics.
+- Verification for the review:
+  - `python -m pytest tests/unit/test_batch_pipeline.py tests/unit/test_alignment.py tests/unit/test_diarization_factory.py tests/unit/test_transcribe_cli.py tests/unit/test_gui_flow.py -q` -> pass (32 passed)
+  - warning only: `pytest-asyncio` loop-scope deprecation from the environment.
+- Re-review after overlap fix:
+  - `src/voxfusion/pipeline/batch.py` now flattens overlapping speaker turns into a single non-overlapping timeline before diarization-first window transcription.
+  - `tests/unit/test_batch_pipeline.py` now includes an overlapping-turn regression test covering the previous duplication bug.
+  - blocker-only review outcome: no blocker-level implementation issues remain based on the reviewed files and targeted verification.
+- Additional verification:
+  - `python -m pytest tests/unit/test_batch_pipeline.py tests/integration/test_realworld_e2e.py -k "test_batch_pipeline_flattens_overlapping_turns or test_file_transcribe_worker_whisper_small" -q` -> pass (2 passed, 22 deselected)
+  - warning only: `pytest-asyncio` loop-scope deprecation from the environment.
+
+- New task: observability + real runtime root-cause for diarization fallback.
+- Evidence captured from the user's real failing run:
+  - runtime log ends with `batch.completed ... asr_segments=1 diarized_segments=1`
+  - resulting transcript starts with `[00:00:00] [SPEAKER_00]`
+  - extracted file path is mono (`file_source.started ... channels=1`) but that alone does not block ML diarization
+  - current GUI settings at `%USERPROFILE%/.voxfusion/gui_settings.json` show:
+    - `file_model = gigaam-v3-e2e-ctc`
+    - `file_diarization_strategy = auto`
+    - `hf_token = ""`
+- Root-cause status:
+  - user-specific root cause for the observed run is now concrete: with empty HF token and `auto` strategy, diarizer selection legitimately falls back to `channel`, so diarization-first never runs
+  - observability gap remains large because structured logs do not reveal requested vs resolved diarization strategy, ML readiness, token presence/source, or fallback reason
+  - code mismatch also identified:
+    - `PyAnnoteDiarizer` accepts `VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN`
+    - diarizer preflight selection in `factory.py` currently does not
+- Current implementation intent:
+  - add high-signal structured logs at config load, GUI file-transcribe start, diarizer selection, batch-path selection, warning emission, and recording lifecycle boundaries
+  - fix preflight token resolution to honor the documented VOXFUSION env var
+  - add focused regression tests for token resolution and path selection
+- Implementation completed for the observability/root-cause task:
+  - `src/voxfusion/config/loader.py`
+    - logs `config.loaded` with loaded layers, ASR/diarization summary, and sanitized token presence/source
+    - applies a compatibility env backfill so documented `VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN` actually reaches the merged config
+  - `src/voxfusion/diarization/factory.py`
+    - logs `diarization.selection` with requested/resolved strategy, ML readiness, fallback reason, token presence/source, and speaker hints
+    - logs explicit `diarization.selection_failed` on invalid explicit ML requests
+    - now accepts `VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN` in preflight, matching runtime diarizer behavior
+  - `src/voxfusion/pipeline/orchestrator.py`
+    - logs `orchestrator.components_ready`
+  - `src/voxfusion/pipeline/batch.py`
+    - mirrors warnings into structured logs
+    - logs `batch.diarization_path_selected`
+    - logs raw/normalized diarization turn counts for diarization-first runs
+  - `src/voxfusion/gui/runtime.py`
+    - logs `gui.file_transcribe_requested` with file/model/strategy/token summary
+    - logs `gui.file_transcribe_completed` with resulting processing info
+  - `src/voxfusion/recording/recorder.py`
+    - logs recording start/pause/resume/stop requests, partial-source starts, MP3 encode start, and richer completion summary
+  - `src/voxfusion/media/extractor.py`
+    - logs extraction channel/sample-rate/ffmpeg metadata on start and completion
+- Verified root cause for the real file:
+  - `%USERPROFILE%/.voxfusion/gui_settings.json` had `hf_token = ""`
+  - with `file_diarization_strategy = auto`, diarizer selection therefore resolved to `channel`
+  - that explains the observed runtime signature:
+    - one `[SPEAKER_00]` transcript
+    - `batch.completed ... asr_segments=1 diarized_segments=1`
+- Additional bug fixed during this task:
+  - the documented `VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN` path did not previously survive `load_config()` when nested config dicts were already supplied
+  - targeted regression now covers both config loading and diarizer selection from that env var
+- Targeted verification:
+  - `python -m py_compile src\voxfusion\config\loader.py src\voxfusion\diarization\factory.py src\voxfusion\pipeline\orchestrator.py src\voxfusion\pipeline\batch.py src\voxfusion\gui\runtime.py src\voxfusion\recording\recorder.py src\voxfusion\media\extractor.py tests\unit\test_config.py tests\unit\test_diarization_factory.py` -> pass
+  - `pytest tests\unit\test_config.py tests\unit\test_diarization_factory.py tests\unit\test_batch_pipeline.py tests\unit\test_gui_flow.py -q` -> pass (`37 passed`)
+  - warning only: `pytest-asyncio` loop-scope deprecation from the environment
+- 2026-03-23 runtime repro with real file completed.
+- Source/venv run on `recording_both_20260323_150111.mp3` now reaches ML diarization path successfully:
+  - `config.loaded ... diarization_token_present=True`
+  - `diarization.selection ... resolved_strategy=ml`
+  - extraction via ffmpeg succeeds
+- Previous pyannote API mismatch (`use_auth_token`) is fixed by `src/voxfusion/diarization/pyannote_engine.py` compatibility shim.
+- Current exact blocking root cause is external access control, not local routing:
+  - pyannote pipeline load fails with HTTP 403 on `pyannote/speaker-diarization-3.1`
+  - error text says the current HF account/token is not in the authorized list for the gated repo
+  - therefore diarization never starts despite valid token presence
+- Secondary runtime finding remains for old bundled binary only:
+  - existing `dist/binaries/voxfusion-cli` package is missing `pyannote/audio/telemetry/config.yaml`
+  - source/venv run is the authoritative check for current code
+- Latest local verification:
+  - `pytest tests/unit/test_pyannote_engine.py tests/unit/test_diarization_factory.py tests/unit/test_config.py -q` -> 24 passed
+  - real CLI repro reaches ML diarization and fails only at gated-model authorization
+- Additional HF verification completed:
+  - `HfApi.model_info("pyannote/speaker-diarization-3.1")` succeeds with the current GUI token
+  - direct `hf_hub_download(..., filename="config.yaml", token=...)` fails with `GatedRepoError 403`
+- Interpretation:
+  - the token is syntactically valid and accepted by HF
+  - but this account/token still does not have file download access to the gated pyannote repo
+  - this matches the runtime diarization failure exactly
+- Final root-cause after real runtime reproduction on `recording_both_20260323_150111.mp3` and `tmp_sample_120s.wav`:
+  - external blockers were successive gated HF accesses (`speaker-diarization-3.1`, then `segmentation-3.0`)
+  - after access was granted, code still under-diarized because batch pipeline passed preprocessed audio to pyannote
+  - `Resampler + Normalizer` collapsed raw 120s sample from 17 turns (including `SPEAKER_01`) to 8 turns, all `SPEAKER_00`
+- Implementation fix completed:
+  - `src/voxfusion/pipeline/batch.py` now keeps separate raw and preprocessed full-audio representations
+  - ML diarization uses raw audio; ASR still uses preprocessed audio
+  - standard ASR-first diarizer call now also receives raw audio instead of preprocessed audio
+- Runtime compatibility fixes already in place:
+  - `src/voxfusion/diarization/pyannote_engine.py` supports both `token` and `use_auth_token`
+  - same engine now supports both old annotation output and new `DiarizeOutput.speaker_diarization`
+- Documentation updated:
+  - README now explicitly documents accepting gated access for dependent pyannote repos, including `pyannote/segmentation-3.0`
+- Verification status:
+  - `pytest tests/unit/test_batch_pipeline.py tests/unit/test_pyannote_engine.py tests/unit/test_diarization_factory.py tests/unit/test_config.py -q` -> 28 passed
+  - 120s real end-to-end source run now succeeds with ML diarization path
+  - resulting transcript contains multiple speaker labels (`SPEAKER_01` at 00:00 and 01:53)
+
+2026-03-24
+
+- Task type: non-trivial observability follow-up for long silent diarization stages in GUI/file transcription.
+- Startup ritual:
+  - `coordination/tasks.jsonl` checked; new in-progress task created for diarization progress observability.
+  - `coordination/state/codex.md` resumed successfully.
+  - `%USERPROFILE%/AGENTS-cold.md` loaded for startup/session rules.
+- User-reported symptom:
+  - with `resolved_strategy=ml` and `batch.diarization_path_selected ... diarization_first=True`, the GUI appears stuck after `pyannote.pipeline_loaded`.
+  - timer keeps advancing, but logs stay silent for a long time, so operator cannot tell whether diarization is working or frozen.
+- Current checkpoint:
+  - next step is to inspect `BatchPipeline` and `PyAnnoteDiarizer` to pinpoint the long-running await and add progress/heartbeat instrumentation plus GUI-visible status updates without log spam.
+- Root-cause for the "looks hung after pyannote.pipeline_loaded" symptom:
+  - the long silent stage is `await diarize_turns(full_audio)` inside `BatchPipeline._transcribe_diarized_windows(...)`
+  - during diarization-first mode, speaker-turn extraction runs before any GigaAM window transcription, so the operator previously saw no further log lines until pyannote returned
+- Implementation completed:
+  - `src/voxfusion/pipeline/batch.py`
+    - added `EventType.PROGRESS` emission for long diarization-first work
+    - added structured logs:
+      - `batch.diarization_turns_started`
+      - `batch.diarization_turns_in_progress`
+      - `batch.diarized_window_progress`
+    - added bounded heartbeat during pyannote speaker-turn extraction
+    - added GUI-visible progress/status updates while transcribing diarized speaker windows
+    - added rough ETA reporting:
+      - heuristic ETA during pyannote speaker-turn extraction
+      - runtime-derived ETA during speaker-window transcription
+  - `src/voxfusion/gui/runtime.py`
+    - file transcription worker now handles `EventType.PROGRESS` and updates GUI status/progress bar mid-stage
+  - `tests/unit/test_batch_pipeline.py`
+    - added regression test verifying progress events are emitted for the long diarization-first path
+- Verification:
+  - `.\venv\Scripts\python.exe -m pytest tests\unit\test_batch_pipeline.py tests\unit\test_gui_flow.py -q` -> pass (`18 passed`)
+  - `.\venv\Scripts\python.exe -m pytest tests\unit\test_batch_pipeline.py -q` -> pass (`4 passed`)
+
+- Additional runtime bug reported after the long diarization stage:
+  - a real file run eventually crashed in GigaAM with `stft(... expected 0 < n_fft < 270, but got n_fft=320)`
+  - logs immediately before the crash showed `gigaam.transcribe_start ... duration_s=0.0`
+  - this proves diarization-first mode produced an ultra-short final speaker window and passed it to GigaAM
+- Fix completed:
+  - `src/voxfusion/pipeline/batch.py`
+    - now skips diarized windows shorter than 320 samples and logs `batch.diarized_window_skipped`
+  - `src/voxfusion/asr/gigaam_engine.py`
+    - now returns `[]` for audio shorter than 320 samples and logs `gigaam.audio_too_short`
+  - `tests/unit/test_batch_pipeline.py`
+    - added regression coverage for skipping an ultra-short diarized tail window
+  - `tests/unit/test_gigaam_engine.py`
+    - added regression coverage for the backend short-audio guard
+- Verification:
+  - `.\venv\Scripts\python.exe -m pytest tests\unit\test_batch_pipeline.py tests\unit\test_gigaam_engine.py -q` -> pass (`13 passed`)
+  - `git diff --check -- src/voxfusion/pipeline/batch.py src/voxfusion/asr/gigaam_engine.py tests/unit/test_batch_pipeline.py tests/unit/test_gigaam_engine.py` -> pass apart from existing LF->CRLF warnings
+
+- Follow-up ETA fix completed:
+  - `src/voxfusion/pipeline/batch.py`
+    - added `_remaining_diarization_eta(...)`
+    - long diarization progress no longer reports a false `ETA ~00:00` while pyannote is still running
+    - once the initial heuristic estimate is exceeded, progress now switches to `ETA ~unknown`
+  - `tests/unit/test_batch_pipeline.py`
+    - added regression coverage for the exceeded-estimate case
+- Verification:
+  - `.\venv\Scripts\python.exe -m pytest tests\unit\test_batch_pipeline.py -q` -> pass (`6 passed`)
+- Real full-file validation runs executed on `recording_both_20260323_150111.mp3`:
+  - fallback CLI run:
+    - command used `python -m voxfusion transcribe ... --output .\fulltest_gigaam_20260324.json`
+    - shell environment had no `HF_TOKEN`, so runtime resolved to `faster-whisper + channel fallback`
+    - completed successfully in `1126.6s`
+    - output written to `fulltest_gigaam_20260324.json`
+  - GigaAM full-file CLI run without ML diarization:
+    - command used `python -m voxfusion transcribe ... --model gigaam-v3-e2e-ctc --diarization-strategy channel --output .\fulltest_gigaam_channel_20260324.json`
+    - completed successfully in `415.8s`
+    - final chunk (`chunk=116`, about 3s) completed without backend failure
+    - output written to `fulltest_gigaam_channel_20260324.json`
+- Remaining exact reproduction blocker:
+  - the shell used for validation does not have `HF_TOKEN`
+  - therefore the exact `gigaam + pyannote ML diarization-first` production path from the GUI logs could not be re-run end-to-end from this shell
+  - targeted unit coverage and the short-window guard cover that path logically, but a true shell E2E of the ML path still requires a token in this environment
+
+- CLI token fallback from GUI settings completed:
+  - root cause:
+    - GUI loaded `~/.voxfusion/gui_settings.json`, read `hf_token`, and wrote it into process env
+    - CLI never read that file, so shell E2E runs did not inherit the token unless `HF_TOKEN` was set externally
+  - implementation:
+    - `src/voxfusion/config/loader.py`
+      - added a loader-level fallback that reads `hf_token` from `~/.voxfusion/gui_settings.json` (or `VOXFUSION_GUI_SETTINGS_PATH`)
+      - if no stronger token source is present, it exposes that token as `HF_TOKEN` and `HUGGING_FACE_HUB_TOKEN` for the current CLI process
+      - explicit env still wins; nothing stronger is overridden
+  - regression coverage:
+    - `tests/unit/test_config.py`
+      - verifies gui-settings token becomes process env fallback
+      - verifies existing `HF_TOKEN` is not overridden
+  - verification:
+    - `.\venv\Scripts\python.exe -m pytest tests\unit\test_config.py tests\unit\test_transcribe_cli.py -q` -> pass (`21 passed`)
+  - real CLI E2E validation:
+    - initial retry on the old 44-minute MP3 was impossible because `recording_both_20260323_150111.mp3` no longer exists in the workspace
+    - replacement real-file run executed on `tmp_sample_120s.wav`
+    - command:
+      - `python -m voxfusion transcribe .\tmp_sample_120s.wav --model gigaam-v3-e2e-ctc --diarization-strategy auto --output .\fulltest_tmp120_gigaam_auto_gui_token_20260324.json`
+    - observed results:
+      - `config.loaded ... diarization_token_present=True diarization_token_source=env:HF_TOKEN`
+      - `diarization.selection ... resolved_strategy=ml`
+      - `batch.diarization_path_selected ... diarization_first=True`
+      - long diarization heartbeat switched from a finite ETA to `eta_s=None` after the initial estimate was exceeded
+      - run completed successfully with `16 diarized / 16 ASR segments`
+      - output file written to `fulltest_tmp120_gigaam_auto_gui_token_20260324.json`

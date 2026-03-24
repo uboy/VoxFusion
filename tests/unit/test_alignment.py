@@ -1,7 +1,7 @@
 """Tests for ASR-diarization segment alignment."""
 
 from voxfusion.diarization.alignment import SpeakerTurn, align_segments, _overlap
-from voxfusion.models.transcription import TranscriptionSegment
+from voxfusion.models.transcription import TranscriptionSegment, WordTiming
 
 
 def _seg(text: str, start: float, end: float) -> TranscriptionSegment:
@@ -82,3 +82,42 @@ class TestAlignSegments:
         turns = [SpeakerTurn(speaker_id="X", start_time=0.0, end_time=3.0)]
         result = align_segments(segments, turns, speaker_source="custom")
         assert result[0].speaker_source == "custom"
+
+    def test_splits_segment_by_word_timings_for_multiple_speakers(self):
+        segment = TranscriptionSegment(
+            text="Hello world",
+            language="en",
+            start_time=0.0,
+            end_time=1.0,
+            confidence=0.8,
+            words=[
+                WordTiming(word="Hello ", start_time=0.0, end_time=0.45, probability=0.95),
+                WordTiming(word="world", start_time=0.55, end_time=1.0, probability=0.92),
+            ],
+            no_speech_prob=0.0,
+        )
+        turns = [
+            SpeakerTurn(speaker_id="A", start_time=0.0, end_time=0.5),
+            SpeakerTurn(speaker_id="B", start_time=0.5, end_time=1.0),
+        ]
+
+        result = align_segments([segment], turns)
+
+        assert len(result) == 2
+        assert result[0].speaker_id == "A"
+        assert result[0].segment.text == "Hello"
+        assert result[1].speaker_id == "B"
+        assert result[1].segment.text == "world"
+
+    def test_keeps_single_segment_without_word_timings(self):
+        segment = _seg("Hello world", 0.0, 3.0)
+        turns = [
+            SpeakerTurn(speaker_id="A", start_time=0.0, end_time=1.0),
+            SpeakerTurn(speaker_id="B", start_time=1.0, end_time=3.0),
+        ]
+
+        result = align_segments([segment], turns)
+
+        assert len(result) == 1
+        assert result[0].speaker_id == "B"
+        assert result[0].segment.text == "Hello world"
