@@ -8,6 +8,8 @@ Runs on Windows, macOS, and Linux. Comes with a GUI and a CLI.
 
 - **Live transcription** — real-time speech-to-text from mic, system audio, or both simultaneously
 - **File transcription** — WAV, FLAC, and (with FFmpeg) MP3, MP4, MKV, AAC, and more
+- **Batch file transcription** — queue multiple files in the GUI or process a text playlist in the CLI
+- **Two log modes** — `Normal` keeps only key stages and errors, `Debug` shows full stage-by-stage logs
 - **Multiple ASR backends**
   - Whisper via faster-whisper — live and file, 99 languages
   - GigaAM v3 — best accuracy for Russian, file only
@@ -88,13 +90,18 @@ Available extras: `gigaam`, `parakeet`, `diarization`, `translation-offline`, `a
 
 Required for transcribing video files and compressed audio (MP3, MP4, MKV, AAC…). WAV and FLAC work without it.
 
-- **Windows:** download from [gyan.dev/ffmpeg/builds](https://www.gyan.dev/ffmpeg/builds/) and add to PATH
+- **Windows, binary build:** if FFmpeg is missing from `PATH` during `scripts/build_binaries.py`, VoxFusion automatically downloads a portable FFmpeg build and bundles it into the app.
+- **Windows, bundle layout:** in PyInstaller `--onedir` builds, bundled FFmpeg lives under the app `_internal/` directory and is discovered automatically at runtime.
+- **Windows, runtime:** the GUI can install a local portable FFmpeg copy under `~/.voxfusion/ffmpeg/` if neither the bundle nor `PATH` provides it.
+- **GUI speaker detect:** the file-tab `Detect` button uses the same FFmpeg extraction path as full transcription, so container formats such as `webm`, `mp4`, and compressed audio work there too.
+- **Windows, manual:** download from [gyan.dev/ffmpeg/builds](https://www.gyan.dev/ffmpeg/builds/) and add to PATH
 - **Linux:** `sudo apt install ffmpeg`
 - **macOS:** `brew install ffmpeg`
 
 ### pyannote gated models
 
 ML speaker diarization uses `pyannote.audio` and downloads gated models from Hugging Face on first use.
+Frozen GUI/CLI bundles also need the packaged `pyannote/audio/telemetry/config.yaml` file at runtime; `scripts/build_binaries.py` now includes it automatically when `pyannote.audio` is installed.
 
 Before running diarization, make sure you:
 
@@ -135,6 +142,10 @@ voxfusion transcribe interview.mp4 --output-format json   # requires FFmpeg
 voxfusion transcribe meeting.wav --diarization-strategy auto
 voxfusion transcribe meeting.wav --diarization-strategy ml --min-speakers 2 --max-speakers 6
 
+# Transcribe multiple files sequentially
+voxfusion transcribe part1.wav part2.wav part3.wav
+voxfusion transcribe --input-list batch.txt --output-dir transcripts
+
 # List audio devices
 voxfusion devices
 voxfusion devices --type loopback
@@ -148,6 +159,11 @@ voxfusion models download --asr gigaam-v3-e2e-ctc
 ```
 
 On Windows, `voxfusion devices` prints device IDs like `pa:3` (PyAudioWPatch loopback) and `sd:7` (WASAPI). Use `pa:*` IDs for system-audio capture.
+In the GUI File Transcription tab, `Add Files...` creates a queue with per-file status, progress, and result columns, and VoxFusion processes those files one after another with the current settings.
+Queue metadata (duration and size) is loaded asynchronously, so adding large `webm`/video files does not block the GUI; transcription can start immediately and the metadata fills in when ready.
+The GUI layout uses resizable panes for setup, transcript, LLM output, and logs, and the interface language can be switched between English, Russian, and Chinese with the choice persisted across launches.
+The GUI toolbar includes `Logs: Normal/Debug`; `Normal` keeps the log pane readable by showing key milestones and errors only, while `Debug` exposes the full structured pipeline log.
+In the CLI, the default mode is the same compact `Normal` output. Use `voxfusion --debug ...` (or `-v`) when you need the full low-level logs.
 
 ## Build binaries
 
@@ -162,6 +178,19 @@ python scripts/build_binaries.py --target all   # both + ZIPs
 PyInstaller is included in Poetry dev dependencies. For pip installs: `pip install pyinstaller` first.
 
 See `docs/BINARY_BUILD.md` for platform-specific packaging notes.
+
+## Test validation
+
+When ASR models are already cached locally, the most stable full-suite validation command is:
+
+```powershell
+$env:PYTHONPATH='src'
+$env:HF_HUB_OFFLINE='1'
+$env:VOXFUSION_FFMPEG_DIR='build\vendor\ffmpeg-runtime'
+.\venv\Scripts\python.exe -m pytest -q
+```
+
+This avoids flaky proxy/network refreshes and reuses the local Hugging Face cache.
 
 ## Configuration
 

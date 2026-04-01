@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import shutil
 import subprocess
-import sys
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -17,6 +15,7 @@ import soundfile as sf
 from voxfusion.capture.base import AudioCaptureSource
 from voxfusion.capture.mixer import AudioMixer
 from voxfusion.logging import get_logger
+from voxfusion.media.runtime_ffmpeg import find_ffmpeg as _resolve_ffmpeg
 from voxfusion.models.audio import AudioChunk
 
 log = get_logger(__name__)
@@ -45,12 +44,9 @@ _FORMAT_PARAMS: dict[str, tuple[str, str | None]] = {
 
 
 def _find_ffmpeg() -> str | None:
-    """Locate the ffmpeg binary: bundled next to the EXE first, then PATH."""
-    exe_dir = Path(sys.executable).parent
-    for candidate in (exe_dir / "ffmpeg.exe", exe_dir / "ffmpeg"):
-        if candidate.exists():
-            return str(candidate)
-    return shutil.which("ffmpeg")
+    """Locate the ffmpeg binary via the shared runtime resolver."""
+    resolved = _resolve_ffmpeg()
+    return str(resolved) if resolved is not None else None
 
 
 def _encode_mp3(wav_path: Path, output_path: Path, *, ffmpeg: str) -> None:
@@ -237,13 +233,14 @@ def _mix_chunks(
 ) -> np.ndarray:
     """Mix chunks into a single float32 waveform aligned by timestamps.
 
-    Chunks from different sources (mic + system) are summed, not averaged,
-    so each source retains its full amplitude in the final recording.
+    Chunks from different sources (mic + system) are averaged per sample
+    window so simultaneous sources do not clip as aggressively.
     """
     max_end_s = max(chunk.timestamp_end for chunk in chunks)
     total_duration = min(max_end_s, duration_s) if duration_s is not None else max_end_s
     total_samples = max(1, int(np.ceil(total_duration * sample_rate)))
     output = np.zeros((total_samples, channels), dtype=np.float32)
+    counts = np.zeros((total_samples, 1), dtype=np.float32)
 
     for chunk in chunks:
         start_idx = max(0, int(round(chunk.timestamp_start * sample_rate)))
@@ -255,7 +252,10 @@ def _mix_chunks(
         if end_idx <= start_idx:
             continue
         output[start_idx:end_idx] += samples[: end_idx - start_idx]
+        counts[start_idx:end_idx] += 1.0
 
+    counts[counts == 0.0] = 1.0
+    output /= counts
     clipped = np.clip(output, -1.0, 1.0)
     if channels == 1:
         return clipped[:, 0]

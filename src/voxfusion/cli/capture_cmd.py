@@ -109,7 +109,7 @@ def capture(
     quiet = ctx.obj.get("quiet", False)
 
     log_level = "DEBUG" if verbose else ("ERROR" if quiet else "INFO")
-    configure_logging(log_level)
+    configure_logging(log_level, log_mode="debug" if verbose else "normal")
 
     overrides: dict = {}  # type: ignore[type-arg]
     if language:

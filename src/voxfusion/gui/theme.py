@@ -19,19 +19,19 @@ def configure_gui_theme(root: tk.Tk) -> None:
     style.configure("TLabelframe", background="#f3f0e8", borderwidth=1, relief="solid")
     style.configure("TLabelframe.Label", background="#f3f0e8", foreground="#2f2618")
     style.configure("TLabel", background="#f3f0e8", foreground="#2f2618")
-    style.configure("Header.TLabel", background="#f3f0e8", foreground="#1f170c", font=("", 10, "bold"))
+    style.configure("Header.TLabel", background="#f3f0e8", foreground="#1f170c", font=("", 9, "bold"))
     style.configure("Muted.TLabel", background="#f3f0e8", foreground="#6a6254")
-    style.configure("Primary.TButton", padding=(10, 6))
-    style.configure("Accent.TButton", padding=(10, 6))
+    style.configure("Primary.TButton", padding=(8, 4))
+    style.configure("Accent.TButton", padding=(8, 4))
     style.map(
         "Accent.TButton",
         background=[("active", "#d5b980"), ("!disabled", "#c7a861")],
         foreground=[("!disabled", "#20170a")],
     )
-    style.configure("Treeview", rowheight=24, fieldbackground="#fffdfa", background="#fffdfa")
-    style.configure("Treeview.Heading", padding=(8, 6))
-    style.configure("TNotebook", background="#f3f0e8", tabmargins=(6, 6, 6, 0))
-    style.configure("TNotebook.Tab", padding=(14, 8), background="#dfd7c8")
+    style.configure("Treeview", rowheight=22, fieldbackground="#fffdfa", background="#fffdfa")
+    style.configure("Treeview.Heading", padding=(6, 4))
+    style.configure("TNotebook", background="#f3f0e8", tabmargins=(3, 3, 3, 0))
+    style.configure("TNotebook.Tab", padding=(8, 4), background="#dfd7c8")
     style.map(
         "TNotebook.Tab",
         background=[("selected", "#fffdfa"), ("active", "#ece4d6")],

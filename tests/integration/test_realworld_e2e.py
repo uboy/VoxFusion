@@ -71,6 +71,11 @@ def _audio_chunk(samples: np.ndarray, sr: int = SR):
     )
 
 
+async def _empty_async_iter():
+    if False:  # pragma: no cover
+        yield
+
+
 @pytest.fixture(scope="session")
 def test_wav(tmp_path_factory) -> Path:
     """Session-scoped WAV file used by all transcription tests."""
@@ -409,7 +414,7 @@ def test_gigaam_v3_streaming_raises_transcription_error(test_wav: Path) -> None:
     try:
         async def _drain():
             async for _ in engine.transcribe_stream(
-                aiter([]),  # type: ignore[name-defined]
+                _empty_async_iter(),
             ):
                 pass
 

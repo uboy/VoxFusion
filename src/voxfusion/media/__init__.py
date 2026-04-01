@@ -11,6 +11,7 @@ from voxfusion.media.ffmpeg import (
     detect_best_h264_encoder,
     recommended_encoder_workers,
 )
+from voxfusion.media.runtime_ffmpeg import activate_ffmpeg_runtime, find_ffmpeg, install_ffmpeg_local
 
 __all__ = [
     "NEEDS_EXTRACTION_EXTENSIONS",
@@ -18,6 +19,9 @@ __all__ = [
     "detect_best_h264_encoder",
     "extract_audio",
     "extract_audio_async",
+    "activate_ffmpeg_runtime",
+    "find_ffmpeg",
+    "install_ffmpeg_local",
     "needs_extraction",
     "recommended_encoder_workers",
 ]

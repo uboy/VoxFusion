@@ -14,6 +14,7 @@ import numpy as np
 from voxfusion.config.models import ASRConfig
 from voxfusion.exceptions import ModelLoadError, TranscriptionError
 from voxfusion.logging import get_logger
+from voxfusion.media.runtime_ffmpeg import activate_ffmpeg_runtime
 from voxfusion.models.audio import AudioChunk
 from voxfusion.models.transcription import TranscriptionSegment
 
@@ -28,6 +29,8 @@ class BreezeASREngine:
     def __init__(self, config: ASRConfig | None = None) -> None:
         self._config = config or ASRConfig(model_size="breeze-asr")
         self._pipeline: object | None = None
+        self._model: object | None = None
+        self._processor: object | None = None
         self._executor: ThreadPoolExecutor | None = ThreadPoolExecutor(max_workers=1)
 
     @property
@@ -50,13 +53,18 @@ class BreezeASREngine:
         model_ref = self._model_ref()
         local_only = Path(model_ref).exists()
         log.info("asr.loading_model", model=model_ref, engine="breeze", local_only=local_only)
+        activate_ffmpeg_runtime()
         try:
             import torch
             from transformers import (
+                AutoProcessor,
                 AutoModelForSpeechSeq2Seq,
-                WhisperProcessor,
                 pipeline,
             )
+            try:
+                from transformers import WhisperProcessor as _ProcessorCls
+            except ImportError:
+                _ProcessorCls = AutoProcessor
         except ImportError as exc:
             raise ModelLoadError(
                 "Breeze backend requires transformers and torch. "
@@ -64,19 +72,26 @@ class BreezeASREngine:
             ) from exc
 
         try:
-            processor = WhisperProcessor.from_pretrained(model_ref, local_files_only=local_only)
+            processor = _ProcessorCls.from_pretrained(model_ref, local_files_only=local_only)
             model = AutoModelForSpeechSeq2Seq.from_pretrained(
                 model_ref,
                 local_files_only=local_only,
             )
-            self._pipeline = pipeline(
-                "automatic-speech-recognition",
-                model=model,
-                tokenizer=processor.tokenizer,
-                feature_extractor=processor.feature_extractor,
-                torch_dtype=torch.float32,
-                device=-1,
-            )
+            self._processor = processor
+            self._model = model
+            if not (
+                callable(getattr(processor, "__call__", None))
+                and hasattr(processor, "batch_decode")
+                and hasattr(model, "generate")
+            ):
+                self._pipeline = pipeline(
+                    "automatic-speech-recognition",
+                    model=model,
+                    tokenizer=processor.tokenizer,
+                    feature_extractor=processor.feature_extractor,
+                    torch_dtype=torch.float32,
+                    device=-1,
+                )
         except Exception as exc:
             raise ModelLoadError(
                 "Failed to load Breeze model. Set VOXFUSION_ASR__MODEL_PATH to a local model "
@@ -87,6 +102,8 @@ class BreezeASREngine:
 
     def unload_model(self) -> None:
         self._pipeline = None
+        self._model = None
+        self._processor = None
         log.info("asr.model_unloaded", engine="breeze")
 
     def close(self) -> None:
@@ -105,18 +122,63 @@ class BreezeASREngine:
             self.load_model()
         return self._pipeline
 
+    def _decode_direct(self, audio: np.ndarray, *, language: str | None = None) -> str:
+        processor = self._processor
+        model = self._model
+        if processor is None or model is None:
+            self.load_model()
+            processor = self._processor
+            model = self._model
+        if processor is None or model is None:
+            return ""
+        if not (
+            callable(getattr(processor, "__call__", None))
+            and hasattr(processor, "batch_decode")
+            and hasattr(model, "generate")
+        ):
+            return ""
+
+        encoded = processor(audio, sampling_rate=16000, return_tensors="pt")  # type: ignore[operator]
+        if isinstance(encoded, dict):
+            features = encoded.get("input_features")
+            if features is None:
+                features = encoded.get("input_values")
+        else:
+            features = getattr(encoded, "input_features", None)
+            if features is None:
+                features = getattr(encoded, "input_values", None)
+        if features is None:
+            raise TranscriptionError("Breeze processor did not return input features.")
+
+        generation_kwargs: dict[str, object] = {}
+        prompt_builder = getattr(processor, "get_decoder_prompt_ids", None)
+        if callable(prompt_builder):
+            prompt_kwargs: dict[str, object] = {"task": "transcribe"}
+            if language:
+                prompt_kwargs["language"] = language
+            forced_decoder_ids = prompt_builder(**prompt_kwargs)
+            if forced_decoder_ids:
+                generation_kwargs["forced_decoder_ids"] = forced_decoder_ids
+
+        generated_ids = model.generate(features, **generation_kwargs)  # type: ignore[operator]
+        texts = processor.batch_decode(generated_ids, skip_special_tokens=True)  # type: ignore[operator]
+        return str(texts[0] if texts else "").strip()
+
     def _transcribe_sync(self, audio: np.ndarray, *, language: str | None = None) -> list[TranscriptionSegment]:
-        pipe = self._ensure_pipeline()
-        generate_kwargs: dict[str, object] = {"task": "transcribe"}
-        if language:
-            generate_kwargs["language"] = language
         try:
-            result = pipe(  # type: ignore[operator]
-                {"raw": audio, "sampling_rate": 16000},
-                generate_kwargs=generate_kwargs,
-                return_timestamps=False,
-            )
-            text = str(result.get("text", "")).strip()
+            activate_ffmpeg_runtime()
+            text = self._decode_direct(audio, language=language)
+            if not text:
+                pipe = self._ensure_pipeline()
+                generate_kwargs: dict[str, object] = {"task": "transcribe"}
+                if language:
+                    generate_kwargs["language"] = language
+                result = pipe(  # type: ignore[operator]
+                    {"raw": audio, "sampling_rate": 16000},
+                    generate_kwargs=generate_kwargs,
+                    return_timestamps=False,
+                )
+                text = str(result.get("text", "")).strip()
         except Exception as exc:
             raise TranscriptionError(f"Breeze transcription failed: {exc}") from exc
 

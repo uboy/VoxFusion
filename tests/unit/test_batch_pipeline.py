@@ -11,10 +11,11 @@ import soundfile as sf
 
 from voxfusion.config.models import ASRConfig, DiarizationConfig, PipelineConfig
 from voxfusion.diarization.alignment import SpeakerTurn
+from voxfusion.diarization.types import DiarizationTurnResult
 from voxfusion.models.audio import AudioChunk
 from voxfusion.models.transcription import TranscriptionSegment
-from voxfusion.pipeline.events import EventType
 from voxfusion.pipeline.batch import BatchPipeline
+from voxfusion.pipeline.events import EventType
 from voxfusion.preprocessing.pipeline import PreProcessingPipeline
 
 SR = 16_000
@@ -145,6 +146,23 @@ class _TinyTailTurnDiarizer:
         ]
 
 
+class _ExclusiveTurnDiarizer:
+    async def diarize(self, segments, audio=None):
+        del segments, audio
+        return []
+
+    async def diarize_turns(self, audio: AudioChunk) -> list[SpeakerTurn]:
+        del audio
+        return [SpeakerTurn("SPEAKER_REGULAR", 0.0, 2.0)]
+
+    async def diarize_turns_result(self, audio: AudioChunk) -> DiarizationTurnResult:
+        del audio
+        return DiarizationTurnResult(
+            turns=[SpeakerTurn("SPEAKER_REGULAR", 0.0, 2.0)],
+            exclusive_turns=[SpeakerTurn("SPEAKER_EXCLUSIVE", 0.0, 2.0)],
+        )
+
+
 def _write_wav(path: Path, duration_s: float = 2.0) -> Path:
     t = np.linspace(0.0, duration_s, int(SR * duration_s), endpoint=False, dtype=np.float32)
     samples = (0.2 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
@@ -176,6 +194,25 @@ async def test_batch_pipeline_rebases_diarization_first_windows(tmp_path: Path) 
     assert result.segments[1].diarized.segment.start_time == pytest.approx(1.0)
     assert result.processing_info["asr_segments"] == 2
     assert result.processing_info["diarized_segments"] == 2
+
+
+@pytest.mark.asyncio
+async def test_batch_pipeline_prefers_exclusive_turns_for_windows(tmp_path: Path) -> None:
+    audio_file = _write_wav(tmp_path / "exclusive.wav")
+    pipeline = BatchPipeline(
+        asr_engine=_FakeGigaAMEngine(),
+        diarizer=_ExclusiveTurnDiarizer(),
+        preprocessor=PreProcessingPipeline([]),
+        config=PipelineConfig(
+            asr=ASRConfig(model_size="gigaam-v3-e2e-ctc"),
+            diarization=DiarizationConfig(strategy="ml"),
+        ),
+        resolved_diarization_strategy="ml",
+    )
+
+    result = await pipeline.process_file(audio_file)
+
+    assert [seg.diarized.speaker_id for seg in result.segments] == ["SPEAKER_EXCLUSIVE"]
 
 
 @pytest.mark.asyncio

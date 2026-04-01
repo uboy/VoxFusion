@@ -16,6 +16,7 @@ import soundfile as sf
 from voxfusion.config.models import ASRConfig
 from voxfusion.exceptions import ModelLoadError, TranscriptionError
 from voxfusion.logging import get_logger
+from voxfusion.media.runtime_ffmpeg import activate_ffmpeg_runtime
 from voxfusion.models.audio import AudioChunk
 from voxfusion.models.transcription import TranscriptionSegment
 
@@ -53,15 +54,12 @@ class ParakeetASREngine:
         local_path = Path(model_ref)
         log.info("asr.loading_model", model=model_ref, engine="parakeet", local_only=local_path.exists())
         try:
-            import torch as _torch
-            from voxfusion.asr.gigaam_engine import (
-                _install_torchscript_source_fallback,
-                _suppress_subprocess_windows,
-            )
+            from voxfusion.asr.gigaam_engine import _suppress_subprocess_windows
+
             _suppress_subprocess_windows()
-            _install_torchscript_source_fallback(_torch)
         except Exception:
             pass
+        activate_ffmpeg_runtime()
 
         try:
             from nemo.collections.asr.models import ASRModel

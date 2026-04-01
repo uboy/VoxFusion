@@ -4,13 +4,18 @@ Provides structured logging with both human-readable console output
 and machine-readable JSON output modes.
 """
 
+import json
 import logging
+import os
 import sys
+import tempfile
+from pathlib import Path
 
 import structlog
 
 _SUPPRESSED_LOG_MESSAGE_FRAGMENTS = (
     "deprecate positional args:",
+    "generated new fontManager",
     "NumExpr defaulting to ",
     "NOTE: Redirects are currently not supported in Windows or MacOs.",
     "Megatron num_microbatches_calculator not found, using Apex version.",
@@ -18,12 +23,65 @@ _SUPPRESSED_LOG_MESSAGE_FRAGMENTS = (
     "No exporters were provided. This means that no telemetry data will be collected.",
     "Final configuration contains 0 exporter(s)",
     "Initializing DefaultRecorder with no exporters, exporting is disabled",
+    "Could not save font_manager cache",
+    "Couldn't find ffmpeg or avconv - defaulting to ffmpeg, but may not work",
+)
+
+_NORMAL_MODE_KEY_EVENTS = frozenset({
+    "diarization.selection",
+    "batch.diarization_path_selected",
+    "batch.diarization_turns_started",
+    "batch.window_transcription_start",
+    "chunked_diarizer.start",
+    "orchestrator.transcribe_file",
+    "orchestrator.result_written",
+    "streaming.completed",
+})
+
+_NORMAL_MODE_KEY_PREFIXES = (
+    "gui.file_",
+    "gui.live_",
+    "gui.speaker_detect_",
 )
 
 
 def _should_suppress_log_message(message: str) -> bool:
     """Return True when a third-party log message is known-safe noise."""
-    return any(fragment in message for fragment in _SUPPRESSED_LOG_MESSAGE_FRAGMENTS)
+    if any(fragment in message for fragment in _SUPPRESSED_LOG_MESSAGE_FRAGMENTS):
+        return True
+    if "thrown while requesting " in message and "huggingface.co/" in message:
+        return True
+    if "Retrying in " in message and "[Retry " in message:
+        return True
+    if "Found only " in message and "min_cluster_size" in message:
+        return True
+    return False
+
+
+def normalize_log_mode(mode: str | None) -> str:
+    """Return the normalized runtime log mode."""
+    return "debug" if str(mode or "").strip().lower() == "debug" else "normal"
+
+
+def _is_key_stage_event(event_name: str) -> bool:
+    if event_name in _NORMAL_MODE_KEY_EVENTS:
+        return True
+    return any(event_name.startswith(prefix) for prefix in _NORMAL_MODE_KEY_PREFIXES)
+
+
+def _filter_normal_mode_events(
+    _logger: logging.Logger,
+    _method_name: str,
+    event_dict: structlog.types.EventDict,
+) -> structlog.types.EventDict:
+    """Keep only key-stage info logs in normal mode; always keep warnings/errors."""
+    level = str(event_dict.get("level", "info")).lower()
+    if level in {"warning", "error", "critical", "exception"}:
+        return event_dict
+    event_name = str(event_dict.get("event", "")).strip()
+    if _is_key_stage_event(event_name):
+        return event_dict
+    raise structlog.DropEvent
 
 
 class _NoisyDependencyFilter(logging.Filter):
@@ -33,10 +91,78 @@ class _NoisyDependencyFilter(logging.Filter):
         return not _should_suppress_log_message(record.getMessage())
 
 
+def _short_timestamp(raw: object) -> str:
+    text = str(raw or "")
+    if "T" not in text:
+        return text
+    time_part = text.split("T", 1)[1]
+    time_part = time_part.split(".", 1)[0]
+    return time_part.rstrip("Z")
+
+
+def _format_compact_log_value(value: object) -> str:
+    if isinstance(value, str):
+        if any(ch.isspace() for ch in value) or "\\" in value or "/" in value:
+            return json.dumps(value, ensure_ascii=False)
+        return value
+    if isinstance(value, (list, tuple, dict, set)):
+        return json.dumps(value, ensure_ascii=False, default=str)
+    return str(value)
+
+
+def _compact_console_renderer(
+    _logger: logging.Logger,
+    _method_name: str,
+    event_dict: structlog.types.EventDict,
+) -> str:
+    """Render a shorter single-line log format for the GUI log pane."""
+    timestamp = _short_timestamp(event_dict.pop("timestamp", ""))
+    level = str(event_dict.pop("level", "info")).upper()
+    event = str(event_dict.pop("event", "")).strip()
+    event_dict.pop("logger", None)
+
+    parts = [part for part in (timestamp, level, event) if part]
+    rendered = " | ".join(parts)
+
+    details = [
+        f"{key}={_format_compact_log_value(value)}"
+        for key, value in event_dict.items()
+        if value not in (None, "", [], (), {})
+    ]
+    if details:
+        rendered = f"{rendered} | {' '.join(details)}"
+    return rendered
+
+
+def _ensure_runtime_environment_defaults() -> None:
+    """Set conservative runtime defaults that reduce third-party log noise."""
+    os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+    os.environ.setdefault("PYANNOTE_METRICS_ENABLED", "false")
+
+    thread_count = min(os.cpu_count() or 4, 16)
+    os.environ.setdefault("NUMEXPR_MAX_THREADS", str(thread_count))
+    os.environ.setdefault("NUMEXPR_NUM_THREADS", str(thread_count))
+
+    configured = os.environ.get("MPLCONFIGDIR", "").strip()
+    if configured:
+        target = Path(configured).expanduser()
+    else:
+        target = Path(tempfile.gettempdir()) / "voxfusion-mplconfig"
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        os.environ["MPLCONFIGDIR"] = str(target)
+    except OSError:
+        pass
+
+
 def configure_logging(
     log_level: str = "INFO",
     json_format: bool = False,
     use_colors: bool | None = None,
+    renderer_style: str = "console",
+    log_mode: str = "normal",
 ) -> None:
     """Configure structlog and stdlib logging.
 
@@ -44,7 +170,9 @@ def configure_logging(
         log_level: Minimum log level (DEBUG, INFO, WARNING, ERROR, CRITICAL).
         json_format: If True, output JSON lines. Otherwise human-readable.
     """
+    _ensure_runtime_environment_defaults()
     level = getattr(logging, log_level.upper(), logging.INFO)
+    effective_log_mode = normalize_log_mode(log_mode)
 
     shared_processors: list[structlog.types.Processor] = [
         structlog.contextvars.merge_contextvars,
@@ -57,6 +185,8 @@ def configure_logging(
 
     if json_format:
         renderer: structlog.types.Processor = structlog.processors.JSONRenderer()
+    elif renderer_style == "compact":
+        renderer = _compact_console_renderer
     else:
         renderer_kwargs: dict[str, bool] = {}
         if use_colors is not None:
@@ -67,6 +197,7 @@ def configure_logging(
         processors=[
             *shared_processors,
             structlog.stdlib.filter_by_level,
+            *([_filter_normal_mode_events] if effective_log_mode == "normal" else []),
             structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),
@@ -98,6 +229,11 @@ def configure_logging(
         "httpx",
         "graphviz",
         "numexpr.utils",
+        "huggingface_hub",
+        "matplotlib",
+        "matplotlib.font_manager",
+        "opentelemetry",
+        "pyannote",
     ):
         logging.getLogger(name).setLevel(max(level, logging.WARNING))
     for name in (
@@ -107,6 +243,9 @@ def configure_logging(
         "nv_one_logger.training_telemetry.api.training_telemetry_provider",
         "nemo",
         "nemo_logger",
+        "opentelemetry.sdk.metrics._internal.export",
+        "pyannote.audio.telemetry",
+        "huggingface_hub.utils._http",
     ):
         logging.getLogger(name).setLevel(max(level, logging.ERROR))
 

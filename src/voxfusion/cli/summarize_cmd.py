@@ -92,7 +92,10 @@ def summarize(
     """
     verbose = ctx.obj.get("verbose", False)
     quiet = ctx.obj.get("quiet", False)
-    configure_logging("DEBUG" if verbose else ("ERROR" if quiet else "INFO"))
+    configure_logging(
+        "DEBUG" if verbose else ("ERROR" if quiet else "INFO"),
+        log_mode="debug" if verbose else "normal",
+    )
 
     transcript_text = transcript_file.read_text(encoding="utf-8").strip()
     if not transcript_text:

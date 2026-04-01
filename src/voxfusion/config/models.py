@@ -40,6 +40,10 @@ class ASRConfig(BaseModel):
     language: str | None = None
     initial_prompt: str | None = None
     word_timestamps: bool = False
+    # Max simultaneous ASR calls when transcribing speaker windows in batch mode.
+    # 1 = sequential (required for GigaAM which is not thread-safe).
+    # faster-whisper supports values up to cpu_count.
+    parallel_windows: int = Field(default=1, ge=1, le=16)
     vad_filter: bool = True
     vad_parameters: VADParameters = Field(default_factory=VADParameters)
     no_speech_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
@@ -65,6 +69,13 @@ class DiarizationMLConfig(BaseModel):
     min_speakers: int | None = Field(default=None, ge=1)
     max_speakers: int | None = Field(default=None, ge=1)
     min_segment_duration: float = Field(default=0.5, ge=0.0)
+    # Chunked diarization — splits long audio into overlapping chunks so that
+    # progress can be reported and processing can be parallelised.
+    chunked: bool = True
+    chunk_duration_s: float = Field(default=300.0, gt=0.0)
+    chunk_overlap_s: float = Field(default=10.0, ge=0.0)
+    # Number of parallel chunk workers.  None = auto (cpu_count//2 on CPU, 1 on GPU).
+    chunk_max_workers: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def _validate_speaker_hints(self) -> "DiarizationMLConfig":

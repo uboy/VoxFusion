@@ -11,7 +11,7 @@ import types
 import warnings
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from functools import partial
 from pathlib import Path
 
@@ -21,8 +21,19 @@ import soundfile as sf
 from voxfusion.config.models import ASRConfig
 from voxfusion.exceptions import ModelLoadError, TranscriptionError
 from voxfusion.logging import get_logger
+from voxfusion.media.runtime_ffmpeg import activate_ffmpeg_runtime
 from voxfusion.models.audio import AudioChunk
 from voxfusion.models.transcription import TranscriptionSegment
+from voxfusion.runtime_subprocess import patch_subprocess_popen_no_window
+from voxfusion.runtime_torchscript import (
+    should_use_torchscript_source_fallback as _should_use_torchscript_source_fallback,
+)
+from voxfusion.runtime_torchscript import (
+    install_torchscript_source_fallback as _install_torchscript_source_fallback,
+)
+from voxfusion.runtime_torchscript import (
+    temporary_torchscript_source_fallback as _temporary_torchscript_source_fallback,
+)
 
 log = get_logger(__name__)
 
@@ -96,52 +107,9 @@ def _install_megatron_compat_shim() -> None:
     sys.modules["megatron.core.num_microbatches_calculator"] = calc_mod
 
 
-def _install_torchscript_source_fallback(torch_module: object) -> None:
-    """Fallback to eager objects when TorchScript cannot access source code."""
-    jit = getattr(torch_module, "jit", None)
-    if jit is None:
-        return
-    original_script = getattr(jit, "script", None)
-    if original_script is None or getattr(original_script, "_voxfusion_safe_wrapper", False):
-        return
-
-    def _safe_script(obj: object, *args: object, **kwargs: object) -> object:
-        try:
-            return original_script(obj, *args, **kwargs)
-        except (OSError, RuntimeError) as exc:
-            if "requires source access" not in str(exc).lower():
-                raise
-            log.warning("gigaam.torchscript_source_fallback", error=str(exc))
-            return obj
-
-    setattr(_safe_script, "_voxfusion_safe_wrapper", True)
-    jit.script = _safe_script  # type: ignore[assignment]
-
-
 def _suppress_subprocess_windows() -> None:
-    """Patch subprocess.Popen to suppress console flash in frozen Windows builds.
-
-    In a --windowed PyInstaller binary any subprocess spawned without
-    CREATE_NO_WINDOW briefly shows a console.  GigaAM's custom model code
-    uses torchaudio which may spawn external helpers (SoX fallback) on Windows.
-    This patch makes CREATE_NO_WINDOW the default for all subprocesses started
-    inside the frozen process.
-    """
-    if not (getattr(sys, "frozen", False) and sys.platform == "win32"):
-        return
-    import subprocess
-    _CREATE_NO_WINDOW = 0x08000000
-    _orig = subprocess.Popen.__init__
-    if getattr(_orig, "_voxfusion_no_window", False):
-        return
-
-    def _patched(self: object, *args: object, **kwargs: object) -> None:
-        if "creationflags" not in kwargs:
-            kwargs["creationflags"] = _CREATE_NO_WINDOW
-        _orig(self, *args, **kwargs)  # type: ignore[call-arg]
-
-    setattr(_patched, "_voxfusion_no_window", True)
-    subprocess.Popen.__init__ = _patched  # type: ignore[method-assign]
+    """Suppress child console flashes for windowed Windows runtimes."""
+    patch_subprocess_popen_no_window()
 
 
 def _force_torchaudio_soundfile_backend() -> None:
@@ -165,11 +133,11 @@ def _prepare_gigaam_runtime() -> None:
     _suppress_gigaam_dependency_noise()
     _suppress_subprocess_windows()
     _force_torchaudio_soundfile_backend()
+    activate_ffmpeg_runtime()
     try:
         import torch
     except ImportError:
         return
-    _install_torchscript_source_fallback(torch)
 
 
 class GigaAMCTCEngine:
@@ -218,7 +186,13 @@ class GigaAMCTCEngine:
             kwargs: dict = {"trust_remote_code": True, "token": token}
             if local_only:
                 kwargs["local_files_only"] = True
-            self._model = AutoModel.from_pretrained(model_ref, **kwargs)
+            import torch
+
+            if _should_use_torchscript_source_fallback(torch):
+                with _temporary_torchscript_source_fallback(torch):
+                    self._model = AutoModel.from_pretrained(model_ref, **kwargs)
+            else:
+                self._model = AutoModel.from_pretrained(model_ref, **kwargs)
         except Exception as exc:
             err = str(exc).lower()
             if "401" in err or "unauthorized" in err or "authentication" in err:
@@ -291,6 +265,7 @@ class GigaAMCTCEngine:
         model = self._ensure_model()
 
         try:
+            activate_ffmpeg_runtime()
             total_duration_s = len(audio) / _SAMPLE_RATE
             total_chunks = max(1, -(-len(audio) // (_CHUNK_SAMPLES - _OVERLAP_SAMPLES)))
             log.info(

@@ -15,6 +15,7 @@ from pathlib import Path
 
 from voxfusion.exceptions import AudioCaptureError
 from voxfusion.logging import get_logger
+from voxfusion.media.runtime_ffmpeg import find_ffmpeg
 
 log = get_logger(__name__)
 
@@ -66,12 +67,18 @@ def extract_audio(
         AudioCaptureError: If FFmpeg is not found, times out, or exits with a
             non-zero return code.
     """
+    resolved_ffmpeg = ffmpeg_binary
+    if ffmpeg_binary == "ffmpeg":
+        candidate = find_ffmpeg()
+        if candidate is not None:
+            resolved_ffmpeg = str(candidate)
+
     tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False, prefix="voxfusion_")
     tmp_path = Path(tmp.name)
     tmp.close()
 
     cmd: list[str] = [
-        ffmpeg_binary,
+        resolved_ffmpeg,
         "-y",
         "-hide_banner",
         "-loglevel", "error",
@@ -89,7 +96,7 @@ def extract_audio(
         target=str(tmp_path),
         sample_rate=sample_rate,
         channels=channels,
-        ffmpeg_binary=ffmpeg_binary,
+        ffmpeg_binary=resolved_ffmpeg,
     )
 
     try:
@@ -104,7 +111,7 @@ def extract_audio(
         tmp_path.unlink(missing_ok=True)
         raise AudioCaptureError(
             "ffmpeg not found — install FFmpeg and make sure it is on PATH. "
-            "Windows: https://www.gyan.dev/ffmpeg/builds/  "
+            "Windows: use VoxFusion local install or https://www.gyan.dev/ffmpeg/builds/  "
             "Linux: sudo apt install ffmpeg"
         ) from exc
     except subprocess.TimeoutExpired as exc:
