@@ -18,6 +18,7 @@ For Windows this is mandatory to reduce Smart App Control blocking risk and keep
 python scripts/build_binaries.py --target all
 python scripts/build_binaries.py --target gui
 python scripts/build_binaries.py --target cli
+python scripts/build_binaries.py --target all --backends all
 ```
 
 Output:
@@ -40,6 +41,33 @@ Build script explicitly adds:
 
 - `src/voxfusion/config/defaults.yaml`
 - `customtkinter/assets/themes` (if `customtkinter` is installed)
+- `pyannote/audio/telemetry/config.yaml` when `pyannote.audio` is installed
+- `ffmpeg(.exe)` and `ffprobe(.exe)` inside the Windows bundle `_internal/` directory
+  - from `PATH` when available
+  - on Windows, automatically downloaded as a portable build when `PATH` does not provide FFmpeg
+
+## FFmpeg behavior
+
+- Built Windows bundles are expected to work without a system-wide FFmpeg install.
+- If the build machine does not have FFmpeg in `PATH`, `scripts/build_binaries.py` downloads a portable Windows FFmpeg build, extracts `ffmpeg.exe` and `ffprobe.exe`, and bundles them into `_internal/`.
+- GUI speaker detection uses the same ffmpeg-backed extraction path for container media such as `webm`, `mp4`, and compressed-audio inputs, so "Detect" and full transcription support the same file classes.
+- Breeze ASR no longer depends on `torchcodec` for normal file transcription, so bundled FFmpeg is primarily required for media extraction and GigaAM's external decode path.
+- At runtime VoxFusion looks for FFmpeg in this order:
+  - next to the executable
+  - under the PyInstaller `_internal/` directory
+  - in the app-managed local directory `~/.voxfusion/ffmpeg/`
+  - in `PATH`
+
+## Validated command
+
+With models already cached locally, the full verification command used for a stable Windows validation pass was:
+
+```powershell
+$env:PYTHONPATH='src'
+$env:HF_HUB_OFFLINE='1'
+$env:VOXFUSION_FFMPEG_DIR='build\vendor\ffmpeg-runtime'
+.\venv\Scripts\python.exe -m pytest -q
+```
 
 ## Launchers
 

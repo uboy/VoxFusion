@@ -55,6 +55,11 @@ _SKIP_REASON = (
 )
 
 
+async def _empty_async_iter():
+    if False:  # pragma: no cover
+        yield
+
+
 @pytest.mark.integration
 @pytest.mark.skipif(not _gigaam_available(), reason=_SKIP_REASON)
 @pytest.mark.asyncio
@@ -115,7 +120,7 @@ def test_gigaam_stream_raises() -> None:
 
         async def _drain() -> None:
             async for _ in engine.transcribe_stream(
-                aiter([]),  # type: ignore[name-defined]
+                _empty_async_iter(),
             ):
                 pass
 

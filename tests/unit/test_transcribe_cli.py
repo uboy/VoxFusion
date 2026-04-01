@@ -76,3 +76,31 @@ def test_transcribe_passes_diarization_overrides(tmp_path: Path, monkeypatch) ->
     assert overrides["diarization"]["strategy"] == "hybrid"
     assert overrides["diarization"]["ml"]["min_speakers"] == 2
     assert overrides["diarization"]["ml"]["max_speakers"] == 5
+
+
+def test_transcribe_accepts_none_diarization_strategy(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    audio_file = tmp_path / "input.wav"
+    audio_file.write_bytes(b"RIFF")
+    captured: dict[str, object] = {}
+
+    def _fake_load_config(overrides=None):
+        captured["overrides"] = overrides
+        return SimpleNamespace(output=SimpleNamespace(format="txt"))
+
+    monkeypatch.setattr(transcribe_cmd_module, "load_config", _fake_load_config)
+    monkeypatch.setattr(transcribe_cmd_module, "PipelineOrchestrator", _FakeOrchestrator)
+    monkeypatch.setattr(transcribe_cmd_module, "find_ffmpeg", lambda: Path("ffmpeg"))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        transcribe,
+        [str(audio_file), "--diarization-strategy", "none"],
+        obj={"verbose": False, "quiet": True},
+    )
+
+    assert result.exit_code == 0
+    overrides = captured["overrides"]
+    assert overrides["diarization"]["strategy"] == "none"

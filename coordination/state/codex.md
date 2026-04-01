@@ -580,3 +580,671 @@
       - long diarization heartbeat switched from a finite ETA to `eta_s=None` after the initial estimate was exceeded
       - run completed successfully with `16 diarized / 16 ASR segments`
       - output file written to `fulltest_tmp120_gigaam_auto_gui_token_20260324.json`
+
+2026-03-30
+
+- Task type: non-trivial repo_change to resume and finish in-progress diarization/UI work, perform code review, add tests, and validate UI/build behavior.
+- Startup ritual:
+  - `coordination/tasks.jsonl` checked; no prior in-progress task matched this request, so `codex-2026-03-30-finish-ui-review-validation` was registered.
+  - `coordination/state/codex.md` resumed successfully.
+  - `%USERPROFILE%/AGENTS-cold.md` and `%USERPROFILE%/AGENTS-warm.md` loaded for startup/session rules.
+- Policy observations:
+  - `policy/task-routing-matrix.json` and `policy/team-lead-orchestrator.md` are referenced by the adapter but missing in this repo.
+  - local `coordination/templates/` and `configs/subscription-limits.json` / `coordination/state/session-usage.json` are also absent.
+- Current classification:
+  - profile: `repo_change`
+  - size: `non_trivial`
+- Current worktree checkpoint before implementation:
+  - modified: `src/voxfusion/config/models.py`, `src/voxfusion/diarization/__init__.py`, `src/voxfusion/diarization/factory.py`, `src/voxfusion/gui/main.py`, `src/voxfusion/pipeline/batch.py`
+  - untracked: `docs/design/`, `src/voxfusion/diarization/chunked.py`, `src/voxfusion/diarization/none.py`, `src/voxfusion/diarization/speaker_counter.py`, `src/voxfusion/gui/tooltip.py`
+- Current checkpoint:
+  - next step is targeted read-only inspection of the diff and design artifacts to determine what remains incomplete before touching code.
+- Review findings from the resumed diff:
+  - CLI parity gap: `src/voxfusion/cli/transcribe_cmd.py` still rejects `--diarization-strategy none` even though GUI/runtime/factory now support it.
+  - Detect flow bug: `src/voxfusion/gui/main.py` currently reads the entire selected file into memory before calling `estimate_speaker_count(...)`, which defeats the "fast 2-minute sample" UX and can blow up on long recordings.
+  - Pyannote compatibility gap: `src/voxfusion/diarization/speaker_counter.py` hardcodes `Pipeline.from_pretrained(..., token=...)` instead of using the existing token/use_auth_token compatibility logic already required in `pyannote_engine.py`.
+  - Long-file correctness risk: `src/voxfusion/diarization/chunked.py` appears to drop the previous chunk's overlap from the reconciled global timeline before matching the next chunk, which would mis-map speakers across chunk boundaries.
+- Current implementation intent:
+  - fix the four issues above,
+  - add focused regression tests for CLI none, speaker-counter auth compatibility, and chunked speaker reconciliation,
+  - then run targeted plus broader verification.
+- Implementation progress:
+  - `src/voxfusion/cli/transcribe_cmd.py`: CLI now accepts `--diarization-strategy none`.
+  - `src/voxfusion/diarization/speaker_counter.py`: speaker-count estimation now uses the same `token` / `use_auth_token` compatibility logic as the main pyannote diarizer.
+  - `src/voxfusion/diarization/chunked.py`: chunk reconciliation now carries the previous chunk's mapped overlap forward instead of matching against already-trimmed output turns.
+  - `src/voxfusion/gui/main.py`: GUI speaker detection now reads only a centered 2-minute sample via `soundfile`, not the entire file.
+  - added focused tests:
+    - `tests/unit/test_chunked_diarization.py`
+    - `tests/unit/test_speaker_counter.py`
+    - updated `tests/unit/test_diarization_factory.py`
+    - updated `tests/unit/test_transcribe_cli.py`
+- Next step:
+  - run targeted pytest for the changed areas, fix any regressions, then expand to broader GUI/batch verification.
+- Verification environment note:
+  - the project `venv` currently imports `voxfusion` from `venv\Lib\site-packages`, not from the local `src/` tree by default.
+  - subsequent verification commands must set `PYTHONPATH=src` so tests execute against the current workspace diff.
+- Additional build fix:
+  - `scripts/build_binaries.py` now injects `--paths <repo>/src` into the PyInstaller command so binary builds analyse the local workspace sources rather than a stale installed `site-packages` copy.
+- Broader verification findings and follow-up fixes:
+  - `tests/unit/test_extra_asr_backends.py` exposed that `BreezeASREngine` imported `WhisperProcessor` unconditionally; the engine now falls back to `AutoProcessor` when that symbol is not exported by the installed/faked `transformers`.
+  - `tests/unit/test_recording.py` exposed that `_mix_chunks(...)` was summing simultaneous sources and clipping instead of averaging overlapping windows; the recorder now averages per-sample source contributions before clipping.
+  - remaining full-suite blocker after these code fixes is environment-level: `cryptography` is missing, so encryption tests cannot pass in the current venv.
+- Final verification summary:
+  - targeted new-regression suite passed with `PYTHONPATH=src` (`11 passed`).
+  - broader GUI/batch/pyannote/integration smoke suite passed (`28 passed`).
+  - focused Breeze + recorder regression rerun passed (`17 passed, 2 skipped`).
+  - full unit suite excluding encryption passed (`218 passed, 2 skipped, 13 deselected`).
+  - `PYTHONPATH=src python -m voxfusion.gui.main --help` passed and the GUI PyInstaller build succeeded via `python scripts/build_binaries.py --target gui --skip-install --no-zip --backends whisper`.
+  - unresolved blocker: full `tests/unit` remains blocked only by missing `cryptography` in the active venv; existing `tests/unit/test_encryption.py` fails for that reason.
+- Review artifact:
+  - `coordination/reviews/2026-03-30-finish-ui-review-validation.md`
+
+- New task: bundle and locally install FFmpeg when it is missing from PATH.
+- Classification:
+  - profile: `repo_change`
+  - size: `non_trivial`
+- Current FFmpeg findings before implementation:
+  - runtime already looks for `ffmpeg` next to the executable in `gui/helpers.py` and `recording/recorder.py`, but extraction still defaults to plain `"ffmpeg"` unless explicitly passed.
+  - GUI currently offers only `winget` installation, which does not match the desired "comes with the app" behavior.
+  - build script bundles FFmpeg only if it is already present in PATH on the build machine; otherwise it only prints a warning.
+- Intended implementation:
+  - add a shared runtime FFmpeg resolver/installer for local managed portable FFmpeg,
+  - switch GUI/recorder/extractor to that shared resolver,
+  - update the build script to auto-download/bundle portable FFmpeg on Windows when PATH does not provide it,
+  - add focused tests and docs for the new behavior.
+- FFmpeg implementation completed:
+  - added shared runtime helper `src/voxfusion/media/runtime_ffmpeg.py`
+  - GUI now installs a local portable FFmpeg copy instead of delegating to `winget`
+  - extractor and recorder now use the shared resolver, so managed local copies work outside PATH
+  - build script now auto-prepares/bundles a portable Windows FFmpeg when PATH does not provide one
+  - docs updated:
+    - `README.md`
+    - `docs/BINARY_BUILD.md`
+    - `docs/design/ffmpeg-bundling-v1.md`
+- FFmpeg verification:
+  - `PYTHONPATH=src python -m py_compile ...` on changed runtime/build/test files -> pass
+  - `PYTHONPATH=src python -m pytest tests/unit/test_runtime_ffmpeg.py tests/unit/test_build_binaries.py tests/unit/test_ffmpeg_utils.py tests/unit/test_recording.py tests/unit/test_transcribe_cli.py tests/unit/test_gui_flow.py -q` -> pass (`39 passed, 2 skipped`)
+  - GUI/CLI help smoke checks still pass
+  - exact live download during a real build was not exercised in this sandbox because network access is restricted; mocked unit coverage covers the download/extract path here
+- Review artifact:
+  - `coordination/reviews/2026-03-30-ffmpeg-bundled-install.md`
+
+- New task: run all tests, confirm mandatory language support, and build final binaries.
+- Classification:
+  - profile: `repo_change`
+  - size: `non_trivial`
+- Current language-support checkpoint:
+  - `src/voxfusion/asr_catalog.py` includes `ru`, `en`, and `zh` in the Whisper language catalog.
+  - current best broad-coverage file-capable models:
+    - Whisper family: full current project language catalog including `ru/en/zh`
+    - Breeze ASR: same Whisper language catalog including `ru/en/zh`
+    - GigaAM: Russian only
+    - Parakeet: European subset, includes `ru/en` but not `zh`
+  - for final binaries, `--backends all` is the right target if the installed environment supports those optional backends, because it maximizes the currently implemented language surface.
+- Current implementation intent:
+  - rerun the full repo tests against `PYTHONPATH=src`,
+  - fix or explicitly document remaining environment blockers,
+  - then build final `gui` + `cli` binaries with the broadest available backend set.
+- Full test-suite checkpoint:
+  - `PYTHONPATH=src .\venv\Scripts\python.exe -m pytest -q` -> `29 failed, 247 passed, 2 skipped`
+  - confirmed blocker class #1: `tests/unit/test_encryption.py` fails because `cryptography` is not installed in the active venv
+  - confirmed blocker class #2: multiple real backend/integration tests still hit a bare `ffmpeg` process dependency inside model/runtime paths (for example the cached GigaAM model code), so the shared app-level FFmpeg resolver is not yet sufficient for the whole test surface
+- Current next step:
+  - isolate the exact failing integration/backend tests and patch runtime/environment setup so the full suite can pass before the final binary build.
+- Backend/runtime fixes completed:
+  - `src/voxfusion/media/runtime_ffmpeg.py` now exposes `activate_ffmpeg_runtime()` and can unpack shared FFmpeg payloads (DLLs included), with `7z/7za` support for Gyan's full-shared Windows archive and a ZIP fallback.
+  - `scripts/build_binaries.py` now prepares/bundles shared FFmpeg DLLs as well as `ffmpeg.exe` / `ffprobe.exe`.
+  - `src/voxfusion/asr/gigaam_engine.py` now activates FFmpeg runtime before load/transcribe and scopes the TorchScript source fallback to model-load time only.
+  - `src/voxfusion/asr/breeze_engine.py` now activates FFmpeg runtime before load/transcribe.
+  - `src/voxfusion/asr/parakeet_engine.py` no longer applies the global TorchScript fallback during model load.
+- New regression coverage:
+  - `tests/unit/test_ffmpeg_shared_runtime.py`
+  - `tests/unit/test_gigaam_runtime_isolation.py`
+  - `tests/unit/test_parakeet_runtime_bootstrap.py`
+- Focused verification:
+  - `PYTHONPATH=src python -m py_compile ...` on changed runtime/backend/build files -> pass
+  - `PYTHONPATH=src python -m pytest tests/unit/test_runtime_ffmpeg.py tests/unit/test_ffmpeg_shared_runtime.py tests/unit/test_build_binaries.py tests/unit/test_gigaam_engine.py tests/unit/test_gigaam_runtime_isolation.py tests/unit/test_extra_asr_backends.py tests/unit/test_parakeet_runtime_bootstrap.py -q` -> pass (`23 passed`)
+- Current remaining blockers:
+  - full suite still requires the optional `cryptography` dependency to be present
+  - integration tests now need a real shared FFmpeg payload staged into the current environment before rerunning GigaAM/Breeze/Parakeet
+- Final completion summary for `codex-2026-03-30-full-tests-final-binaries`:
+  - environment fixes:
+    - installed `cryptography` into the project `venv`
+    - staged workspace FFmpeg runtime under `build/vendor/ffmpeg-runtime`
+  - code/runtime fixes:
+    - `BreezeASREngine` now prefers direct processor/model decoding and falls back to the transformers pipeline only for reduced fake/test processors
+    - `runtime_ffmpeg.find_ffmpeg()` now resolves bundled PyInstaller `_internal` copies, so Windows `--onedir` bundles can find their packaged FFmpeg at runtime
+    - corrected two broken GigaAM integration tests that used invalid `aiter([])` on plain lists
+  - docs updated:
+    - `README.md`
+    - `docs/BINARY_BUILD.md`
+  - final verification:
+    - `PYTHONPATH=src HF_HUB_OFFLINE=1 VOXFUSION_FFMPEG_DIR=build/vendor/ffmpeg-runtime python -m pytest -q` -> `282 passed, 2 skipped, 4 warnings`
+    - `python scripts/build_binaries.py --target all --skip-install --backends all` -> pass
+    - `dist/binaries/voxfusion-cli/voxfusion-cli.exe --help` -> pass
+    - bundled FFmpeg confirmed in:
+      - `dist/binaries/voxfusion-gui/_internal/ffmpeg.exe`
+      - `dist/binaries/voxfusion-cli/_internal/ffmpeg.exe`
+  - residual warnings only:
+    - PyInstaller hook noise for optional modules (`expecttest`, `mamba_ssm`, some hidden imports)
+    - `nvcuda.dll` absent on this CPU-oriented machine
+    - `tbb12.dll` missing for optional `numba` acceleration
+    - HuggingFace/Xet attempted log writes to a restricted cache path during build and fell back to console logging
+
+- Final completion summary for `codex-2026-03-31-speaker-detect-pyannote-logging`:
+  - root causes confirmed:
+    - GUI speaker detection still used direct `soundfile` reads for the selected source, so `.webm`/container inputs failed before diarization started.
+    - final bundled GUI lacked `pyannote/audio/telemetry/config.yaml`, which caused the user-visible diarization crash in the frozen app.
+    - GUI logs were unnecessarily noisy because the hot file-transcription path still emitted raw `print(...)` hints and used the verbose default structlog console renderer.
+  - implemented fixes:
+    - added `load_detection_audio_chunk(...)` in `src/voxfusion/gui/helpers.py` and switched `src/voxfusion/gui/main.py` speaker detection to use it, including FFmpeg extraction and temp-file cleanup for container inputs.
+    - updated `scripts/build_binaries.py` to bundle `pyannote.audio` assets more explicitly (`--collect-all pyannote.audio`, telemetry config data entry, hidden import for `voxfusion.diarization.speaker_counter`) and normalized discovered FFmpeg paths to absolute paths so `PyInstaller --add-data` cannot fail on relative PATH entries.
+    - updated `src/voxfusion/logging.py` and `src/voxfusion/gui/runtime.py` to use a compact GUI log renderer, suppress extra third-party noise, disable extra telemetry noise in GUI mode, and remove model-hint `print(...)` spam from the file-transcription hot path.
+    - updated user-facing docs:
+      - `README.md`
+      - `docs/BINARY_BUILD.md`
+  - new regression coverage:
+    - `tests/unit/test_gui_detection_helper.py`
+    - `tests/unit/test_build_binaries_pyannote_bundle.py`
+    - `tests/unit/test_gui_logging_compact.py`
+  - verification:
+    - `python -m py_compile ...` on changed files -> pass
+    - focused new regressions -> `9 passed`
+    - broader GUI/build/logging/ffmpeg suite -> `35 passed`
+    - full repo suite with stable offline settings -> `293 passed, 1 skipped, 4 warnings`
+    - final build command:
+      - `PYTHONPATH=src HF_HUB_OFFLINE=1 <absolute ffmpeg-runtime in PATH> .\\venv\\Scripts\\python.exe scripts\\build_binaries.py --target all --skip-install --backends all`
+      - build reached `Build complete!`; the tool invocation itself later hit the outer timeout, but the generated artifacts and ZIP archives were verified on disk and `dist\\binaries\\voxfusion-cli\\voxfusion-cli.exe --help` passed.
+    - bundle contents verified:
+      - `dist\\binaries\\voxfusion-gui\\_internal\\ffmpeg.exe`
+      - `dist\\binaries\\voxfusion-gui\\_internal\\ffprobe.exe`
+      - `dist\\binaries\\voxfusion-gui\\_internal\\pyannote\\audio\\telemetry\\config.yaml`
+  - review artifact:
+    - `coordination/reviews/2026-03-31-speaker-detect-pyannote-logging.md`
+  - policy/runtime note:
+    - `scripts/security-review-gate.ps1` is absent in this repo snapshot, so the script-change security gate could not be executed verbatim and is being reported as an environment limitation rather than silently skipped.
+
+- New task: validate the real runtime behavior on the user-provided Koala Weekly `.webm` file and explain/fix the remaining speaker-detect and GUI min/max behavior.
+- Classification:
+  - profile: `repo_change`
+  - size: `non_trivial`
+- Current evidence checkpoint:
+  - user now reports a later-stage failure after successful FFmpeg extraction:
+    - `speaker_counter.start`
+    - `speaker_counter.pipeline_load_failed`
+    - `Can't get source for <function snake ...>. TorchScript requires source access ...`
+  - this suggests the earlier container-read bug is fixed, but the pyannote speaker-count path still has a frozen/runtime-specific load issue.
+  - user also reports that GUI min/max speaker fields cannot be edited; the current implementation likely ties this to the `Custom` preset, which needs factual validation and explanation.
+- Scratchpad:
+  - `.scratchpad/runtime_validation_20260331_koala_speaker_counter.md`
+- Next step:
+  - confirm access to the real file, reproduce detect/transcribe behavior on it, inspect the current speaker-counter load path, and verify GUI min/max control behavior before deciding whether another code fix is needed.
+
+- Runtime validation progress update for `codex-2026-03-31-koala-runtime-validation`:
+  - real file confirmed present and readable:
+    - `C:\Users\devl\Downloads\Koala weekly _ EXTERNAL_2026-03-30_12-49-20.webm`
+  - real-source speaker detect path now works on the Koala file after FFmpeg extraction and TorchScript fallback:
+    - sampled audio: 120 s at 16 kHz
+    - estimated speaker count: `4`
+  - frozen `voxfusion-cli.exe` on the Koala file with `--diarization-strategy auto` now completes end-to-end after the pyannote TorchScript fallback and bundled `version.info` fixes:
+    - diarization resolved to `ml`
+    - result: `60` diarized segments / `60` ASR segments
+    - unique speakers in the produced JSON: `2`
+    - distribution: `SPEAKER_01=57`, `SPEAKER_00=3`
+    - processing time on this machine: about `3032 s`
+  - additional Windows runtime defect found during the successful bundle run:
+    - redirected stdout JSON from the frozen CLI was encoded in a legacy console code page instead of UTF-8, so Cyrillic text in `build/koala_bundle_auto_fixed2.json` was mojibake unless read as `cp1251`.
+    - this was a separate CLI/stdout bootstrap bug, not an ASR/diarization correctness failure.
+  - follow-up fixes now implemented:
+    - `src/voxfusion/cli/main.py`: force UTF-8 `stdout/stderr` reconfigure for CLI startup, including redirected output.
+    - `src/voxfusion/logging.py`: add shared runtime env defaults (`HF_HUB_DISABLE_PROGRESS_BARS`, `HF_HUB_DISABLE_TELEMETRY`, `PYANNOTE_METRICS_ENABLED`, `MPLCONFIGDIR`) and suppress additional safe noise (`font_manager cache`, `pydub ffmpeg warning`).
+    - `src/voxfusion/media/runtime_ffmpeg.py`: export bundled `ffmpeg/ffprobe` paths into environment and `pydub.AudioSegment`.
+    - `src/voxfusion/gui/runtime.py`: extend GUI noise-line suppression with the same residual noise fragments.
+    - `src/voxfusion/gui/main.py`: keep file min/max speaker entries editable for ML-capable strategies, not only the `Custom` preset.
+  - new regression coverage added:
+    - `tests/unit/test_cli_stdio.py`
+    - `tests/unit/test_logging_runtime_bootstrap.py`
+    - `tests/unit/test_runtime_ffmpeg_bootstrap.py`
+  - latest targeted verification:
+    - `31 passed`
+  - next step:
+    - run full suite, rebuild final binaries with the latest runtime/bootstrap fixes, then update review + agent-memory artifacts before final user handoff.
+
+- New task: fix the reported bundled-GUI speaker-detect failure and clean the final runtime output.
+- Classification:
+  - profile: `repo_change`
+  - size: `non_trivial`
+- Current evidence checkpoint:
+  - user-reported `Speaker detect failed` on a `.webm` file is consistent with the current GUI helper path still reading the original file directly through `soundfile.SoundFile(...)` in `src/voxfusion/gui/main.py`; that path does not pre-extract container media through ffmpeg.
+  - bundled diarization failure is reproducible from the pasted runtime log: the final `voxfusion-gui` bundle is missing `pyannote/audio/telemetry/config.yaml`, even though the file exists in the source `venv` package.
+  - logging/readability complaint is valid: final output currently mixes structured logs, raw `print(...)` lines, and third-party warning noise.
+- Scratchpad:
+  - `.scratchpad/build_analysis_20260331_speaker_detect_packaging.md`
+- Next step:
+  - inspect the exact GUI worker, packaging flags, and logging configuration sites, then patch runtime/build behavior with focused regression tests before rebuilding binaries.
+
+- Completion update for `codex-2026-03-31-koala-runtime-validation`:
+  - the previously reported bundled speaker-detect failure on the Koala `.webm` file is now closed by the combined runtime fixes:
+    - container inputs are sampled through the shared FFmpeg extraction path
+    - frozen pyannote/TorchScript fallback is active for the speaker counter path
+    - GUI file `min/max speakers` entries remain editable for ML-capable diarization strategies
+  - current expected GUI behavior for speaker bounds:
+    - if `min/max` are left empty, speaker counting runs automatically and the pipeline uses automatic estimation/hints
+    - if either bound is set, the ML diarizer receives those explicit limits
+  - later full verification after the runtime fixes, plus the new batch queue feature, stayed green:
+    - `PYTHONPATH=src HF_HUB_OFFLINE=1 HF_HUB_DISABLE_PROGRESS_BARS=1 HF_HUB_DISABLE_TELEMETRY=1 PYANNOTE_METRICS_ENABLED=false TCL_LIBRARY=<python311 tcl8.6> TK_LIBRARY=<python311 tk8.6> python -m pytest -q`
+      - result: `309 passed, 1 skipped, 4 warnings`
+    - `PYTHONPATH=src HF_HUB_OFFLINE=1 HF_HUB_DISABLE_PROGRESS_BARS=1 HF_HUB_DISABLE_TELEMETRY=1 PYANNOTE_METRICS_ENABLED=false <workspace ffmpeg runtime in PATH> python scripts/build_binaries.py --target all --skip-install --backends all`
+      - result: success, GUI/CLI bundles and ZIP archives created under `dist/binaries/`
+
+- New task: add playlist-style sequential multi-file transcription to GUI and CLI.
+- Classification:
+  - profile: `repo_change`
+  - size: `non_trivial`
+- Design checkpoint:
+  - CLI needs true batch input support without breaking the single-file command shape.
+  - GUI should keep the current per-file transcript view for the active item, but add a separate queue list with clear state per file.
+  - execution should stay sequential and reuse the existing file-transcription worker one file at a time, minimizing risk versus introducing concurrent model workers.
+- Scratchpad:
+  - `.scratchpad/batch_playlist_transcription_20260331.md`
+- Implementation summary:
+  - `src/voxfusion/cli/transcribe_cmd.py`
+    - `transcribe` now accepts multiple positional files
+    - added `--input-list` for newline-delimited playlists
+    - added `--output-dir` for per-file batch artifacts
+    - batch mode resolves relative paths from the list-file directory, rejects a single shared `--output`, and processes items sequentially with per-file outputs
+  - `src/voxfusion/gui/main.py`
+    - added a persistent file queue with per-item status, progress, and result tracking
+    - file picker now supports multi-select via `Add Files...`
+    - queue controls added: `Remove`, `Clear List`
+    - queue runs sequentially, advances automatically to the next pending file, and marks items as `Queued`, `In Progress`, `Done`, `Cancelled`, or `Error`
+    - recorded-audio workflow now preloads the queue with the recorded file
+  - `README.md`
+    - documented batch CLI usage and the new GUI queue behavior
+- New regression coverage:
+  - `tests/unit/test_transcribe_batch_cli.py`
+  - `tests/unit/test_gui_batch_queue.py`
+- Verification:
+  - `python -m py_compile src\voxfusion\cli\transcribe_cmd.py src\voxfusion\gui\main.py tests\unit\test_transcribe_batch_cli.py tests\unit\test_gui_batch_queue.py`
+    - result: pass
+  - `PYTHONPATH=src python -m pytest tests\unit\test_transcribe_cli.py tests\unit\test_transcribe_batch_cli.py tests\unit\test_gui_flow.py tests\unit\test_gui_batch_queue.py tests\unit\test_gui_speaker_controls.py -q`
+    - result: `22 passed`
+  - `PYTHONPATH=src TCL_LIBRARY=<python311 tcl8.6> TK_LIBRARY=<python311 tk8.6> python -m pytest tests\integration\test_gui_smoke.py tests\unit\test_gui_flow.py tests\unit\test_gui_detection_helper.py tests\unit\test_transcribe_cli.py tests\unit\test_transcribe_batch_cli.py tests\unit\test_gui_batch_queue.py -q`
+    - result: `27 passed`
+  - `PYTHONPATH=src HF_HUB_OFFLINE=1 HF_HUB_DISABLE_PROGRESS_BARS=1 HF_HUB_DISABLE_TELEMETRY=1 PYANNOTE_METRICS_ENABLED=false TCL_LIBRARY=<python311 tcl8.6> TK_LIBRARY=<python311 tk8.6> python -m pytest -q`
+    - result: `309 passed, 1 skipped, 4 warnings`
+  - `dist\binaries\voxfusion-cli\voxfusion-cli.exe transcribe --help`
+    - result: pass, help shows `--input-list` and `--output-dir`
+- Review artifact:
+  - `coordination/reviews/2026-03-31-batch-playlist-transcription.md`
+
+- New task: clean GUI file-transcription logs, show file duration/size in the queue, and remove duplicate pyannote pipeline logs.
+- Classification:
+  - profile: `repo_change`
+  - size: `non_trivial`
+- User-reported symptoms:
+  - speaker-detect runs only showed low-level `extractor.*` / `file_source.*` lines, with no explicit `speaker_detect_failed` / `speaker_detect_completed` event
+  - file queue lacked informational metadata columns for duration and file size
+  - chunked ML diarization emitted duplicated `pyannote.loading_pipeline` and `pyannote.pipeline_loaded` lines once per worker
+  - mixed GUI logging quality remained poor because some errors were still appended manually instead of going through the structured logger
+- Implementation completed:
+  - `src/voxfusion/gui/helpers.py`
+    - added best-effort media metadata probing for queue rows:
+      - size via `stat()`
+      - duration via `soundfile`
+      - fallback duration via bundled `ffprobe`
+  - `src/voxfusion/gui/main.py`
+    - file queue now shows `Duration` and `Size` columns in addition to status/progress/result
+    - added explicit `gui.speaker_detect_started`, `gui.speaker_detect_completed`, and `gui.speaker_detect_failed` events
+    - live/file GUI errors now go through the structured logger instead of manual `FILE ERROR`/`ERROR` text injection
+  - `src/voxfusion/diarization/pyannote_engine.py`
+    - added `emit_pipeline_logs` flag so repeated per-worker pipeline-load logs can be suppressed
+  - `src/voxfusion/diarization/factory.py`
+    - chunked pyannote workers now instantiate `PyAnnoteDiarizer(..., emit_pipeline_logs=False)` to avoid duplicate pipeline load spam
+  - `scripts/build_binaries.py`
+    - hardened all `find_spec(...)` probe paths so builds degrade cleanly when optional packages are absent instead of crashing with `ModuleNotFoundError`
+- New regression coverage:
+  - `tests/unit/test_gui_queue_metadata.py`
+  - `tests/unit/test_gui_detect_logging.py`
+  - `tests/unit/test_pyannote_logging_dedup.py`
+  - `tests/unit/test_build_binaries_is_installed.py`
+- Verification:
+  - `python -m py_compile src\voxfusion\gui\helpers.py src\voxfusion\gui\main.py src\voxfusion\diarization\pyannote_engine.py src\voxfusion\diarization\factory.py tests\unit\test_gui_queue_metadata.py tests\unit\test_gui_detect_logging.py tests\unit\test_pyannote_logging_dedup.py`
+    - result: pass
+  - `PYTHONPATH=src python -m pytest tests\unit\test_gui_queue_metadata.py tests\unit\test_gui_detect_logging.py tests\unit\test_pyannote_logging_dedup.py -q`
+    - result: `5 passed`
+  - `PYTHONPATH=src python -m pytest tests\unit\test_gui_batch_queue.py tests\unit\test_gui_detection_helper.py tests\unit\test_gui_logging_compact.py tests\unit\test_chunked_diarization.py tests\unit\test_diarization_factory.py tests\unit\test_gui_speaker_controls.py -q`
+    - result: `16 passed`
+  - `PYTHONPATH=src python -m pytest tests\integration\test_gui_smoke.py -q`
+    - result: `4 passed`
+  - `PYTHONPATH=src .\venv\Scripts\python.exe -m pytest tests\unit\test_build_binaries_is_installed.py -q`
+    - result: `2 passed`
+  - authoritative full-suite verification in the dependency-rich project venv:
+    - `PYTHONPATH=src HF_HUB_OFFLINE=1 HF_HUB_DISABLE_PROGRESS_BARS=1 HF_HUB_DISABLE_TELEMETRY=1 PYANNOTE_METRICS_ENABLED=false TCL_LIBRARY=<python311 tcl8.6> TK_LIBRARY=<python311 tk8.6> .\venv\Scripts\python.exe -m pytest -q`
+      - result: `316 passed, 1 skipped, 4 warnings`
+  - final GUI rebuild for real release use:
+    - `PYTHONPATH=src HF_HUB_OFFLINE=1 ... .\venv\Scripts\python.exe scripts\build_binaries.py --target gui --skip-install --no-zip --backends all`
+      - result: success
+    - bundle contents verified:
+      - `dist\binaries\voxfusion-gui`
+      - `dist\binaries\voxfusion-gui\_internal\ffmpeg.exe`
+      - `dist\binaries\voxfusion-gui\_internal\pyannote\audio\telemetry\config.yaml`
+- Important release note:
+  - rebuilding the GUI with the plain system `python.exe` can succeed but silently exclude optional ML backend dependencies (`pyannote.audio`, `torch`, `transformers`) when they are not installed there.
+  - release-grade GUI bundles for speaker detect / ML diarization must be built from the project `venv`.
+- Review artifact:
+  - `coordination/reviews/2026-03-31-gui-log-hygiene-queue-metadata.md`
+
+- New task: add two explicit logging modes so default output stays readable while debug output remains available in both GUI and CLI.
+- Classification:
+  - profile: `repo_change`
+  - size: `non_trivial`
+- Scratchpad:
+  - `.scratchpad/normal_debug_log_modes_20260331.md`
+- Implementation completed:
+  - `src/voxfusion/logging.py`
+    - added `normalize_log_mode(...)`
+    - added normal-mode filtering so default logs keep warnings/errors plus key stage events only
+    - kept debug mode as full structured stage-by-stage logging
+  - `src/voxfusion/gui/helpers.py`
+    - `configure_gui_logging(...)` now forwards the selected log mode into shared logging
+  - `src/voxfusion/gui/main.py`
+    - added persistent `Logs: Normal/Debug` selector in the toolbar
+    - GUI now reapplies logging configuration when the user switches modes
+    - saved GUI settings now persist `gui_log_mode`
+  - `src/voxfusion/cli/main.py`
+    - exposed `--debug` / `--verbose` / `-v` as the explicit full-log switch
+    - kept `--quiet` hidden as a legacy compatibility flag
+  - `src/voxfusion/cli/capture_cmd.py`
+  - `src/voxfusion/cli/record_cmd.py`
+  - `src/voxfusion/cli/summarize_cmd.py`
+  - `src/voxfusion/cli/transcribe_cmd.py`
+    - each command now configures `normal` vs `debug` logging through the shared logger
+  - `README.md`
+    - documented the new `Normal` / `Debug` behavior for GUI and CLI
+- New regression coverage:
+  - `tests/unit/test_logging_modes.py`
+  - `tests/unit/test_cli_log_mode_flags.py`
+  - `tests/unit/test_gui_log_mode.py`
+- Verification:
+  - `PYTHONPATH=src python -m pytest tests\unit\test_logging_modes.py tests\unit\test_cli_log_mode_flags.py tests\unit\test_gui_log_mode.py tests\unit\test_gui_logging_compact.py tests\unit\test_gui_detect_logging.py tests\unit\test_gui_queue_metadata.py -q`
+    - result: `12 passed`
+  - `PYTHONPATH=src python -m pytest tests\unit\test_transcribe_cli.py tests\unit\test_transcribe_batch_cli.py tests\unit\test_capture_cli.py tests\unit\test_recording.py -q`
+    - result: `17 passed, 2 skipped`
+  - `PYTHONPATH=src TCL_LIBRARY=<python311 tcl8.6> TK_LIBRARY=<python311 tk8.6> python -m pytest tests\integration\test_gui_smoke.py -q`
+    - result: `3 passed, 1 skipped`
+  - `PYTHONPATH=src HF_HUB_OFFLINE=1 HF_HUB_DISABLE_PROGRESS_BARS=1 HF_HUB_DISABLE_TELEMETRY=1 PYANNOTE_METRICS_ENABLED=false TCL_LIBRARY=<python311 tcl8.6> TK_LIBRARY=<python311 tk8.6> .\venv\Scripts\python.exe -m pytest -q`
+    - result: `320 passed, 2 skipped, 4 warnings`
+  - `.\venv\Scripts\python.exe -m voxfusion.gui.main --help`
+    - result: pass
+  - `dist\binaries\voxfusion-cli\voxfusion-cli.exe --help`
+    - result: pass; help now shows `-v, --debug, --verbose`
+- Runtime note:
+  - the frozen CLI help takes noticeable time to start (`~32 s`) because the bundled app still imports a large stack up front, but it exits successfully and exposes the new debug flag.
+- Review artifact:
+  - `coordination/reviews/2026-03-31-normal-debug-log-modes.md`
+
+- New task: compact the GUI layout, fix sticky tooltips, add more resizable areas, and introduce persistent UI language switching.
+- Classification:
+  - profile: `repo_change`
+  - size: `non_trivial`
+- Research artifacts:
+  - `.scratchpad/gui_layout_tooltips_i18n_20260331_research.md`
+  - `.scratchpad/gui_layout_tooltips_i18n_20260331_plan.md`
+- Current evidence checkpoint:
+  - only the outer `Notebook` vs `Logs` split is resizable today; users cannot independently resize live/file setup vs transcript/LLM areas.
+  - File tab layout still stacks large fixed-height sections (`Workflow`, `Transcription Setup`, transcript table, `Transcript Processing`), which wastes space on smaller windows.
+  - notebook tab padding is relatively large in `src/voxfusion/gui/theme.py`, and the global top toolbar consumes vertical space above the tabs.
+  - tooltips can stick because `src/voxfusion/gui/tooltip.py` hides only on pointer leave or mouse click, with no focus-loss or max-visible timeout handling.
+  - there is no existing GUI i18n layer; visible strings are hardcoded across `src/voxfusion/gui/main.py` and `src/voxfusion/gui/model_summary.py`, but GUI settings persistence can store a new `gui_language` key.
+- Planned implementation direction:
+  - make queue metadata probing asynchronous so `Add Files...` stays responsive and `Transcribe Queue` is not blocked by duration probing
+  - add nested `ttk.PanedWindow` containers for live/file tab resize control
+  - tighten theme/header spacing and tab padding
+  - rework tooltip lifecycle and broaden coverage
+  - add external JSON locale files (`en`, `ru`, `zh`) plus persistent GUI language selection with English fallback
+- Additional user requirement captured:
+  - some `.webm` files do not resolve duration today, and queue insertion currently freezes the UI because `_add_files_to_queue(...)` probes metadata synchronously.
+  - the replacement design must allow immediate queue insertion and immediate transcription start, while a background metadata worker fills `Duration`/`Size` later when available.
+- Next step:
+  - present the proposed plan to the user for CC before implementing the runtime/code changes.
+
+- Completion update for `codex-2026-03-31-gui-layout-tooltips-i18n`:
+  - implemented compact GUI layout defaults and additional resizable panes in `src/voxfusion/gui/main.py`
+  - moved queue metadata probing off the UI thread and added async row updates for duration/size
+  - added locale-backed GUI language switching with persisted `en` / `ru` / `zh`
+  - hardened tooltip lifecycle in `src/voxfusion/gui/tooltip.py`
+  - improved media duration probing with extraction fallback in `src/voxfusion/gui/helpers.py`
+  - tightened default ttk spacing in `src/voxfusion/gui/theme.py`
+  - added regression coverage:
+    - `tests/unit/test_gui_i18n_locale.py`
+    - `tests/unit/test_gui_queue_metadata_async.py`
+    - `tests/unit/test_gui_tooltip_lifecycle.py`
+    - `tests/unit/test_gui_helpers_duration_probe.py`
+  - verification:
+    - targeted GUI suite -> `39 passed`
+    - full repo suite in project `venv` -> `329 passed, 1 skipped, 4 warnings`
+  - build verification:
+    - standard rebuild to `dist/binaries/voxfusion-gui` was blocked by a running `voxfusion-gui.exe` in that directory
+    - fresh GUI bundle built successfully to `dist/binaries-refresh/voxfusion-gui`
+    - bundle contents verified:
+      - `dist/binaries-refresh/voxfusion-gui/voxfusion-gui.exe`
+      - `dist/binaries-refresh/voxfusion-gui/_internal/ffmpeg.exe`
+      - `dist/binaries-refresh/voxfusion-gui/_internal/pyannote/audio/telemetry/config.yaml`
+  - review artifact:
+    - `coordination/reviews/2026-03-31-gui-layout-tooltips-i18n.md`
+
+2026-03-31
+
+- New task: launch the GUI for manual verification without building binaries.
+- Classification:
+  - profile: `general`
+  - size: `trivial`
+- Startup ritual:
+  - `coordination/tasks.jsonl` checked; no in-progress task assigned to `codex`.
+  - `coordination/state/codex.md` resumed successfully.
+  - `%USERPROFILE%/AGENTS-warm.md` and `%USERPROFILE%/AGENTS-cold.md` loaded.
+- Policy/structure notes:
+  - `policy/task-routing-matrix.json` is absent in this repo.
+  - `policy/team-lead-orchestrator.md` is absent in this repo.
+  - `configs/subscription-limits.json` and `coordination/state/session-usage.json` are absent in this repo.
+  - proceeding with the closest applicable contract from the embedded AGENTS adapter.
+- Launch findings:
+  - `README.md` documents source launch via `voxfusion-gui` or `python -m voxfusion.gui.main`.
+  - `pyproject.toml` exposes console entry point `voxfusion-gui = "voxfusion.gui.main:main"`.
+  - project-local `venv/` is present, so the preferred no-build launch path is the repo venv Python process.
+- Planned command:
+  - `.\venv\Scripts\python.exe -m voxfusion.gui.main`
+  - fallback if needed: `PYTHONPATH=src .\venv\Scripts\python.exe -m voxfusion.gui.main`
+- Runtime verification:
+  - `.\venv\Scripts\python.exe -c "import tkinter as tk; root=tk.Tk(); print('TK_OK'); root.destroy()"` -> pass (`TK_OK`)
+  - `PYTHONPATH=src .\venv\Scripts\python.exe -c "import gui_start; print('IMPORT_OK')"` -> pass (`IMPORT_OK`)
+  - `PYTHONPATH=src .\venv\Scripts\python.exe .\gui_start.py` -> stayed alive for the 5 s shell timeout with no immediate traceback, which confirms the source GUI starts successfully without a build.
+  - detached launch attempts executed:
+    - `cmd /c start "" /D "<repo>" "<repo>\venv\Scripts\pythonw.exe" "<repo>\gui_start.py"`
+    - `cmd /c start "" /D "<repo>" "<repo>\venv\Scripts\python.exe" "<repo>\gui_start.py"`
+  - process-list confirmation from inside the sandbox is limited:
+    - `Get-Process` returned no visible detached `python`/`pythonw` process
+    - `Get-CimInstance Win32_Process ...` and `tasklist` hit `Access denied`
+  - practical conclusion: foreground source launch is verified; detached GUI launch was issued successfully but cannot be independently confirmed further from this sandbox.
+  - repeat launch requested by the user and executed with escalated GUI permissions:
+    - `& '.\venv\Scripts\pythonw.exe' '.\gui_start.py'` -> launch command accepted with exit code `0`
+
+- Implementation update for the transient GUI window fix:
+  - added `src/voxfusion/runtime_subprocess.py` with a shared Windows helper that patches `subprocess.Popen` to apply `CREATE_NO_WINDOW` plus hidden `STARTUPINFO` for windowed GUI processes.
+  - `src/voxfusion/gui/main.py` now installs that patch at Windows GUI startup before runtime work begins.
+  - `src/voxfusion/asr/gigaam_engine.py` now reuses the same shared helper instead of its local patch implementation.
+- Verification:
+  - `python -m py_compile src\voxfusion\runtime_subprocess.py src\voxfusion\gui\main.py src\voxfusion\asr\gigaam_engine.py tests\unit\test_runtime_subprocess.py tests\unit\test_gui_main_runtime.py` -> pass
+  - `PYTHONPATH=src python -m pytest tests\unit\test_runtime_subprocess.py tests\unit\test_gui_main_runtime.py -q` -> pass (`3 passed`)
+  - `PYTHONPATH=src python -m pytest tests\integration\test_gui_smoke.py -q` -> pass (`4 passed`)
+- User-facing outcome:
+  - after restarting the GUI on Windows, transient child console windows from GUI-triggered subprocesses should no longer appear during normal work.
+- 2026-04-01 restart request:
+  - GUI restart executed from source via `pythonw.exe gui_start.py`.
+  - process scan matched no existing `gui_start.py` / `voxfusion-gui.exe` instance before restart (`STOPPED:none`).
+  - new GUI launch command returned successfully.
+- 2026-04-01 transcript validation request:
+  - read-only inspection of `Koala weekly _ EXTERNAL_2026-03-30_12-49-20.transcript.txt` and `Mirroring and previewer _ SPB-NN _ EXTERNAL_2026-03-24_11-27-20.transcript.txt` shows both outputs are structurally incorrect for the full source duration.
+  - validated source durations via `probe_media_metadata(...)`:
+    - Koala `.webm` -> `2873.64 s`
+    - Mirroring `.webm` -> `1314.0 s`
+  - validated transcript max timestamps:
+    - Koala transcript -> `297 s`
+    - Mirroring transcript -> `299 s`
+  - additional quality findings:
+    - Koala speaker distribution is implausibly collapsed: `SPEAKER_01=57`, `SPEAKER_00=3`
+    - both transcripts contain many short/broken fragments and lexical artifacts.
+  - likely root-cause area for follow-up fix: chunked ML diarization / timestamp rebasing in `src/voxfusion/diarization/chunked.py` interacting with absolute timestamps from the inner diarizer.
+- 2026-04-01 long-transcript timeline fix:
+  - root cause confirmed in `src/voxfusion/diarization/chunked.py`: chunked ML diarization double-shifted already-absolute speaker turns returned by the inner pyannote diarizer, so chunks after the first were dropped by keep-window merge logic.
+  - fix applied: `_coerce_absolute_turns(...)` now accepts both absolute and chunk-local turn coordinates before merge.
+  - regression added in `tests/unit/test_chunked_diarization.py` for an inner diarizer that returns absolute chunk timestamps.
+  - log hygiene follow-up completed:
+    - shared suppression in `src/voxfusion/logging.py` now covers huggingface retry/request noise and pyannote `Found only N clusters...` chatter.
+    - `src/voxfusion/gui/runtime.py` now reuses the shared suppression predicate inside `TextRedirector`.
+  - verification:
+    - `python -m py_compile src\voxfusion\diarization\chunked.py tests\unit\test_chunked_diarization.py src\voxfusion\logging.py src\voxfusion\gui\runtime.py tests\unit\test_logging_runtime.py tests\unit\test_gui_logging_compact.py` -> pass
+    - `PYTHONPATH=src python -m pytest tests\unit\test_chunked_diarization.py tests\unit\test_batch_pipeline.py tests\unit\test_logging_runtime.py tests\unit\test_gui_logging_compact.py -q` -> pass (`17 passed`)
+    - `PYTHONPATH=src python -m pytest tests\integration\test_gui_smoke.py -q` -> pass (`4 passed`)
+  - GUI restarted after the fix via `pythonw.exe gui_start.py`.
+- 2026-04-01 diarization quality analysis:
+  - task classified as `repo_read / non_trivial`; no product code changes planned for this step.
+  - user supplied fresh post-fix logs for the same Koala and Mirroring files:
+    - Koala now completes with `segments=533` after `total_windows=543`.
+    - Mirroring now completes with `segments=295` after `total_windows=305`.
+  - initial hypothesis for this investigation:
+    - the critical long-file truncation is resolved,
+    - the remaining issue is speaker over-fragmentation across chunks or weak global speaker reconciliation,
+    - `min_speakers=4` may only apply to the inner diarizer and not to the final cross-chunk label space.
+  - next inspection targets:
+    - `src/voxfusion/pipeline/batch.py`
+    - `src/voxfusion/diarization/chunked.py`
+    - `src/voxfusion/diarization/pyannote_engine.py`
+- 2026-04-01 diarization quality analysis findings:
+  - fresh transcript evidence strongly matches chunk-boundary fragmentation rather than a pure ASR issue.
+  - Koala first appearance of speaker ids by time:
+    - `SPEAKER_01@7s`, `SPEAKER_00@290s`, then new ids keep appearing in later 300s bands: `375/394/412`, `615/625/683`, `991/1020/1190`, `1265/1274/1437`, `1568/1576/1720`, `1836/1849/1992`, `2127/2156/2351`, `2529/2544/2590`, `2760/2837`.
+    - the per-band counts are `2,3,3,3,3,3,3,3,3,2`, which is highly consistent with per-chunk speaker ids not being globally reconciled.
+  - Mirroring shows the same pattern with first appearances grouped by chunk bands: `4,3,3,1,3` speakers over `0-299/300-599/600-899/900-1199/1200+`.
+  - code-level cause in `src/voxfusion/diarization/chunked.py`:
+    - `_reconcile_chunk_speakers(...)` compares a new chunk only against `reference_turns` from the immediately previous chunk and only inside the overlap window.
+    - `_merge_chunk(...)` defines that overlap as `chunk_start .. chunk_start + chunk_overlap_s` and returns `mapped_turns` as the next `reference_turns`, so speakers absent from the first overlap seconds of the new chunk get fresh global ids even if they were seen earlier elsewhere in the file.
+    - any unmapped local speaker receives a new `SPEAKER_XX`, and there is no later global collapse pass.
+  - user setting impact:
+    - GUI passes `min_speakers/max_speakers` into pyannote config correctly, but those hints only reach the inner pyannote call per chunk; they are not enforced on the final stitched speaker-id space.
+  - downstream consequence:
+    - over-fragmented turns become `543` and `305` ASR windows for the two files, which shortens context for GigaAM and likely contributes to lexical noise.
+- 2026-04-01 diarization architecture design:
+  - user requested a design-first architecture aligned with existing diarization projects and recommendations.
+  - output target for this step:
+    - architecture recommendation for VoxFusion file transcription diarization,
+    - source-grounded comparison against pyannote / WhisperX / NeMo / SpeechBrain / diart,
+    - phased migration plan without implementation yet.
+  - key design hypothesis:
+    - VoxFusion should stop treating cross-chunk speaker reconciliation as a local overlap-only problem,
+    - and instead adopt either full-file diarization or chunk-local inference followed by a global speaker stitching stage based on embeddings/clustering.
+- 2026-04-01 diarization architecture implementation:
+  - user approved the architecture design with `CC`.
+  - implementation scope for the first slice:
+    - exact speaker-count propagation (`min == max` => exact count),
+    - file-mode offline ML diarization should prefer full-file pyannote instead of chunk-local reconciliation by default,
+    - keep chunked machinery available for later long-file fallback redesign.
+  - expected outcome for this slice:
+    - materially reduce over-fragmentation on long file transcription without waiting for the full global-stitcher implementation.
+- 2026-04-01 diarization architecture implementation checkpoint:
+  - completed first implementation slice from the approved redesign.
+  - code changes:
+    - `src/voxfusion/diarization/factory.py`: file-mode ML diarization now prefers full-file `PyAnnoteDiarizer`; chunked wrapper remains available for non-file modes.
+    - `src/voxfusion/diarization/pyannote_engine.py`: exact speaker count is now propagated as `num_speakers` when `min_speakers == max_speakers`, with compatibility fallback to equal bounds if needed.
+  - regression coverage updated:
+    - `tests/unit/test_diarization_factory.py`
+    - `tests/unit/test_pyannote_engine.py`
+    - `tests/unit/test_pyannote_logging_dedup.py`
+  - verification:
+    - `python -m py_compile src\voxfusion\diarization\factory.py src\voxfusion\diarization\pyannote_engine.py tests\unit\test_diarization_factory.py tests\unit\test_pyannote_engine.py tests\unit\test_pyannote_logging_dedup.py` -> pass
+    - `PYTHONPATH=src python -m pytest tests\unit\test_diarization_factory.py tests\unit\test_pyannote_engine.py tests\unit\test_pyannote_logging_dedup.py -q` -> pass (`14 passed`)
+    - `python -m py_compile tests\unit\test_chunked_diarization.py tests\unit\test_batch_pipeline.py` -> pass
+    - `PYTHONPATH=src python -m pytest tests\unit\test_chunked_diarization.py tests\unit\test_batch_pipeline.py -q` -> pass (`10 passed`)
+  - known remaining scope:
+    - long-file chunked fallback still uses the old overlap-only reconciliation when explicitly used outside file mode.
+    - the dedicated global speaker stitcher / embedding-based merge phase is not implemented in this slice yet.
+- 2026-04-01 diarization architecture implementation slice 2:
+  - continuing after the first file-mode/full-file fix.
+  - target for this slice:
+    - add a richer diarization turn result contract,
+    - extract optional `exclusive` diarization turns when the provider exposes them,
+    - make batch file transcription prefer those turns for downstream windowing/alignment when available.
+- 2026-04-01 diarization architecture implementation checkpoint 2:
+  - completed the richer turn-result slice.
+  - code changes:
+    - added `src/voxfusion/diarization/types.py` with `DiarizationTurnResult`.
+    - `src/voxfusion/diarization/pyannote_engine.py` now extracts optional `exclusive_speaker_diarization` turns when available and exposes `diarize_turns_result(...)`.
+    - `src/voxfusion/diarization/hybrid.py` now forwards the richer turn result when the ML provider supports it.
+    - `src/voxfusion/pipeline/batch.py` now prefers richer provider results and uses exclusive turns for diarization-first speaker windows when available.
+  - regression coverage added/updated:
+    - `tests/unit/test_pyannote_engine.py`
+    - `tests/unit/test_batch_pipeline.py`
+  - verification:
+    - `python -m py_compile src\voxfusion\diarization\types.py src\voxfusion\diarization\__init__.py src\voxfusion\diarization\hybrid.py src\voxfusion\diarization\pyannote_engine.py src\voxfusion\pipeline\batch.py tests\unit\test_pyannote_engine.py tests\unit\test_batch_pipeline.py` -> pass
+    - `PYTHONPATH=src python -m pytest tests\unit\test_pyannote_engine.py tests\unit\test_batch_pipeline.py -q` -> pass (`15 passed`)
+    - `PYTHONPATH=src python -m pytest tests\unit\test_diarization_factory.py tests\unit\test_pyannote_logging_dedup.py tests\unit\test_chunked_diarization.py -q` -> pass (`12 passed`)
+  - residual note:
+    - `git diff --check` still reports a blank-line-at-EOF warning for `src\voxfusion\pipeline\batch.py` even though the raw file now ends with a single `CRLF`; likely line-ending/index artifact, not a functional blocker.
+- 2026-04-01 diarization architecture implementation slice 3:
+  - target is the long-file fallback path.
+  - planned change:
+    - replace the current immediate previous-chunk overlap heuristic as the authority for final global speaker ids,
+    - move that logic into a dedicated global stitching stage that reasons across all chunk-local speakers.
+  - note:
+    - this is still a pragmatic in-repo implementation, not a full external embedding backend integration yet.
+- 2026-04-01 diarization architecture implementation checkpoint 3:
+  - completed the global speaker stitching slice for the long-file chunked fallback.
+  - code changes:
+    - added `src/voxfusion/diarization/stitching.py` with deterministic boundary matching and transitive chunk-speaker stitching.
+    - `src/voxfusion/diarization/chunked.py` now collects chunk-local turns first and assigns final global speaker ids through the dedicated stitcher instead of the old immediate previous-chunk overlap heuristic.
+    - removed the old local merge path from `chunked.py` and aligned the module/class docs with the new stitching-based behavior.
+    - added focused regressions in `tests/unit/test_diarization_stitching.py` and expanded `tests/unit/test_chunked_diarization.py` to cover three-chunk continuity.
+  - verification:
+    - `PYTHONPATH=src python -m py_compile src\voxfusion\diarization\stitching.py src\voxfusion\diarization\chunked.py tests\unit\test_diarization_stitching.py tests\unit\test_chunked_diarization.py` -> pass
+    - `PYTHONPATH=src python -m pytest tests\unit\test_diarization_stitching.py tests\unit\test_chunked_diarization.py tests\unit\test_diarization_factory.py tests\unit\test_pyannote_engine.py tests\unit\test_batch_pipeline.py tests\unit\test_pyannote_logging_dedup.py -q` -> pass (`31 passed`)
+    - `git diff --check -- src/voxfusion/diarization/chunked.py src/voxfusion/diarization/stitching.py tests/unit/test_chunked_diarization.py tests/unit/test_diarization_stitching.py` -> pass
+  - review notes:
+    - touched diarization files currently show as `untracked` in local `git status`, so the review for this slice was done by content inspection plus verification results rather than a normal tracked diff.
+    - this slice still uses temporal overlap scoring only; embedding-based global speaker clustering remains future work if long-file fallback quality still needs another step.
+- 2026-04-01 exact speaker-count UX checkpoint:
+  - real-world validation on `Koala weekly _ EXTERNAL_2026-03-30_12-49-20.webm` via CLI bootstrap completed after the shell wait timed out; output landed in `.scratchpad/koala_after_stitch.transcript.txt`.
+  - validation result versus the previous GUI transcript:
+    - max timestamp stayed correct at `2865s`.
+    - speaker count dropped from `28` to `10`, confirming that the chunk-boundary speaker explosion is no longer the dominant issue.
+    - first-appearance pattern is no longer clustered into repeated 300s chunk bands, which matches the new full-file / stitched architecture.
+  - residual issue after that validation:
+    - GUI detect/preset UX still pushed 4 detected speakers into open-ended `4+` (`min=4`, `max=`), which makes pyannote free to overestimate the global speaker count.
+  - code changes:
+    - `src/voxfusion/gui/main.py`: `_on_detect_done(...)` now preserves detected 4+ counts as exact `custom` ranges (`min=max=count`) instead of degrading them to `4+`.
+    - `tests/unit/test_gui_speaker_controls.py`: added regressions for preserving custom ranges and for `Detect(4)` filling exact min/max via `custom`.
+  - verification:
+    - `PYTHONPATH=src python -m py_compile src\voxfusion\gui\main.py tests\unit\test_gui_speaker_controls.py tests\unit\test_gui_detect_logging.py` -> pass
+    - `PYTHONPATH=src python -m pytest tests\unit\test_gui_speaker_controls.py tests\unit\test_gui_detect_logging.py tests\unit\test_gui_i18n_locale.py tests\unit\test_gui_flow.py -q` -> pass (`22 passed`)
+    - `git diff --check -- src/voxfusion/gui/main.py tests/unit/test_gui_speaker_controls.py tests/unit/test_gui_detect_logging.py` -> pass
+- 2026-04-01 binary build checkpoint:
+  - user requested fresh binary builds after the diarization/GUI fixes.
+  - build command:
+    - `.\venv\Scripts\python.exe scripts\build_binaries.py --target all --backends all --skip-install`
+  - result:
+    - build completed successfully for both GUI and CLI.
+    - refreshed bundles:
+      - `dist/binaries/voxfusion-gui`
+      - `dist/binaries/voxfusion-cli`
+    - refreshed ZIP archives:
+      - `dist/binaries/voxfusion-gui-windows-amd64.zip`
+      - `dist/binaries/voxfusion-cli-windows-amd64.zip`
+  - post-build verification:
+    - `dist/binaries/voxfusion-cli/voxfusion-cli.exe --help` -> pass
+    - bundled runtime files confirmed under both `_internal/` trees:
+      - `ffmpeg.exe`
+      - `ffprobe.exe`
+      - `python311.dll`
+  - noteworthy warnings during build:
+    - build script reported `python311.dll` was not found next to `venv\Scripts\python.exe` for the optional root-level copy step, but the DLL is present under bundle `_internal/`, so the produced bundle is not missing it.
+    - PyInstaller emitted environment warnings about `torchcodec`, `nvcuda.dll`, and `tbb12.dll`; the build still finished successfully. These are build-environment/runtime capability warnings, not fatal packaging failures in this pass.

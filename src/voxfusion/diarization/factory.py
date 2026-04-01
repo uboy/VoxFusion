@@ -9,7 +9,9 @@ from dataclasses import dataclass
 from voxfusion.config.models import DiarizationConfig
 from voxfusion.diarization.base import DiarizationEngine
 from voxfusion.diarization.channel import ChannelDiarizer
+from voxfusion.diarization.chunked import ChunkedDiarizer
 from voxfusion.diarization.hybrid import HybridDiarizer
+from voxfusion.diarization.none import NoneDiarizer
 from voxfusion.diarization.pyannote_engine import PyAnnoteDiarizer
 from voxfusion.exceptions import DiarizationError
 from voxfusion.logging import get_logger
@@ -82,6 +84,34 @@ def _log_selection(
     return selection
 
 
+def _wrap_with_chunked(
+    config: DiarizationConfig,
+    inner_config: object,
+    *,
+    mode: str,
+) -> object:
+    """Return the ML diarizer best suited for the current workflow mode."""
+    ml_cfg = config.ml
+    # Offline file transcription should prefer full-file diarization so the
+    # underlying pipeline can preserve one global speaker space.
+    if mode == "file" or not ml_cfg.chunked:
+        return PyAnnoteDiarizer(inner_config)  # type: ignore[arg-type]
+
+    def _factory() -> PyAnnoteDiarizer:
+        return PyAnnoteDiarizer(  # type: ignore[arg-type]
+            inner_config,
+            emit_pipeline_logs=False,
+        )
+
+    return ChunkedDiarizer(
+        _factory,
+        chunk_duration_s=ml_cfg.chunk_duration_s,
+        chunk_overlap_s=ml_cfg.chunk_overlap_s,
+        max_workers=ml_cfg.chunk_max_workers,
+        device=ml_cfg.device,
+    )
+
+
 def create_diarizer(
     config: DiarizationConfig,
     *,
@@ -89,8 +119,19 @@ def create_diarizer(
 ) -> DiarizerSelection:
     """Resolve the effective diarizer for the given workflow mode."""
     requested = (config.strategy or "channel").strip().lower()
-    if requested not in {"auto", "channel", "ml", "hybrid"}:
+    if requested not in {"auto", "channel", "ml", "hybrid", "none"}:
         raise DiarizationError(f"Unknown diarization strategy: {config.strategy!r}")
+
+    if requested == "none":
+        return _log_selection(
+            mode=mode,
+            requested=requested,
+            selection=DiarizerSelection(NoneDiarizer(), requested, "none"),
+            ml_ready=False,
+            ml_reason=None,
+            token_source=None,
+            config=config,
+        )
 
     ml_ready, ml_reason, token_source = _ml_prerequisites(config)
 
@@ -119,7 +160,9 @@ def create_diarizer(
         return _log_selection(
             mode=mode,
             requested=requested,
-            selection=DiarizerSelection(PyAnnoteDiarizer(config.ml), requested, "ml"),
+            selection=DiarizerSelection(
+                _wrap_with_chunked(config, config.ml, mode=mode), requested, "ml"
+            ),
             ml_ready=ml_ready,
             ml_reason=ml_reason,
             token_source=token_source,
@@ -156,7 +199,9 @@ def create_diarizer(
         return _log_selection(
             mode=mode,
             requested=requested,
-            selection=DiarizerSelection(PyAnnoteDiarizer(config.ml), requested, "ml"),
+            selection=DiarizerSelection(
+                _wrap_with_chunked(config, config.ml, mode=mode), requested, "ml"
+            ),
             ml_ready=ml_ready,
             ml_reason=ml_reason,
             token_source=token_source,

@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import os
 import queue
 import sys
 import textwrap
 import threading
 import tkinter as tk
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import datetime
-from time import monotonic
 from pathlib import Path
+from time import monotonic
 from tkinter import filedialog, scrolledtext, ttk
 
 from voxfusion.asr_catalog import (
@@ -34,12 +37,22 @@ from voxfusion.gui.helpers import (
     default_transcript_path,
     find_ffmpeg,
     get_system_proxies,
-    install_ffmpeg_winget,
+    install_ffmpeg_local,
+    load_detection_audio_chunk,
     load_gui_settings,
     models_dir,
+    probe_media_metadata,
+    probe_media_size,
     save_gui_settings,
 )
+from voxfusion.gui.i18n import (
+    DEFAULT_GUI_LANGUAGE,
+    SUPPORTED_GUI_LANGUAGES,
+    load_gui_locale,
+    normalize_gui_language,
+)
 from voxfusion.gui.model_summary import ModelSummaryCard
+from voxfusion.gui.tooltip import ToolTip, create_help_icon
 from voxfusion.gui.runtime import (
     CaptureOptions,
     CaptureWorker,
@@ -61,13 +74,17 @@ from voxfusion.llm.client import (
     fetch_models,
 )
 from voxfusion.llm.prompts import BUILTIN_PROMPTS
+from voxfusion.logging import get_logger
 from voxfusion.media.extractor import NEEDS_EXTRACTION_EXTENSIONS
 from voxfusion.models.translation import TranslatedSegment
 from voxfusion.recording import RecordingStats
+from voxfusion.runtime_subprocess import patch_subprocess_popen_no_window
 
 ASR_MODEL_CHOICES: tuple[str, ...] = tuple(m.id for m in get_available_model_catalog())
 GUI_DEFAULT_LANGUAGE = DEFAULT_LANGUAGE_CODE
-FILE_DIARIZATION_CHOICES: tuple[str, ...] = ("auto", "channel", "ml", "hybrid")
+FILE_DIARIZATION_CHOICES: tuple[str, ...] = ("auto", "none", "channel", "ml", "hybrid")
+FILE_SPEAKER_PRESET_CODES: tuple[str, ...] = ("auto", "1", "2", "3", "4plus", "custom")
+log = get_logger(__name__)
 
 # File dialog filter for supported media files
 _AUDIO_EXTENSIONS = " ".join(
@@ -75,22 +92,23 @@ _AUDIO_EXTENSIONS = " ".join(
         {".wav", ".flac", ".ogg", ".aiff", ".au", ".w64"} | NEEDS_EXTRACTION_EXTENSIONS
     )
 )
-MEDIA_FILETYPES = [
-    ("All supported media", _AUDIO_EXTENSIONS),
-    ("Video files", " ".join(f"*{e}" for e in sorted({
-        ".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".ts",
-    }))),
-    ("Audio files", " ".join(f"*{e}" for e in sorted({
-        ".wav", ".flac", ".ogg", ".mp3", ".m4a", ".aac", ".opus",
-    }))),
-    ("All files", "*.*"),
-]
-
 _build_file_workflow_status = build_file_workflow_status
 _default_transcript_path = default_transcript_path
 _load_gui_settings = load_gui_settings
 _save_gui_settings = save_gui_settings
 _derive_capture_source = derive_capture_source
+
+
+@dataclass
+class _FileQueueItem:
+    file_path: Path
+    duration_s: float | None = None
+    size_bytes: int | None = None
+    status: str = "Queued"
+    progress: float = 0.0
+    result: str = ""
+    output_path: Path | None = None
+    metadata_generation: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +121,20 @@ class TranscriptionGUI:
     def __init__(self, root: tk.Tk, options: CaptureOptions) -> None:
         self.root = root
         self.options = options
-        self.root.title("VoxFusion")
+        self._ui_language_code = DEFAULT_GUI_LANGUAGE
+        self._ui_language_var = tk.StringVar(value="")
+        self._locale = load_gui_locale(self._ui_language_code)
+        self._ui_refreshers: list[object] = []
+        self._tooltips: list[tuple[ToolTip, str]] = []
+        self._log_mode_code = "normal"
+        self._queue_metadata_executor = ThreadPoolExecutor(
+            max_workers=2,
+            thread_name_prefix="voxfusion-gui-meta",
+        )
+        self._queue_metadata_async_enabled = True
+        self._file_queue_generation = 0
+
+        self.root.title(self._tr("app.title"))
         self.root.geometry("1200x780")
         configure_gui_theme(self.root)
 
@@ -120,7 +151,7 @@ class TranscriptionGUI:
             value=self._language_label_for_code(options.language, initial_model)
         )
         self._translate_var = tk.StringVar(value=options.translate or "")
-        self._device_picker_var = tk.StringVar(value="Loading devices...")
+        self._device_picker_var = tk.StringVar(value=self._tr("device.loading"))
         self._device_options: list[DeviceOption] = []
         self._requested_device_index = options.microphone_device_id or options.system_device_id
         self._device_check_vars: dict[str, tk.BooleanVar] = {}
@@ -140,9 +171,19 @@ class TranscriptionGUI:
             value=self._language_label_for_code(options.language, _file_default)
         )
         self._file_quality_var = tk.StringVar(value="Balanced")
+        self._file_quality_display_var = tk.StringVar(value="")
         self._file_diarization_var = tk.StringVar(value="auto")
+        self._file_speaker_preset_var = tk.StringVar(value="auto")
+        self._file_speaker_preset_display_var = tk.StringVar(value="")
         self._file_min_speakers_var = tk.StringVar(value="")
         self._file_max_speakers_var = tk.StringVar(value="")
+        self._file_queue_items: dict[str, _FileQueueItem] = {}
+        self._file_queue_lookup: dict[str, str] = {}
+        self._file_queue_serial = 0
+        self._file_active_queue_id: str | None = None
+        self._file_batch_cancel_requested = False
+        self._file_active_error_message: str | None = None
+        self._file_detect_worker_thread: "threading.Thread | None" = None
         self._file_seg_count = 0
         self._file_segments: list[TranslatedSegment] = []
         self._last_transcript_path: Path | None = None
@@ -158,6 +199,7 @@ class TranscriptionGUI:
         self._proxy_no_var = tk.StringVar(value="")
         self._proxy_ca_var = tk.StringVar(value="")
         self._hf_token_var = tk.StringVar(value="")
+        self._log_mode_var = tk.StringVar(value="")
 
         # LLM summarize state
         self._llm_worker: LLMWorker | None = None
@@ -171,16 +213,247 @@ class TranscriptionGUI:
         self._apply_saved_gui_settings()
 
         self._build_layout()
+        self._apply_localized_ui()
         self._install_redirection()
-        configure_gui_logging()
+        self._apply_gui_log_mode()
+
+        # Refresh detect-button state when file selection changes
+        self._file_path_var.trace_add(
+            "write",
+            lambda *_: self._refresh_file_diarization_controls(),
+        )
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._refresh_device_options()
         self._refresh_language_choices()
         self._refresh_file_workflow()
-        self._set_live_status("Select devices/model and click Start or Record Audio.")
+        self._set_live_status(self._tr("live.status.default"))
         self.root.after(250, self._refresh_llm_models)
         self.root.after(5000, self._poll_device_changes)
+
+    # ------------------------------------------------------------------
+    # Localization helpers
+    # ------------------------------------------------------------------
+
+    def _tr(self, key: str, **kwargs: object) -> str:
+        locale = getattr(self, "_locale", None) or load_gui_locale(DEFAULT_GUI_LANGUAGE)
+        template = locale.get(key, key)
+        if kwargs:
+            return template.format(**kwargs)
+        return template
+
+    def _register_ui_refresher(self, refresher: object) -> None:
+        def _safe_refresh() -> None:
+            with suppress(tk.TclError, RuntimeError):
+                refresher()  # type: ignore[misc]
+
+        self._ui_refreshers.append(_safe_refresh)
+        _safe_refresh()
+
+    def _bind_text(self, widget: ttk.Widget | tk.Widget, key: str, **kwargs: object) -> None:
+        self._register_ui_refresher(lambda: widget.configure(text=self._tr(key, **kwargs)))
+
+    def _bind_labelframe_text(
+        self,
+        widget: ttk.LabelFrame,
+        key: str,
+        **kwargs: object,
+    ) -> None:
+        self._register_ui_refresher(lambda: widget.configure(text=self._tr(key, **kwargs)))
+
+    def _bind_tree_heading(
+        self,
+        tree: ttk.Treeview,
+        column: str,
+        key: str,
+        **kwargs: object,
+    ) -> None:
+        self._register_ui_refresher(
+            lambda: tree.heading(column, text=self._tr(key, **kwargs))
+        )
+
+    def _bind_notebook_tab(self, tab_index: int, key: str, **kwargs: object) -> None:
+        self._register_ui_refresher(
+            lambda: self._notebook.tab(tab_index, text=f"  {self._tr(key, **kwargs)}  ")
+        )
+
+    def _bind_tooltip(self, widget: tk.Widget, key: str, **kwargs: object) -> ToolTip:
+        tip = ToolTip(widget, self._tr(key, **kwargs))
+        self._register_ui_refresher(lambda: tip.set_text(self._tr(key, **kwargs)))
+        self._tooltips.append((tip, key))
+        return tip
+
+    def _language_label(self, code: str) -> str:
+        return self._tr(f"language.name.{normalize_gui_language(code)}")
+
+    def _language_code_from_label(self, label: str) -> str:
+        normalized = str(label).strip()
+        for code in SUPPORTED_GUI_LANGUAGES:
+            if normalized == self._language_label(code):
+                return code
+        return normalize_gui_language(normalized)
+
+    def _log_mode_label(self, code: str) -> str:
+        normalized = "debug" if str(code).strip().lower() == "debug" else "normal"
+        return self._tr(f"log_mode.{normalized}")
+
+    def _log_mode_code_from_label(self, label: str) -> str:
+        normalized = str(label).strip()
+        if normalized == self._log_mode_label("debug") or normalized.lower() == "debug":
+            return "debug"
+        return "normal"
+
+    def _quality_label(self, value: str) -> str:
+        normalized = self._normalize_quality_label(value)
+        return self._tr(f"quality.{normalized.lower()}")
+
+    def _normalize_quality_label(self, value: str) -> str:
+        normalized = str(value).strip()
+        if not normalized:
+            return "Balanced"
+        for label in QUALITY_PRESET_LABELS:
+            if normalized == label or normalized.lower() == label.lower():
+                return label
+            if normalized == self._tr(f"quality.{label.lower()}"):
+                return label
+        lowered = normalized.lower()
+        if lowered in {"fast", "balanced", "quality"}:
+            return lowered.capitalize() if lowered != "quality" else "Quality"
+        return "Balanced"
+
+    def _refresh_quality_selector(self) -> None:
+        if not hasattr(self, "_file_quality_combo"):
+            return
+        values = [self._quality_label(label) for label in QUALITY_PRESET_LABELS]
+        self._file_quality_combo.configure(values=values)
+        self._file_quality_var.set(self._normalize_quality_label(self._file_quality_var.get()))
+        self._file_quality_display_var.set(self._quality_label(self._file_quality_var.get()))
+
+    def _on_file_quality_changed(self, _event: object | None = None) -> None:
+        self._file_quality_var.set(
+            self._normalize_quality_label(self._file_quality_display_var.get())
+        )
+        self._file_quality_display_var.set(self._quality_label(self._file_quality_var.get()))
+
+    def _speaker_preset_label(self, value: str) -> str:
+        normalized = self._normalize_speaker_preset(value)
+        return self._tr(f"speaker_preset.{normalized}")
+
+    def _normalize_speaker_preset(self, value: str) -> str:
+        normalized = str(value).strip()
+        if not normalized:
+            return "auto"
+        legacy_map = {
+            "auto": "auto",
+            "1": "1",
+            "1 speaker": "1",
+            "2": "2",
+            "2 speakers": "2",
+            "3": "3",
+            "3 speakers": "3",
+            "4+": "4plus",
+            "4plus": "4plus",
+            "4+ speakers": "4plus",
+            "custom": "custom",
+        }
+        lowered = normalized.casefold()
+        if lowered in legacy_map:
+            return legacy_map[lowered]
+        for code in FILE_SPEAKER_PRESET_CODES:
+            if normalized == self._speaker_preset_label(code):
+                return code
+        return "auto"
+
+    def _refresh_speaker_preset_selector(self) -> None:
+        if not hasattr(self, "_file_speaker_preset_combo"):
+            return
+        values = [self._speaker_preset_label(code) for code in FILE_SPEAKER_PRESET_CODES]
+        self._file_speaker_preset_combo.configure(values=values)
+        self._file_speaker_preset_var.set(
+            self._normalize_speaker_preset(self._file_speaker_preset_var.get())
+        )
+        self._file_speaker_preset_display_var.set(
+            self._speaker_preset_label(self._file_speaker_preset_var.get())
+        )
+
+    def _device_option_label(self, kind: str, device_label: str) -> str:
+        key = "device.option.microphone" if kind == "microphone" else "device.option.system"
+        return self._tr(key, device=device_label)
+
+    def _device_short_label(self, kind: str, device_label: str) -> str:
+        key = "device.selected.microphone" if kind == "microphone" else "device.selected.system"
+        return self._tr(key, device=device_label)
+
+    def _media_filetypes(self) -> list[tuple[str, str]]:
+        return [
+            (self._tr("dialog.filetype.supported_media"), _AUDIO_EXTENSIONS),
+            (
+                self._tr("dialog.filetype.video_files"),
+                " ".join(
+                    f"*{ext}"
+                    for ext in sorted({".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".ts"})
+                ),
+            ),
+            (
+                self._tr("dialog.filetype.audio_files"),
+                " ".join(
+                    f"*{ext}"
+                    for ext in sorted({".wav", ".flac", ".ogg", ".mp3", ".m4a", ".aac", ".opus"})
+                ),
+            ),
+            (self._tr("dialog.filetype.all_files"), "*.*"),
+        ]
+
+    def _recording_save_filetypes(self, fmt: str) -> tuple[str, list[tuple[str, str]]]:
+        fmt_filetypes = {
+            "wav": ("wav", [(self._tr("dialog.filetype.wav_audio"), "*.wav")]),
+            "ogg": ("ogg", [(self._tr("dialog.filetype.ogg_audio"), "*.ogg")]),
+            "opus": ("opus", [(self._tr("dialog.filetype.opus_audio"), "*.opus")]),
+            "mp3": ("mp3", [(self._tr("dialog.filetype.mp3_audio"), "*.mp3")]),
+        }
+        return fmt_filetypes.get(
+            fmt,
+            (fmt, [(self._tr("dialog.filetype.audio_files"), f"*.{fmt}")]),
+        )
+
+    def _apply_localized_ui(self) -> None:
+        self.root.title(self._tr("app.title"))
+        for refresher in self._ui_refreshers:
+            refresher()
+        self._refresh_language_selector()
+        self._refresh_log_mode_selector()
+        self._refresh_quality_selector()
+        self._refresh_speaker_preset_selector()
+        if hasattr(self, "_live_model_summary"):
+            self._live_model_summary.set_translator(self._tr)
+        if hasattr(self, "_file_model_summary"):
+            self._file_model_summary.set_translator(self._tr)
+        if hasattr(self, "_device_menu"):
+            self._refresh_device_options()
+        self._refresh_file_queue_rows()
+        self._refresh_live_summary_labels()
+        self._refresh_file_workflow()
+
+    def _refresh_language_selector(self) -> None:
+        if not hasattr(self, "_ui_language_combo"):
+            return
+        values = [self._language_label(code) for code in SUPPORTED_GUI_LANGUAGES]
+        self._ui_language_combo.configure(values=values)
+        self._ui_language_var.set(self._language_label(self._ui_language_code))
+
+    def _refresh_log_mode_selector(self) -> None:
+        if not hasattr(self, "_log_mode_combo"):
+            return
+        values = [self._log_mode_label("normal"), self._log_mode_label("debug")]
+        self._log_mode_combo.configure(values=values)
+        self._log_mode_var.set(self._log_mode_label(self._log_mode_code))
+
+    def _on_ui_language_changed(self, _event: object | None = None) -> None:
+        selected_code = self._language_code_from_label(self._ui_language_var.get())
+        self._ui_language_code = normalize_gui_language(selected_code)
+        self._locale = load_gui_locale(self._ui_language_code)
+        self._apply_localized_ui()
+        self._persist_gui_settings()
 
     # ------------------------------------------------------------------
     # Layout builders
@@ -188,14 +461,8 @@ class TranscriptionGUI:
 
     def _build_layout(self) -> None:
         """Build the top-level layout with a two-tab Notebook and resizable log pane."""
-        toolbar = ttk.Frame(self.root)
-        toolbar.pack(fill=tk.X, padx=4, pady=(2, 0))
-        ttk.Button(toolbar, text="Settings", command=self._open_settings).pack(
-            side=tk.RIGHT, padx=(0, 2)
-        )
-
         paned = ttk.PanedWindow(self.root, orient=tk.VERTICAL)
-        paned.pack(fill=tk.BOTH, expand=True, padx=4, pady=(4, 4))
+        paned.pack(fill=tk.BOTH, expand=True, padx=2, pady=(2, 2))
 
         notebook_frame = ttk.Frame(paned)
         self._notebook = ttk.Notebook(notebook_frame)
@@ -203,32 +470,85 @@ class TranscriptionGUI:
         paned.add(notebook_frame, weight=3)
 
         live_tab = ttk.Frame(self._notebook)
-        self._notebook.add(live_tab, text="  Live Capture  ")
+        self._notebook.add(live_tab, text="")
+        self._bind_notebook_tab(0, "live.tab")
         self._build_live_tab(live_tab)
 
         file_tab = ttk.Frame(self._notebook)
-        self._notebook.add(file_tab, text="  File Transcription  ")
+        self._notebook.add(file_tab, text="")
+        self._bind_notebook_tab(1, "file.tab")
         self._build_file_tab(file_tab)
 
         log_frame = ttk.Frame(paned)
-        ttk.Label(log_frame, text="Logs", anchor="w").pack(fill=tk.X, padx=4)
+        log_header = ttk.Frame(log_frame)
+        log_header.pack(fill=tk.X, padx=4, pady=(2, 0))
+        self._logs_label = ttk.Label(log_header, text="", anchor="w")
+        self._logs_label.pack(side=tk.LEFT)
+        self._bind_text(self._logs_label, "header.logs")
+
+        log_controls = ttk.Frame(log_header)
+        log_controls.pack(side=tk.RIGHT)
+
+        self._settings_button = ttk.Button(log_controls, text="", command=self._open_settings)
+        self._settings_button.pack(side=tk.RIGHT, padx=(8, 0))
+        self._bind_text(self._settings_button, "header.settings")
+        self._bind_tooltip(self._settings_button, "tooltip.header.settings")
+
+        self._log_mode_combo = ttk.Combobox(
+            log_controls,
+            textvariable=self._log_mode_var,
+            state="readonly",
+            width=10,
+        )
+        self._log_mode_combo.pack(side=tk.RIGHT, padx=(0, 8))
+        self._log_mode_combo.bind("<<ComboboxSelected>>", self._on_log_mode_changed)
+        self._bind_tooltip(self._log_mode_combo, "tooltip.header.log_mode")
+
+        self._log_mode_caption = ttk.Label(log_controls, text="")
+        self._log_mode_caption.pack(side=tk.RIGHT, padx=(0, 4))
+        self._bind_text(self._log_mode_caption, "header.log_mode")
+
+        self._ui_language_combo = ttk.Combobox(
+            log_controls,
+            textvariable=self._ui_language_var,
+            state="readonly",
+            width=10,
+        )
+        self._ui_language_combo.pack(side=tk.RIGHT, padx=(0, 8))
+        self._ui_language_combo.bind("<<ComboboxSelected>>", self._on_ui_language_changed)
+        self._bind_tooltip(self._ui_language_combo, "tooltip.header.language")
+
+        self._ui_language_label = ttk.Label(log_controls, text="")
+        self._ui_language_label.pack(side=tk.RIGHT, padx=(0, 4))
+        self._bind_text(self._ui_language_label, "header.language")
+
         self.log_widget = scrolledtext.ScrolledText(
             log_frame,
             wrap=tk.WORD,
             state=tk.DISABLED,
         )
-        self.log_widget.pack(fill=tk.BOTH, expand=True, padx=4, pady=(0, 4))
+        self.log_widget.pack(fill=tk.BOTH, expand=True, padx=4, pady=(2, 4))
+        self._bind_tooltip(self.log_widget, "tooltip.logs.panel")
         paned.add(log_frame, weight=1)
 
     def _build_live_tab(self, parent: ttk.Frame) -> None:
         """Build the Live Capture tab contents."""
-        settings_box = ttk.LabelFrame(parent, text="Capture Setup", padding=(8, 6))
-        settings_box.pack(fill=tk.X, padx=8, pady=(8, 4))
+        live_paned = ttk.PanedWindow(parent, orient=tk.VERTICAL)
+        live_paned.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+
+        top_frame = ttk.Frame(live_paned)
+        live_paned.add(top_frame, weight=1)
+
+        settings_box = ttk.LabelFrame(top_frame, text="", padding=(6, 5))
+        settings_box.pack(fill=tk.X, padx=0, pady=(0, 4))
+        self._bind_labelframe_text(settings_box, "live.section.capture_setup")
         settings_box.columnconfigure(1, weight=1)
         settings_box.columnconfigure(3, weight=2)
 
         # Row 0: Multi-select device picker
-        ttk.Label(settings_box, text="Devices:").grid(row=0, column=0, sticky="w", padx=(0, 4))
+        self._live_devices_label = ttk.Label(settings_box, text="")
+        self._live_devices_label.grid(row=0, column=0, sticky="w", padx=(0, 4))
+        self._bind_text(self._live_devices_label, "live.label.devices")
         self.device_picker = ttk.Menubutton(
             settings_box,
             textvariable=self._device_picker_var,
@@ -237,11 +557,12 @@ class TranscriptionGUI:
         self.device_picker.grid(row=0, column=1, columnspan=3, sticky="ew", padx=(0, 12))
         self._device_menu = tk.Menu(self.device_picker, tearoff=0)
         self.device_picker.configure(menu=self._device_menu)
+        self._bind_tooltip(self.device_picker, "tooltip.live.devices")
 
         # Row 1: Model | Language | Translate
-        ttk.Label(settings_box, text="Model:").grid(
-            row=1, column=0, sticky="w", padx=(0, 4), pady=(4, 0)
-        )
+        self._live_model_label = ttk.Label(settings_box, text="")
+        self._live_model_label.grid(row=1, column=0, sticky="w", padx=(0, 4), pady=(4, 0))
+        self._bind_text(self._live_model_label, "live.label.model")
         self.model_combo = ttk.Combobox(
             settings_box,
             textvariable=self._model_var,
@@ -251,10 +572,13 @@ class TranscriptionGUI:
         )
         self.model_combo.grid(row=1, column=1, sticky="w", padx=(0, 12), pady=(4, 0))
         self.model_combo.bind("<<ComboboxSelected>>", self._on_model_changed)
+        self._bind_tooltip(self.model_combo, "tooltip.live.model")
 
         lang_row = ttk.Frame(settings_box)
         lang_row.grid(row=1, column=2, columnspan=2, sticky="ew", pady=(4, 0))
-        ttk.Label(lang_row, text="Language:").pack(side=tk.LEFT, padx=(0, 4))
+        self._live_language_label = ttk.Label(lang_row, text="")
+        self._live_language_label.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_text(self._live_language_label, "live.label.language")
         self.language_combo = ttk.Combobox(
             lang_row,
             textvariable=self._language_var,
@@ -262,37 +586,49 @@ class TranscriptionGUI:
             width=18,
         )
         self.language_combo.pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Label(lang_row, text="Translate:").pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_tooltip(self.language_combo, "tooltip.live.language")
+        self._live_translate_label = ttk.Label(lang_row, text="")
+        self._live_translate_label.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_text(self._live_translate_label, "live.label.translate")
         self.translate_entry = ttk.Entry(
             lang_row,
             textvariable=self._translate_var,
             width=8,
         )
         self.translate_entry.pack(side=tk.LEFT)
+        self._bind_tooltip(self.translate_entry, "tooltip.live.translate")
 
         # Row 2: Action buttons + stats (all in one row)
         btn_row = ttk.Frame(settings_box)
         btn_row.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(6, 2))
 
         self.start_button = ttk.Button(
-            btn_row, text="Start", command=self._start_capture, style="Primary.TButton"
+            btn_row, text="", command=self._start_capture, style="Primary.TButton"
         )
         self.start_button.pack(side=tk.LEFT, padx=(0, 4))
-        self.stop_button = ttk.Button(btn_row, text="Stop", command=self._stop_capture)
+        self._bind_text(self.start_button, "live.button.start")
+        self._bind_tooltip(self.start_button, "tooltip.live.start")
+        self.stop_button = ttk.Button(btn_row, text="", command=self._stop_capture)
         self.stop_button.configure(state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_text(self.stop_button, "live.button.stop")
+        self._bind_tooltip(self.stop_button, "tooltip.live.stop")
         self.pause_button = ttk.Button(
-            btn_row, text="Pause", command=self._toggle_recording_pause
+            btn_row, text="", command=self._toggle_recording_pause
         )
         self.pause_button.configure(state=tk.DISABLED)
         self.pause_button.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_text(self.pause_button, "live.button.pause")
+        self._bind_tooltip(self.pause_button, "tooltip.live.pause")
         self.record_button = ttk.Button(
             btn_row,
-            text="Record Audio",
+            text="",
             command=self._start_recording,
             style="Accent.TButton",
         )
         self.record_button.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_text(self.record_button, "live.button.record_audio")
+        self._bind_tooltip(self.record_button, "tooltip.live.record_audio")
         self._rec_format_combo = ttk.Combobox(
             btn_row,
             textvariable=self._rec_format_var,
@@ -301,50 +637,78 @@ class TranscriptionGUI:
             width=5,
         )
         self._rec_format_combo.pack(side=tk.LEFT, padx=(0, 12))
+        self._bind_tooltip(self._rec_format_combo, "tooltip.live.record_format")
 
         ttk.Separator(btn_row, orient="vertical").pack(side=tk.LEFT, fill=tk.Y, padx=(0, 12))
 
-        self.clear_button = ttk.Button(btn_row, text="Clear", command=self._clear_table)
+        self.clear_button = ttk.Button(btn_row, text="", command=self._clear_table)
         self.clear_button.pack(side=tk.LEFT, padx=(0, 4))
-        self.save_button = ttk.Button(btn_row, text="Save...", command=self._save_to_file)
+        self._bind_text(self.clear_button, "live.button.clear")
+        self._bind_tooltip(self.clear_button, "tooltip.live.clear")
+        self.save_button = ttk.Button(btn_row, text="", command=self._save_to_file)
         self.save_button.pack(side=tk.LEFT)
+        self._bind_text(self.save_button, "live.button.save")
+        self._bind_tooltip(self.save_button, "tooltip.live.save")
 
-        self.queue_label = ttk.Label(btn_row, text="Queue: —  |  ASR: —  |  Dropped: 0")
+        self.queue_label = ttk.Label(btn_row, text="")
         self.queue_label.pack(side=tk.RIGHT, padx=(8, 0))
-        self.counter_label = ttk.Label(btn_row, text="Segments: 0")
+        self._bind_tooltip(self.queue_label, "tooltip.live.summary")
+        self.counter_label = ttk.Label(btn_row, text="")
         self.counter_label.pack(side=tk.RIGHT)
+        self._bind_tooltip(self.counter_label, "tooltip.live.segment_counter")
 
         # Hidden model summary (kept for API compatibility — not displayed)
-        self._live_model_summary = ModelSummaryCard(settings_box, title="Model Overview")
+        self._live_model_summary = ModelSummaryCard(
+            settings_box,
+            title=self._tr("model_summary.title.live"),
+            translate=self._tr,
+        )
 
-        self.status_label = ttk.Label(parent, text="Ready", anchor="w")
-        self.status_label.pack(fill=tk.X, padx=8, pady=(4, 2))
+        self.status_label = ttk.Label(top_frame, text="", anchor="w")
+        self.status_label.pack(fill=tk.X, padx=0, pady=(2, 2))
+        self._bind_tooltip(self.status_label, "tooltip.live.status")
 
-        table_frame = ttk.Frame(parent)
-        table_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 4))
+        table_frame = ttk.Frame(live_paned)
+        live_paned.add(table_frame, weight=6)
 
         _style = ttk.Style()
         _style.configure("Treeview", rowheight=22)
 
         columns = ("time", "source", "text", "translation")
         self.table = ttk.Treeview(table_frame, columns=columns, show="headings")
-        self.table.heading("time", text="Time")
-        self.table.heading("source", text="Source")
-        self.table.heading("text", text="Text")
-        self.table.heading("translation", text="Translation")
+        self._bind_tree_heading(self.table, "time", "live.table.time")
+        self._bind_tree_heading(self.table, "source", "live.table.source")
+        self._bind_tree_heading(self.table, "text", "live.table.text")
+        self._bind_tree_heading(self.table, "translation", "live.table.translation")
         self.table.column("time", width=80, minwidth=70, stretch=False)
         self.table.column("source", width=80, minwidth=70, stretch=False)
         self.table.column("text", width=500, minwidth=220)
         self.table.column("translation", width=400, minwidth=220)
         self.table.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
+        self._bind_tooltip(self.table, "tooltip.live.table")
         self.table.bind("<Control-c>", self._copy_selected_rows)
         self.table.bind("<Button-3>", self._show_context_menu)
         self.table.bind("<Control-a>", lambda e: self._select_all_rows())
         self._context_menu = tk.Menu(self.root, tearoff=0)
-        self._context_menu.add_command(label="Copy selected (Ctrl+C)", command=self._copy_selected_rows)
-        self._context_menu.add_command(label="Copy text only", command=self._copy_text_only)
+        self._context_menu.add_command(label="", command=self._copy_selected_rows)
+        self._context_menu.add_command(label="", command=self._copy_text_only)
         self._context_menu.add_separator()
-        self._context_menu.add_command(label="Select all", command=self._select_all_rows)
+        self._context_menu.add_command(label="", command=self._select_all_rows)
+        self._register_ui_refresher(
+            lambda: self._context_menu.entryconfigure(
+                0, label=self._tr("live.menu.copy_selected")
+            )
+        )
+        self._register_ui_refresher(
+            lambda: self._context_menu.entryconfigure(
+                1, label=self._tr("live.menu.copy_text_only")
+            )
+        )
+        self._register_ui_refresher(
+            lambda: self._context_menu.entryconfigure(
+                3, label=self._tr("live.menu.select_all")
+            )
+        )
 
         scroll = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.table.yview)
         scroll.pack(fill=tk.Y, side=tk.RIGHT)
@@ -356,20 +720,25 @@ class TranscriptionGUI:
 
     def _build_file_tab(self, parent: ttk.Frame) -> None:
         """Build the File Transcription tab contents."""
+        file_paned = ttk.PanedWindow(parent, orient=tk.VERTICAL)
+        file_paned.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+
         # -- FFmpeg warning banner (hidden when FFmpeg is present) --
         self._ffmpeg_banner = tk.Frame(parent, bg="#fff3cd")
         if self._ffmpeg_path is None:
-            self._ffmpeg_banner.pack(fill=tk.X, padx=8, pady=(8, 0))
-        tk.Label(
+            self._ffmpeg_banner.pack(fill=tk.X, padx=6, pady=(6, 0))
+        self._ffmpeg_banner_label = tk.Label(
             self._ffmpeg_banner,
-            text="FFmpeg not found. Video files will not work correctly.",
+            text="",
             bg="#fff3cd",
             fg="#856404",
             anchor="w",
-        ).pack(side=tk.LEFT, padx=(8, 12), pady=4)
+        )
+        self._ffmpeg_banner_label.pack(side=tk.LEFT, padx=(8, 12), pady=4)
+        self._bind_text(self._ffmpeg_banner_label, "file.banner.ffmpeg_missing")
         self._ffmpeg_install_btn = tk.Button(
             self._ffmpeg_banner,
-            text="Install FFmpeg via winget",
+            text="",
             command=self._install_ffmpeg,
             bg="#e0a800",
             fg="white",
@@ -378,6 +747,7 @@ class TranscriptionGUI:
             pady=2,
         )
         self._ffmpeg_install_btn.pack(side=tk.LEFT, pady=4)
+        self._bind_text(self._ffmpeg_install_btn, "file.button.install_ffmpeg")
         self._ffmpeg_install_status = tk.Label(
             self._ffmpeg_banner,
             text="",
@@ -387,44 +757,115 @@ class TranscriptionGUI:
         )
         self._ffmpeg_install_status.pack(side=tk.LEFT, padx=(8, 0), pady=4)
 
-        workflow_hdr = ttk.Frame(parent)
-        workflow_hdr.pack(fill=tk.X, padx=8, pady=(10, 4))
-        ttk.Label(
+        top_area = ttk.Frame(file_paned)
+        file_paned.add(top_area, weight=3)
+
+        workflow_hdr = ttk.Frame(top_area)
+        workflow_hdr.pack(fill=tk.X, padx=0, pady=(0, 2))
+        self._file_workflow_title = ttk.Label(
             workflow_hdr,
-            text="Workflow: Record audio -> Transcribe -> Send transcript to Open WebUI",
+            text="",
             style="Header.TLabel",
-        ).pack(side=tk.LEFT)
+        )
+        self._file_workflow_title.pack(side=tk.LEFT)
+        self._bind_text(self._file_workflow_title, "file.workflow.title")
 
         self._file_workflow_label = ttk.Label(
-            parent,
-            text=_build_file_workflow_status(last_recorded_file=None, transcript_ready=False),
+            top_area,
+            text="",
             anchor="w",
             foreground="#555555",
         )
-        self._file_workflow_label.pack(fill=tk.X, padx=8, pady=(0, 4))
+        self._file_workflow_label.pack(fill=tk.X, padx=0, pady=(0, 4))
 
         # -- File picker row --
         # Use PanedWindow so column widths are driven by the sash position,
         # not by widget content — switching models won't cause the layout to jump.
-        top = ttk.PanedWindow(parent, orient=tk.HORIZONTAL)
-        top.pack(fill=tk.X, padx=8, pady=(0, 6))
+        top = ttk.PanedWindow(top_area, orient=tk.HORIZONTAL)
+        top.pack(fill=tk.BOTH, expand=True, padx=0, pady=(0, 4))
 
-        transcribe_box = ttk.LabelFrame(top, text="Transcription Setup", padding=12)
+        transcribe_box = ttk.LabelFrame(top, text="", padding=8)
         top.add(transcribe_box, weight=3)
+        self._bind_labelframe_text(transcribe_box, "file.section.transcription_setup")
 
         picker = ttk.Frame(transcribe_box)
         picker.pack(fill=tk.X, pady=(0, 4))
 
-        ttk.Label(picker, text="File:").pack(side=tk.LEFT, padx=(0, 6))
+        self._file_current_label = ttk.Label(picker, text="")
+        self._file_current_label.pack(side=tk.LEFT, padx=(0, 6))
+        self._bind_text(self._file_current_label, "file.label.current")
         self._file_path_entry = ttk.Entry(picker, textvariable=self._file_path_var, width=70)
         self._file_path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
-        ttk.Button(picker, text="Browse...", command=self._browse_file).pack(side=tk.LEFT)
+        self._bind_tooltip(self._file_path_entry, "tooltip.file.current")
+        self._file_add_btn = ttk.Button(
+            picker,
+            text="",
+            command=self._browse_file,
+        )
+        self._file_add_btn.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_text(self._file_add_btn, "file.button.add_files")
+        self._bind_tooltip(self._file_add_btn, "tooltip.file.add_files")
+        self._file_remove_btn = ttk.Button(
+            picker,
+            text="",
+            command=self._remove_selected_file_queue_items,
+        )
+        self._file_remove_btn.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_text(self._file_remove_btn, "file.button.remove")
+        self._bind_tooltip(self._file_remove_btn, "tooltip.file.remove")
+        self._file_clear_queue_btn = ttk.Button(
+            picker,
+            text="",
+            command=self._clear_file_queue,
+        )
+        self._file_clear_queue_btn.pack(side=tk.LEFT)
+        self._bind_text(self._file_clear_queue_btn, "file.button.clear_list")
+        self._bind_tooltip(self._file_clear_queue_btn, "tooltip.file.clear_list")
+
+        queue_frame = ttk.Frame(transcribe_box)
+        queue_frame.pack(fill=tk.BOTH, expand=False, pady=(0, 6))
+
+        queue_cols = ("file", "duration", "size", "status", "progress", "result")
+        self._file_queue_table = ttk.Treeview(
+            queue_frame,
+            columns=queue_cols,
+            show="headings",
+            height=4,
+        )
+        self._bind_tree_heading(self._file_queue_table, "file", "file.table.file")
+        self._bind_tree_heading(self._file_queue_table, "duration", "file.table.duration")
+        self._bind_tree_heading(self._file_queue_table, "size", "file.table.size")
+        self._bind_tree_heading(self._file_queue_table, "status", "file.table.status")
+        self._bind_tree_heading(self._file_queue_table, "progress", "file.table.progress")
+        self._bind_tree_heading(self._file_queue_table, "result", "file.table.result")
+        self._file_queue_table.column("file", width=360, minwidth=220)
+        self._file_queue_table.column("duration", width=88, minwidth=76, stretch=False)
+        self._file_queue_table.column("size", width=88, minwidth=76, stretch=False)
+        self._file_queue_table.column("status", width=120, minwidth=90, stretch=False)
+        self._file_queue_table.column("progress", width=90, minwidth=70, stretch=False)
+        self._file_queue_table.column("result", width=220, minwidth=150)
+        self._file_queue_table.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
+        self._bind_tooltip(self._file_queue_table, "tooltip.file.queue_table")
+        self._file_queue_table.bind(
+            "<<TreeviewSelect>>",
+            self._on_file_queue_selection,
+        )
+
+        queue_scroll = ttk.Scrollbar(
+            queue_frame,
+            orient=tk.VERTICAL,
+            command=self._file_queue_table.yview,
+        )
+        queue_scroll.pack(fill=tk.Y, side=tk.RIGHT)
+        self._file_queue_table.configure(yscrollcommand=queue_scroll.set)
 
         # -- Options row --
         opts = ttk.Frame(transcribe_box)
         opts.pack(fill=tk.X, pady=(0, 4))
 
-        ttk.Label(opts, text="Model:").pack(side=tk.LEFT, padx=(0, 6))
+        self._file_model_label = ttk.Label(opts, text="")
+        self._file_model_label.pack(side=tk.LEFT, padx=(0, 6))
+        self._bind_text(self._file_model_label, "file.label.model")
         self._file_model_combo = ttk.Combobox(
             opts,
             textvariable=self._file_model_var,
@@ -434,8 +875,11 @@ class TranscriptionGUI:
         )
         self._file_model_combo.pack(side=tk.LEFT, padx=(0, 12))
         self._file_model_combo.bind("<<ComboboxSelected>>", self._on_file_model_changed)
+        self._bind_tooltip(self._file_model_combo, "tooltip.file.model")
 
-        ttk.Label(opts, text="Language:").pack(side=tk.LEFT, padx=(0, 6))
+        self._file_language_label = ttk.Label(opts, text="")
+        self._file_language_label.pack(side=tk.LEFT, padx=(0, 6))
+        self._bind_text(self._file_language_label, "file.label.language")
         self._file_lang_combo = ttk.Combobox(
             opts,
             textvariable=self._file_lang_var,
@@ -443,21 +887,28 @@ class TranscriptionGUI:
             width=18,
         )
         self._file_lang_combo.pack(side=tk.LEFT, padx=(0, 12))
+        self._bind_tooltip(self._file_lang_combo, "tooltip.file.language")
 
-        ttk.Label(opts, text="Quality:").pack(side=tk.LEFT, padx=(0, 6))
+        self._file_quality_label = ttk.Label(opts, text="")
+        self._file_quality_label.pack(side=tk.LEFT, padx=(0, 6))
+        self._bind_text(self._file_quality_label, "file.label.quality")
         self._file_quality_combo = ttk.Combobox(
             opts,
-            textvariable=self._file_quality_var,
+            textvariable=self._file_quality_display_var,
             state="readonly",
             width=11,
-            values=list(QUALITY_PRESET_LABELS),
+            values=(),
         )
         self._file_quality_combo.pack(side=tk.LEFT, padx=(0, 16))
+        self._file_quality_combo.bind("<<ComboboxSelected>>", self._on_file_quality_changed)
+        self._bind_tooltip(self._file_quality_combo, "tooltip.file.quality")
 
         diar_opts = ttk.Frame(transcribe_box)
         diar_opts.pack(fill=tk.X, pady=(0, 4))
 
-        ttk.Label(diar_opts, text="Speaker Separation:").pack(side=tk.LEFT, padx=(0, 6))
+        self._file_diarization_label = ttk.Label(diar_opts, text="")
+        self._file_diarization_label.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_text(self._file_diarization_label, "file.label.speaker_separation")
         self._file_diarization_combo = ttk.Combobox(
             diar_opts,
             textvariable=self._file_diarization_var,
@@ -465,47 +916,96 @@ class TranscriptionGUI:
             width=9,
             values=FILE_DIARIZATION_CHOICES,
         )
-        self._file_diarization_combo.pack(side=tk.LEFT, padx=(0, 12))
+        self._file_diarization_combo.pack(side=tk.LEFT, padx=(0, 0))
         self._file_diarization_combo.bind(
             "<<ComboboxSelected>>",
             self._on_file_diarization_changed,
         )
+        self._bind_tooltip(self._file_diarization_combo, "tooltip.file.diarization")
+        self._file_diarization_help = create_help_icon(diar_opts, "")
+        self._bind_tooltip(self._file_diarization_help, "tooltip.file.diarization_help")
 
-        ttk.Label(diar_opts, text="Min:").pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Separator(diar_opts, orient="vertical").pack(
+            side=tk.LEFT, fill=tk.Y, padx=(8, 8)
+        )
+
+        self._file_speakers_label = ttk.Label(diar_opts, text="")
+        self._file_speakers_label.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_text(self._file_speakers_label, "file.label.speakers")
+        self._file_speaker_preset_combo = ttk.Combobox(
+            diar_opts,
+            textvariable=self._file_speaker_preset_display_var,
+            state="readonly",
+            width=12,
+            values=(),
+        )
+        self._file_speaker_preset_combo.pack(side=tk.LEFT, padx=(0, 0))
+        self._file_speaker_preset_combo.bind(
+            "<<ComboboxSelected>>",
+            self._on_speaker_preset_changed,
+        )
+        self._bind_tooltip(self._file_speaker_preset_combo, "tooltip.file.speaker_preset")
+        self._file_speaker_help = create_help_icon(diar_opts, "")
+        self._bind_tooltip(self._file_speaker_help, "tooltip.file.speaker_help")
+
+        ttk.Separator(diar_opts, orient="vertical").pack(
+            side=tk.LEFT, fill=tk.Y, padx=(8, 8)
+        )
+
+        self._file_min_lbl = ttk.Label(diar_opts, text="")
+        self._file_min_lbl.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_text(self._file_min_lbl, "file.label.min")
         self._file_min_speakers_entry = ttk.Entry(
             diar_opts,
             textvariable=self._file_min_speakers_var,
-            width=5,
+            width=4,
         )
-        self._file_min_speakers_entry.pack(side=tk.LEFT, padx=(0, 10))
+        self._file_min_speakers_entry.pack(side=tk.LEFT, padx=(0, 6))
+        self._bind_tooltip(self._file_min_speakers_entry, "tooltip.file.min_speakers")
 
-        ttk.Label(diar_opts, text="Max:").pack(side=tk.LEFT, padx=(0, 4))
+        self._file_max_lbl = ttk.Label(diar_opts, text="")
+        self._file_max_lbl.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_text(self._file_max_lbl, "file.label.max")
         self._file_max_speakers_entry = ttk.Entry(
             diar_opts,
             textvariable=self._file_max_speakers_var,
-            width=5,
+            width=4,
         )
-        self._file_max_speakers_entry.pack(side=tk.LEFT, padx=(0, 10))
+        self._file_max_speakers_entry.pack(side=tk.LEFT, padx=(0, 6))
+        self._bind_tooltip(self._file_max_speakers_entry, "tooltip.file.max_speakers")
 
-        ttk.Label(
+        self._file_detect_btn = ttk.Button(
             diar_opts,
-            text="`auto` prefers ML when pyannote + token are available.",
-            foreground="#666666",
-        ).pack(side=tk.LEFT)
+            text="",
+            command=self._detect_speakers,
+            width=7,
+        )
+        self._file_detect_btn.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_text(self._file_detect_btn, "file.button.detect")
+        self._bind_tooltip(self._file_detect_btn, "tooltip.file.detect")
 
         self._file_download_btn = ttk.Button(
-            opts, text="↓ Download", command=self._download_file_model
+            opts, text="", command=self._download_file_model
         )
         self._file_download_btn.pack(side=tk.LEFT, padx=(0, 12))
+        self._bind_text(self._file_download_btn, "file.button.download_model")
+        self._bind_tooltip(self._file_download_btn, "tooltip.file.download_model")
 
         self._file_transcribe_btn = ttk.Button(
-            opts, text="Transcribe", command=self._start_file_transcribe, style="Accent.TButton"
+            opts,
+            text="",
+            command=self._start_file_transcribe,
+            style="Accent.TButton",
         )
         self._file_transcribe_btn.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_text(self._file_transcribe_btn, "file.button.transcribe_queue")
+        self._bind_tooltip(self._file_transcribe_btn, "tooltip.file.transcribe_queue")
         self._file_cancel_btn = ttk.Button(
-            opts, text="Cancel", command=self._cancel_file_transcribe, state=tk.DISABLED
+            opts, text="", command=self._cancel_file_transcribe, state=tk.DISABLED
         )
         self._file_cancel_btn.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_text(self._file_cancel_btn, "file.button.cancel")
+        self._bind_tooltip(self._file_cancel_btn, "tooltip.file.cancel")
 
         # -- Status + progress row --
         # Pack right-anchored widgets first so the expanding status label fills the rest.
@@ -516,41 +1016,52 @@ class TranscriptionGUI:
             prog_row, orient="horizontal", length=180, mode="determinate", maximum=100
         )
         self._file_progress.pack(side=tk.RIGHT)
+        self._bind_tooltip(self._file_progress, "tooltip.file.progress")
 
         self._file_time_label = ttk.Label(prog_row, text="", anchor="e", width=18)
         self._file_time_label.pack(side=tk.RIGHT, padx=(0, 6))
 
         self._file_status_label = ttk.Label(
-            prog_row, text="Select a file and click Transcribe.", anchor="w"
+            prog_row, text="", anchor="w"
         )
         self._file_status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self._bind_tooltip(self._file_status_label, "tooltip.file.status")
 
         self._file_artifact_label = ttk.Label(
             transcribe_box,
-            text="Transcript file: not created yet.",
+            text="",
             anchor="w",
             foreground="#555555",
         )
         self._file_artifact_label.pack(fill=tk.X, pady=(0, 4))
+        self._bind_tooltip(self._file_artifact_label, "tooltip.file.artifact")
 
-        self._file_model_summary = ModelSummaryCard(top, title="Selected Model")
+        self._file_model_summary = ModelSummaryCard(
+            top,
+            title=self._tr("model_summary.title.file"),
+            translate=self._tr,
+        )
         top.add(self._file_model_summary, weight=2)
 
         # -- Results table --
-        file_table_frame = ttk.Frame(parent)
-        file_table_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 4))
+        results_frame = ttk.Frame(file_paned)
+        file_paned.add(results_frame, weight=6)
+
+        file_table_frame = ttk.Frame(results_frame)
+        file_table_frame.pack(fill=tk.BOTH, expand=True, padx=0, pady=(0, 4))
 
         file_cols = ("time", "speaker", "text")
         self._file_table = ttk.Treeview(
             file_table_frame, columns=file_cols, show="headings"
         )
-        self._file_table.heading("time", text="Timestamp")
-        self._file_table.heading("speaker", text="Speaker")
-        self._file_table.heading("text", text="Text")
+        self._bind_tree_heading(self._file_table, "time", "file.table.timestamp")
+        self._bind_tree_heading(self._file_table, "speaker", "file.table.speaker")
+        self._bind_tree_heading(self._file_table, "text", "file.table.text")
         self._file_table.column("time", width=90, minwidth=70, stretch=False)
         self._file_table.column("speaker", width=110, minwidth=80, stretch=False)
         self._file_table.column("text", width=800, minwidth=300)
         self._file_table.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
+        self._bind_tooltip(self._file_table, "tooltip.file.results_table")
         self._file_table.bind("<Control-c>", self._file_copy_selected)
         self._file_table.bind("<Control-a>", lambda _e: self._file_table.selection_set(
             self._file_table.get_children()
@@ -563,41 +1074,48 @@ class TranscriptionGUI:
         self._file_table.configure(yscrollcommand=file_scroll.set)
 
         # -- File controls --
-        file_ctrl = ttk.Frame(parent)
-        file_ctrl.pack(fill=tk.X, padx=8, pady=(0, 4))
+        file_ctrl = ttk.Frame(results_frame)
+        file_ctrl.pack(fill=tk.X, padx=0, pady=(0, 4))
 
-        ttk.Button(file_ctrl, text="Clear", command=self._clear_file_table).pack(
-            side=tk.LEFT, padx=(0, 4)
-        )
-        ttk.Button(file_ctrl, text="Save...", command=self._save_file_result).pack(
-            side=tk.LEFT
-        )
-        self._file_seg_counter_label = ttk.Label(file_ctrl, text="Segments: 0")
+        self._file_clear_btn = ttk.Button(file_ctrl, text="", command=self._clear_file_table)
+        self._file_clear_btn.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_text(self._file_clear_btn, "file.button.clear")
+        self._bind_tooltip(self._file_clear_btn, "tooltip.file.clear")
+        self._file_save_btn = ttk.Button(file_ctrl, text="", command=self._save_file_result)
+        self._file_save_btn.pack(side=tk.LEFT)
+        self._bind_text(self._file_save_btn, "file.button.save")
+        self._bind_tooltip(self._file_save_btn, "tooltip.file.save")
+        self._file_seg_counter_label = ttk.Label(file_ctrl, text="")
         self._file_seg_counter_label.pack(side=tk.RIGHT)
+        self._bind_tooltip(self._file_seg_counter_label, "tooltip.file.segment_counter")
 
         # -- LLM processing panel --
-        ttk.Separator(parent, orient="horizontal").pack(fill=tk.X, padx=8, pady=(4, 0))
-
-        llm_box = ttk.LabelFrame(parent, text="Transcript Processing", padding=12)
-        llm_box.pack(fill=tk.X, padx=8, pady=(4, 6))
+        llm_box = ttk.LabelFrame(file_paned, text="", padding=8)
+        file_paned.add(llm_box, weight=2)
+        self._bind_labelframe_text(llm_box, "file.section.transcript_processing")
 
         llm_hdr = ttk.Frame(llm_box)
         llm_hdr.pack(fill=tk.X, pady=(0, 2))
-        ttk.Label(llm_hdr, text="Process Transcript with Open WebUI", font=("", 9, "bold")).pack(
-            side=tk.LEFT
-        )
+        self._llm_header_label = ttk.Label(llm_hdr, text="", font=("", 9, "bold"))
+        self._llm_header_label.pack(side=tk.LEFT)
+        self._bind_text(self._llm_header_label, "llm.header")
 
         llm_cfg = ttk.Frame(llm_box)
         llm_cfg.pack(fill=tk.X, pady=(0, 2))
 
-        ttk.Label(llm_cfg, text="URL:").pack(side=tk.LEFT, padx=(0, 4))
-        ttk.Entry(llm_cfg, textvariable=self._llm_url_var, width=26).pack(
-            side=tk.LEFT, padx=(0, 10)
-        )
-        ttk.Button(llm_cfg, text="Refresh Models", command=self._refresh_llm_models).pack(
-            side=tk.LEFT, padx=(0, 10)
-        )
-        ttk.Label(llm_cfg, text="Model:").pack(side=tk.LEFT, padx=(0, 4))
+        self._llm_url_label = ttk.Label(llm_cfg, text="")
+        self._llm_url_label.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_text(self._llm_url_label, "llm.label.url")
+        self._llm_url_entry = ttk.Entry(llm_cfg, textvariable=self._llm_url_var, width=26)
+        self._llm_url_entry.pack(side=tk.LEFT, padx=(0, 10))
+        self._bind_tooltip(self._llm_url_entry, "tooltip.llm.url")
+        self._llm_refresh_btn = ttk.Button(llm_cfg, text="", command=self._refresh_llm_models)
+        self._llm_refresh_btn.pack(side=tk.LEFT, padx=(0, 10))
+        self._bind_text(self._llm_refresh_btn, "file.button.refresh_models")
+        self._bind_tooltip(self._llm_refresh_btn, "tooltip.llm.refresh_models")
+        self._llm_model_label = ttk.Label(llm_cfg, text="")
+        self._llm_model_label.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_text(self._llm_model_label, "llm.label.model")
         self._llm_model_combo = ttk.Combobox(
             llm_cfg,
             textvariable=self._llm_model_var,
@@ -606,11 +1124,16 @@ class TranscriptionGUI:
         self._llm_model_combo.pack(
             side=tk.LEFT, padx=(0, 10)
         )
-        ttk.Label(llm_cfg, text="API Key:").pack(side=tk.LEFT, padx=(0, 4))
-        ttk.Entry(llm_cfg, textvariable=self._llm_key_var, width=14, show="*").pack(
-            side=tk.LEFT, padx=(0, 10)
-        )
-        ttk.Label(llm_cfg, text="Prompt:").pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_tooltip(self._llm_model_combo, "tooltip.llm.model")
+        self._llm_api_key_label = ttk.Label(llm_cfg, text="")
+        self._llm_api_key_label.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_text(self._llm_api_key_label, "llm.label.api_key")
+        self._llm_key_entry = ttk.Entry(llm_cfg, textvariable=self._llm_key_var, width=14, show="*")
+        self._llm_key_entry.pack(side=tk.LEFT, padx=(0, 10))
+        self._bind_tooltip(self._llm_key_entry, "tooltip.llm.api_key")
+        self._llm_prompt_label = ttk.Label(llm_cfg, text="")
+        self._llm_prompt_label.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_text(self._llm_prompt_label, "llm.label.prompt")
         self._llm_prompt_combo = ttk.Combobox(
             llm_cfg,
             textvariable=self._llm_prompt_var,
@@ -619,23 +1142,32 @@ class TranscriptionGUI:
             values=tuple(BUILTIN_PROMPTS.keys()),
         )
         self._llm_prompt_combo.pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(llm_cfg, text="Prompt...", command=self._open_prompt_editor).pack(
-            side=tk.LEFT, padx=(0, 10)
-        )
+        self._bind_tooltip(self._llm_prompt_combo, "tooltip.llm.prompt")
+        self._llm_prompt_btn = ttk.Button(llm_cfg, text="", command=self._open_prompt_editor)
+        self._llm_prompt_btn.pack(side=tk.LEFT, padx=(0, 10))
+        self._bind_text(self._llm_prompt_btn, "file.button.prompt")
+        self._bind_tooltip(self._llm_prompt_btn, "tooltip.llm.prompt_edit")
         self._llm_summarize_btn = ttk.Button(
-            llm_cfg, text="Send to LLM", command=self._start_llm_summarize, style="Accent.TButton"
+            llm_cfg, text="", command=self._start_llm_summarize, style="Accent.TButton"
         )
         self._llm_summarize_btn.pack(side=tk.LEFT, padx=(0, 4))
-        ttk.Button(llm_cfg, text="Copy", command=self._copy_llm_output).pack(
-            side=tk.LEFT, padx=(0, 4)
-        )
-        ttk.Button(llm_cfg, text="Clear", command=self._clear_llm_output).pack(side=tk.LEFT)
+        self._bind_text(self._llm_summarize_btn, "file.button.send_to_llm")
+        self._bind_tooltip(self._llm_summarize_btn, "tooltip.llm.send")
+        self._llm_copy_btn = ttk.Button(llm_cfg, text="", command=self._copy_llm_output)
+        self._llm_copy_btn.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_text(self._llm_copy_btn, "file.button.copy")
+        self._bind_tooltip(self._llm_copy_btn, "tooltip.llm.copy")
+        self._llm_clear_btn = ttk.Button(llm_cfg, text="", command=self._clear_llm_output)
+        self._llm_clear_btn.pack(side=tk.LEFT)
+        self._bind_text(self._llm_clear_btn, "file.button.clear")
+        self._bind_tooltip(self._llm_clear_btn, "tooltip.llm.clear")
 
         self._llm_status_label = ttk.Label(llm_cfg, text="", anchor="w", foreground="#555555")
         self._llm_status_label.pack(side=tk.LEFT, padx=(12, 0))
+        self._bind_tooltip(self._llm_status_label, "tooltip.llm.status")
 
         llm_out_frame = ttk.Frame(llm_box)
-        llm_out_frame.pack(fill=tk.BOTH, expand=False, pady=(0, 0))
+        llm_out_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 0))
 
         self._llm_output = scrolledtext.ScrolledText(
             llm_out_frame,
@@ -644,6 +1176,7 @@ class TranscriptionGUI:
             state=tk.DISABLED,
         )
         self._llm_output.pack(fill=tk.BOTH, expand=True)
+        self._bind_tooltip(self._llm_output, "tooltip.llm.output")
         self._refresh_file_diarization_controls()
         self._refresh_file_workflow()
 
@@ -665,10 +1198,10 @@ class TranscriptionGUI:
             return
         model_info = get_model_info(self._model_var.get() or "small")
         if not model_info.supports_live_capture:
-            self._set_live_status(
-                f"{model_info.name} currently supports file transcription only. "
-                "Use Record Audio + File Transcription."
-            )
+            self._set_live_status(self._tr(
+                "live.status.file_only_model_action",
+                model_name=model_info.name,
+            ))
             return
 
         options = CaptureOptions(
@@ -685,13 +1218,13 @@ class TranscriptionGUI:
             self._selected_microphone_id,
             self._selected_system_id,
         ) == "none":
-            self._set_live_status("Select at least one device to start capture.")
+            self._set_live_status(self._tr("live.status.select_device_capture"))
             return
 
         self._set_live_controls_enabled(False)
         self.stop_button.configure(state=tk.NORMAL)
         self.pause_button.configure(state=tk.DISABLED)
-        self._set_live_status("Starting...")
+        self._set_live_status(self._tr("live.status.starting"))
         self._worker = CaptureWorker(
             options=options,
             on_status=self._schedule_live_status,
@@ -711,22 +1244,16 @@ class TranscriptionGUI:
             self._selected_system_id,
         )
         if source == "none":
-            self._set_live_status("Select at least one device to record.")
+            self._set_live_status(self._tr("live.status.select_device_record"))
             return
         fmt = self._rec_format_var.get()
-        _fmt_filetypes = {
-            "wav":  ("wav",  [("WAV audio",       "*.wav")]),
-            "ogg":  ("ogg",  [("OGG Vorbis audio","*.ogg")]),
-            "opus": ("opus", [("OGG Opus audio",  "*.opus")]),
-            "mp3":  ("mp3",  [("MP3 audio",       "*.mp3")]),
-        }
-        ext, filetypes = _fmt_filetypes.get(fmt, (fmt, [("Audio files", f"*.{fmt}")]))
+        ext, filetypes = self._recording_save_filetypes(fmt)
         default_name = f"recording_{source}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{ext}"
         path = filedialog.asksaveasfilename(
             defaultextension=f".{ext}",
             initialfile=default_name,
-            filetypes=filetypes + [("All files", "*.*")],
-            title="Save recorded audio",
+            filetypes=filetypes + [(self._tr("dialog.filetype.all_files"), "*.*")],
+            title=self._tr("dialog.title.save_recorded_audio"),
         )
         if not path:
             return
@@ -741,9 +1268,12 @@ class TranscriptionGUI:
         self._set_live_controls_enabled(False)
         self.stop_button.configure(state=tk.NORMAL)
         self.pause_button.configure(state=tk.NORMAL)
-        self.pause_button.configure(text="Pause")
+        self.pause_button.configure(text=self._tr("live.button.pause"))
         self.record_button.configure(state=tk.NORMAL, text="00:00:00")
-        self._set_live_status(f"Recording audio to {options.output_path.name}...")
+        self._set_live_status(self._tr(
+            "live.status.recording_to",
+            file_name=options.output_path.name,
+        ))
         self._record_worker = RecordingWorker(
             options=options,
             on_status=self._schedule_live_status,
@@ -755,11 +1285,11 @@ class TranscriptionGUI:
 
     def _stop_capture(self) -> None:
         if self._worker is not None:
-            self._set_live_status("Stopping...")
+            self._set_live_status(self._tr("live.status.stopping"))
             self._worker.stop()
             self.stop_button.configure(state=tk.DISABLED)
         elif self._record_worker is not None:
-            self._set_live_status("Stopping recording...")
+            self._set_live_status(self._tr("live.status.stopping_recording"))
             self._record_worker.stop()
             self.stop_button.configure(state=tk.DISABLED)
             self.pause_button.configure(state=tk.DISABLED)
@@ -768,7 +1298,9 @@ class TranscriptionGUI:
         if self._record_worker is None:
             return
         paused = self._record_worker.toggle_pause()
-        self.pause_button.configure(text=("Resume" if paused else "Pause"))
+        self.pause_button.configure(
+            text=self._tr("live.button.resume" if paused else "live.button.pause")
+        )
 
     def _tick_recording_timer(self) -> None:
         if self._record_worker is None or not self._record_worker.is_running:
@@ -816,18 +1348,31 @@ class TranscriptionGUI:
         with suppress(tk.TclError, RuntimeError):
             self.root.after(0, self._on_recording_finished, stats)
 
+    def _refresh_live_summary_labels(self) -> None:
+        if hasattr(self, "counter_label"):
+            self.counter_label.configure(
+                text=self._tr("live.summary.segments", count=self._segment_count)
+            )
+        if hasattr(self, "queue_label") and self._worker is None:
+            self.queue_label.configure(text=self._tr("live.summary.queue_empty"))
+
     def _set_live_status(self, status: str) -> None:
         self.status_label.configure(text=status)
 
     def _show_error(self, message: str) -> None:
-        self._set_live_status(f"Error: {message}")
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        self._append_log_line(f"{timestamp} | ERROR | {message}\n")
+        self._set_live_status(self._tr("live.status.error", message=message))
+        log.error("gui.live_error", error=message)
 
     def _add_segment(self, time_str: str, speaker: str, text: str, translation: str | None) -> None:
         self._segment_count += 1
-        self.counter_label.configure(text=f"Segments: {self._segment_count}")
-        source_label = "mic" if "LOCAL" in speaker else "system" if "REMOTE" in speaker else speaker
+        self.counter_label.configure(
+            text=self._tr("live.summary.segments", count=self._segment_count)
+        )
+        source_label = (
+            self._tr("live.source.mic")
+            if "LOCAL" in speaker
+            else self._tr("live.source.system") if "REMOTE" in speaker else speaker
+        )
         text_lines = textwrap.wrap(text, width=70) if text else [""]
         trans_lines = textwrap.wrap(translation or "", width=57) if translation else [""]
         n = max(len(text_lines), len(trans_lines))
@@ -843,10 +1388,14 @@ class TranscriptionGUI:
         self.table.yview_moveto(1.0)
 
     def _add_dropped_row(self, time_str: str, source: str) -> None:
-        src_label = "mic" if source == "microphone" else "sys" if source == "system" else source
+        src_label = (
+            self._tr("live.source.mic")
+            if source == "microphone"
+            else self._tr("live.source.sys_short") if source == "system" else source
+        )
         self.table.insert(
             "", tk.END,
-            values=(time_str, src_label, "speech may have been lost", ""),
+            values=(time_str, src_label, self._tr("live.dropped.text"), ""),
             tags=("dropped",),
         )
         self.table.yview_moveto(1.0)
@@ -862,9 +1411,12 @@ class TranscriptionGUI:
                 q = stats["preprocess_q"] + stats["asr_q"]
                 in_asr = stats["in_asr"]
                 dropped = stats["dropped"]
-                self.queue_label.configure(
-                    text=f"Queue: {q}  |  ASR: {in_asr}  |  Dropped: {dropped}"
-                )
+                self.queue_label.configure(text=self._tr(
+                    "live.summary.queue",
+                    queue=q,
+                    in_asr=in_asr,
+                    dropped=dropped,
+                ))
         with suppress(tk.TclError, RuntimeError):
             self.root.after(500, self._poll_stats)
 
@@ -967,7 +1519,7 @@ class TranscriptionGUI:
         for item in self.table.get_children():
             self.table.delete(item)
         self._segment_count = 0
-        self.counter_label.configure(text="Segments: 0")
+        self.counter_label.configure(text=self._tr("live.summary.segments", count=0))
 
     def _save_to_file(self) -> None:
         children = self.table.get_children()
@@ -976,11 +1528,11 @@ class TranscriptionGUI:
         path = filedialog.asksaveasfilename(
             defaultextension=".txt",
             filetypes=[
-                ("Text file", "*.txt"),
-                ("CSV file", "*.csv"),
-                ("All files", "*.*"),
+                (self._tr("dialog.filetype.text_file"), "*.txt"),
+                (self._tr("dialog.filetype.csv_file"), "*.csv"),
+                (self._tr("dialog.filetype.all_files"), "*.*"),
             ],
-            title="Save live transcription",
+            title=self._tr("dialog.title.save_live_transcription"),
         )
         if not path:
             return
@@ -988,31 +1540,37 @@ class TranscriptionGUI:
         try:
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write("\n".join(lines) + "\n")
-            self._set_live_status(f"Saved {len(lines)} segments -> {path}")
+            self._set_live_status(self._tr("live.status.saved", count=len(lines), path=path))
         except OSError as exc:
-            self._set_live_status(f"Save failed: {exc}")
+            self._set_live_status(self._tr("live.status.save_failed", error=exc))
 
     def _on_worker_finished(self) -> None:
         self._worker = None
-        self.queue_label.configure(text="Queue: —  |  ASR: —  |  Dropped: 0")
+        self.queue_label.configure(text=self._tr("live.summary.queue_empty"))
         self._set_live_controls_enabled(True)
         self.stop_button.configure(state=tk.DISABLED)
         self.pause_button.configure(state=tk.DISABLED)
-        self.pause_button.configure(text="Pause")
+        self.pause_button.configure(text=self._tr("live.button.pause"))
 
     def _on_recording_finished(self, stats: RecordingStats | None) -> None:
         self._record_worker = None
         self._set_live_controls_enabled(True)
         self.stop_button.configure(state=tk.DISABLED)
         self.pause_button.configure(state=tk.DISABLED)
-        self.pause_button.configure(text="Pause")
-        self.record_button.configure(text="Record Audio")
+        self.pause_button.configure(text=self._tr("live.button.pause"))
+        self.record_button.configure(text=self._tr("live.button.record_audio"))
         if stats is None:
             self._refresh_file_workflow()
             return
         self._last_recorded_file = stats.output_path
         self._persist_gui_settings()
-        self._set_live_status(f"Recorded {stats.duration_s:.1f}s -> {stats.output_path.name}")
+        self._set_live_status(
+            self._tr(
+                "live.status.recorded",
+                duration=stats.duration_s,
+                file_name=stats.output_path.name,
+            )
+        )
         timestamp = datetime.now().strftime("%H:%M:%S")
         self._append_log_line(
             f"{timestamp} | RECORDED | {stats.output_path} | "
@@ -1042,9 +1600,10 @@ class TranscriptionGUI:
                 self.start_button.configure(state=tk.NORMAL)
         elif self._worker is None and self._record_worker is None:
             self.start_button.configure(state=tk.DISABLED)
-            self._set_live_status(
-                f"{live_model_info.name} is available for file transcription only."
-            )
+            self._set_live_status(self._tr(
+                "live.status.file_only_model",
+                model_name=live_model_info.name,
+            ))
 
         file_model = get_model_info(self._file_model_var.get()).id
         file_values = [language.label for language in list_languages_for_model(file_model)]
@@ -1069,17 +1628,169 @@ class TranscriptionGUI:
         self._file_diarization_var.set(strategy)
         self._refresh_file_diarization_controls()
 
+    def _on_speaker_preset_changed(self, _event: object | None = None) -> None:
+        display_value = (
+            self._file_speaker_preset_display_var.get()
+            if hasattr(self, "_file_speaker_preset_display_var")
+            else self._file_speaker_preset_var.get()
+        )
+        preset = self._normalize_speaker_preset(display_value)
+        self._file_speaker_preset_var.set(preset)
+        if hasattr(self, "_file_speaker_preset_display_var"):
+            self._file_speaker_preset_display_var.set(self._speaker_preset_label(preset))
+        preset_map = {
+            "1": ("1", "1"),
+            "2": ("2", "2"),
+            "3": ("3", "3"),
+            "4plus": ("4", ""),
+        }
+        if preset in preset_map:
+            lo, hi = preset_map[preset]
+            self._file_min_speakers_var.set(lo)
+            self._file_max_speakers_var.set(hi)
+        elif preset == "auto":
+            self._file_min_speakers_var.set("")
+            self._file_max_speakers_var.set("")
+        self._refresh_file_diarization_controls()
+
     def _refresh_file_diarization_controls(self) -> None:
         strategy = (self._file_diarization_var.get() or "auto").strip().lower()
         if strategy not in FILE_DIARIZATION_CHOICES:
             strategy = "auto"
             self._file_diarization_var.set(strategy)
 
-        combo_state = "disabled" if self._file_worker is not None else "readonly"
-        entry_state = "normal" if self._file_worker is None and strategy in {"auto", "ml", "hybrid"} else "disabled"
+        running = self._file_worker is not None
+        combo_state = "disabled" if running else "readonly"
+        ml_relevant = strategy in {"auto", "ml", "hybrid"}
+        preset_state = combo_state if ml_relevant else "disabled"
+
+        # Min/Max entries stay editable for ML-capable strategies.
+        # Presets are shortcuts that fill values, not hard locks.
+        entry_state = "normal" if (not running and ml_relevant) else "disabled"
+
         self._file_diarization_combo.configure(state=combo_state)
+        self._file_speaker_preset_combo.configure(state=preset_state)
         self._file_min_speakers_entry.configure(state=entry_state)
         self._file_max_speakers_entry.configure(state=entry_state)
+
+        # Detect button: enabled only when ML is possible and file is selected
+        has_file = bool(self._file_path_var.get().strip())
+        detect_state = (
+            "normal"
+            if (not running and ml_relevant and has_file)
+            else "disabled"
+        )
+        self._file_detect_btn.configure(state=detect_state)
+
+    def _detect_speakers(self) -> None:
+        """Run fast speaker count estimation on a sample of the selected file."""
+        raw_path = self._file_path_var.get().strip()
+        if not raw_path:
+            self._file_status_label.configure(text=self._tr("file.status.select_file"))
+            return
+
+        file_path = Path(raw_path)
+        if not file_path.exists():
+            self._file_status_label.configure(
+                text=self._tr("file.status.file_not_found", file_name=file_path.name),
+                foreground="red",
+            )
+            return
+
+        hf_token = self._hf_token_var.get().strip() or (
+            __import__("os").environ.get("HF_TOKEN")
+            or __import__("os").environ.get("HUGGING_FACE_HUB_TOKEN")
+        )
+        if not hf_token:
+            self._file_status_label.configure(
+                text=self._tr("file.status.hf_token_required"),
+                foreground="#BB6600",
+            )
+            return
+
+        self._file_detect_btn.configure(state=tk.DISABLED, text=self._tr("file.button.detecting"))
+        self._file_status_label.configure(
+            text=self._tr("file.status.detecting_speakers"), foreground=""
+        )
+
+        def _run() -> None:
+            import asyncio
+            try:
+                from voxfusion.diarization.speaker_counter import estimate_speaker_count
+
+                log.info(
+                    "gui.speaker_detect_started",
+                    file=str(file_path),
+                    max_sample_duration_s=120.0,
+                )
+
+                async def _async_detect() -> int:
+                    audio = load_detection_audio_chunk(file_path, max_duration_s=120.0)
+                    if audio.samples.size == 0:
+                        return 0
+                    return await estimate_speaker_count(
+                        audio,
+                        hf_token=hf_token,
+                    )
+
+                count = asyncio.run(_async_detect())
+            except Exception as exc:
+                log.error(
+                    "gui.speaker_detect_failed",
+                    file=str(file_path),
+                    error=str(exc),
+                )
+                self.root.after(0, self._on_detect_done, None, str(exc))
+                return
+            log.info(
+                "gui.speaker_detect_completed",
+                file=str(file_path),
+                detected_speakers=count,
+            )
+            self.root.after(0, self._on_detect_done, count, None)
+
+        self._file_detect_worker_thread = threading.Thread(target=_run, daemon=True)
+        self._file_detect_worker_thread.start()
+
+    def _on_detect_done(self, count: int | None, error: str | None) -> None:
+        """Called on the Tk thread when speaker detection finishes."""
+        self._file_detect_btn.configure(text=self._tr("file.button.detect"))
+        self._refresh_file_diarization_controls()
+        if error:
+            self._file_status_label.configure(
+                text=self._tr("file.status.detect_failed", error=error), foreground="red"
+            )
+            return
+        if count is None or count == 0:
+            self._file_status_label.configure(
+                text=self._tr("file.status.detect_empty"), foreground="#BB6600"
+            )
+            return
+
+        # Preserve detected exact counts for 4+ speakers instead of degrading them
+        # into the open-ended "4+" preset.
+        preset_map = {1: "1", 2: "2", 3: "3"}
+        preset = preset_map.get(count)
+        if preset is not None:
+            self._file_speaker_preset_var.set(preset)
+            if hasattr(self, "_file_speaker_preset_display_var"):
+                self._file_speaker_preset_display_var.set(self._speaker_preset_label(preset))
+            self._on_speaker_preset_changed()
+        else:
+            exact_count = str(count)
+            self._file_speaker_preset_var.set("custom")
+            if hasattr(self, "_file_speaker_preset_display_var"):
+                self._file_speaker_preset_display_var.set(self._speaker_preset_label("custom"))
+            self._file_min_speakers_var.set(exact_count)
+            self._file_max_speakers_var.set(exact_count)
+        self._file_status_label.configure(
+            text=self._tr(
+                "file.status.detected_speakers",
+                count=count,
+                s_suffix=("s" if count != 1 else ""),
+            ),
+            foreground="",
+        )
 
     @staticmethod
     def _parse_optional_positive_int(raw: str, field_name: str) -> int | None:
@@ -1094,14 +1805,52 @@ class TranscriptionGUI:
             raise ValueError(f"{field_name} must be at least 1.")
         return parsed
 
+    def _parse_optional_positive_int_localized(self, raw: str, field_name: str) -> int | None:
+        value = raw.strip()
+        if not value:
+            return None
+        try:
+            parsed = int(value)
+        except ValueError as exc:
+            raise ValueError(
+                self._tr("validation.error.whole_number", field_name=field_name)
+            ) from exc
+        if parsed < 1:
+            raise ValueError(
+                self._tr("validation.error.at_least_one", field_name=field_name)
+            )
+        return parsed
+
     def _append_log_line(self, text: str) -> None:
         self.log_widget.configure(state=tk.NORMAL)
         self.log_widget.insert(tk.END, text)
         self.log_widget.see(tk.END)
         self.log_widget.configure(state=tk.DISABLED)
 
+    def _current_log_mode(self) -> str:
+        return self._log_mode_code
+
+    def _apply_gui_log_mode(self) -> None:
+        self._refresh_log_mode_selector()
+        level = logging.DEBUG if self._current_log_mode() == "debug" else logging.INFO
+        configure_gui_logging(level=level, log_mode=self._current_log_mode())
+
+    def _on_log_mode_changed(self, _event: object | None = None) -> None:
+        self._log_mode_code = self._log_mode_code_from_label(self._log_mode_var.get())
+        self._apply_gui_log_mode()
+        self._persist_gui_settings()
+
     def _apply_saved_gui_settings(self) -> None:
         settings = _load_gui_settings()
+        self._ui_language_code = normalize_gui_language(
+            settings.get("gui_language", DEFAULT_GUI_LANGUAGE)
+        )
+        self._locale = load_gui_locale(self._ui_language_code)
+        self._log_mode_code = (
+            "debug"
+            if str(settings.get("gui_log_mode", "normal")).strip().lower() == "debug"
+            else "normal"
+        )
         self._llm_url_var.set(settings.get("llm_url", DEFAULT_BASE_URL))
         self._llm_model_var.set(settings.get("llm_model", DEFAULT_MODEL))
         self._llm_key_var.set(settings.get("llm_api_key", ""))
@@ -1139,15 +1888,19 @@ class TranscriptionGUI:
             if p.exists():
                 self._last_transcript_path = p
 
-        saved_quality = settings.get("file_quality", "Balanced")
-        if saved_quality in QUALITY_PRESET_LABELS:
-            self._file_quality_var.set(saved_quality)
+        self._file_quality_var.set(
+            self._normalize_quality_label(settings.get("file_quality", "Balanced"))
+        )
 
         saved_diarization = settings.get("file_diarization_strategy", "auto").strip().lower()
         if saved_diarization in FILE_DIARIZATION_CHOICES:
             self._file_diarization_var.set(saved_diarization)
         self._file_min_speakers_var.set(settings.get("file_min_speakers", "").strip())
         self._file_max_speakers_var.set(settings.get("file_max_speakers", "").strip())
+
+        self._file_speaker_preset_var.set(
+            self._normalize_speaker_preset(settings.get("file_speaker_preset", "auto"))
+        )
 
         saved_file_model = settings.get("file_model", "")
         _avail = {m.id for m in get_available_model_catalog()}
@@ -1165,6 +1918,8 @@ class TranscriptionGUI:
                 "llm_api_key": self._llm_key_var.get(),
                 "llm_prompt": self._llm_prompt_var.get().strip() or "summarize",
                 "llm_custom_user_prompt": self._llm_custom_user_prompt,
+                "gui_language": self._ui_language_code,
+                "gui_log_mode": self._current_log_mode(),
                 "last_recorded_file": str(self._last_recorded_file) if self._last_recorded_file else "",
                 "last_transcript_path": str(self._last_transcript_path) if self._last_transcript_path else "",
                 # Proxy
@@ -1180,6 +1935,7 @@ class TranscriptionGUI:
                 "file_diarization_strategy": self._file_diarization_var.get().strip(),
                 "file_min_speakers": self._file_min_speakers_var.get().strip(),
                 "file_max_speakers": self._file_max_speakers_var.get().strip(),
+                "file_speaker_preset": self._file_speaker_preset_var.get(),
                 # File transcription model/language
                 "file_model": self._file_model_var.get().strip(),
                 "file_language": self._file_lang_var.get().strip(),
@@ -1188,36 +1944,254 @@ class TranscriptionGUI:
 
     def _load_recorded_file_into_flow(self, path: Path, *, switch_tab: bool) -> None:
         self._last_recorded_file = path
-        self._file_path_var.set(str(path))
+        self._replace_file_queue([path])
         self._clear_file_table()
         self._last_transcript_path = None
         self._file_status_label.configure(
-            text=f"Step 2: Ready to transcribe recorded audio: {path.name}"
+            text=self._tr("file.workflow.step2_ready_recorded", file_name=path.name)
         )
         if switch_tab:
             self._notebook.select(1)
         self._refresh_file_workflow()
 
+    @staticmethod
+    def _file_queue_key(path: Path) -> str:
+        with suppress(OSError):
+            return str(path.resolve()).casefold()
+        return str(path).casefold()
+
+    @staticmethod
+    def _format_queue_result(text: str, *, limit: int = 56) -> str:
+        clean = " ".join(str(text).split())
+        if len(clean) <= limit:
+            return clean
+        return clean[: limit - 1].rstrip() + "…"
+
+    @staticmethod
+    def _format_queue_duration(duration_s: float | None) -> str:
+        if duration_s is None or duration_s < 0:
+            return "—"
+        total_seconds = max(0, int(round(duration_s)))
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if hours:
+            return f"{hours:d}:{minutes:02d}:{seconds:02d}"
+        return f"{minutes:02d}:{seconds:02d}"
+
+    @staticmethod
+    def _format_queue_size(size_bytes: int | None) -> str:
+        if size_bytes is None or size_bytes < 0:
+            return "—"
+        value = float(size_bytes)
+        for unit in ("B", "KB", "MB", "GB", "TB"):
+            if value < 1024.0 or unit == "TB":
+                if unit == "B":
+                    return f"{int(value)} {unit}"
+                return f"{value:.1f} {unit}"
+            value /= 1024.0
+        return "—"
+
+    def _file_queue_values(self, item: _FileQueueItem) -> tuple[str, str, str, str, str, str]:
+        progress = "—"
+        if item.status != "Queued":
+            progress = f"{int(max(0.0, min(item.progress, 1.0)) * 100):d}%"
+        return (
+            str(item.file_path),
+            self._format_queue_duration(item.duration_s),
+            self._format_queue_size(item.size_bytes),
+            self._tr(f"file.queue.status.{item.status}"),
+            progress,
+            self._format_queue_result(item.result) if item.result else "",
+        )
+
+    def _update_file_queue_row(self, item_id: str) -> None:
+        item = self._file_queue_items[item_id]
+        self._file_queue_table.item(item_id, values=self._file_queue_values(item))
+
+    def _refresh_file_queue_rows(self) -> None:
+        if not hasattr(self, "_file_queue_table"):
+            return
+        for item_id in list(self._file_queue_items):
+            if item_id in self._file_queue_items:
+                self._update_file_queue_row(item_id)
+
+    def _schedule_queue_metadata_probe(self, item_id: str, item: _FileQueueItem) -> None:
+        if not getattr(self, "_queue_metadata_async_enabled", False):
+            return
+
+        generation = item.metadata_generation
+        path = item.file_path
+
+        def _run() -> tuple[float | None, int | None]:
+            try:
+                return probe_media_metadata(path)
+            except Exception:
+                return None, item.size_bytes
+
+        future = self._queue_metadata_executor.submit(_run)
+
+        def _on_done(_future: object) -> None:
+            try:
+                duration_s, size_bytes = future.result()
+            except Exception:
+                duration_s, size_bytes = None, item.size_bytes
+            with suppress(tk.TclError, RuntimeError):
+                self.root.after(
+                    0,
+                    self._apply_file_queue_metadata,
+                    item_id,
+                    generation,
+                    duration_s,
+                    size_bytes,
+                )
+
+        future.add_done_callback(_on_done)
+
+    def _apply_file_queue_metadata(
+        self,
+        item_id: str,
+        generation: int,
+        duration_s: float | None,
+        size_bytes: int | None,
+    ) -> None:
+        item = self._file_queue_items.get(item_id)
+        if item is None or item.metadata_generation != generation:
+            return
+        item.duration_s = duration_s
+        if size_bytes is not None:
+            item.size_bytes = size_bytes
+        self._update_file_queue_row(item_id)
+
+    def _select_file_queue_item(self, item_id: str | None) -> None:
+        if item_id is None:
+            self._file_queue_table.selection_remove(self._file_queue_table.selection())
+            return
+        self._file_queue_table.selection_set(item_id)
+        self._file_queue_table.focus(item_id)
+        self._file_queue_table.see(item_id)
+        self._file_path_var.set(str(self._file_queue_items[item_id].file_path))
+
+    def _replace_file_queue(self, paths: list[Path]) -> None:
+        self._file_queue_generation += 1
+        for item_id in list(self._file_queue_items):
+            self._file_queue_table.delete(item_id)
+        self._file_queue_items.clear()
+        self._file_queue_lookup.clear()
+        self._file_active_queue_id = None
+        self._file_queue_serial = 0
+        self._file_path_var.set("")
+        self._add_files_to_queue(paths)
+
+    def _add_files_to_queue(self, paths: list[Path]) -> int:
+        added = 0
+        first_added_id: str | None = None
+        for raw_path in paths:
+            path = Path(raw_path).expanduser()
+            key = self._file_queue_key(path)
+            if key in self._file_queue_lookup:
+                continue
+            self._file_queue_serial += 1
+            item_id = f"file-{self._file_queue_serial}"
+            if getattr(self, "_queue_metadata_async_enabled", False):
+                duration_s = None
+                size_bytes = probe_media_size(path)
+            else:
+                duration_s, size_bytes = probe_media_metadata(path)
+            item = _FileQueueItem(
+                file_path=path,
+                duration_s=duration_s,
+                size_bytes=size_bytes,
+                metadata_generation=getattr(self, "_file_queue_generation", 0),
+            )
+            self._file_queue_items[item_id] = item
+            self._file_queue_lookup[key] = item_id
+            self._file_queue_table.insert("", tk.END, iid=item_id, values=self._file_queue_values(item))
+            if getattr(self, "_queue_metadata_async_enabled", False):
+                self._schedule_queue_metadata_probe(item_id, item)
+            if first_added_id is None:
+                first_added_id = item_id
+            added += 1
+        if first_added_id is not None and not self._file_path_var.get().strip():
+            self._select_file_queue_item(first_added_id)
+        self._refresh_file_workflow()
+        return added
+
+    def _next_pending_file_queue_id(self) -> str | None:
+        for item_id in self._file_queue_table.get_children():
+            item = self._file_queue_items[item_id]
+            if item.status == "Queued":
+                return item_id
+        return None
+
+    def _on_file_queue_selection(self, _event: object | None = None) -> None:
+        selected = self._file_queue_table.selection()
+        if not selected:
+            return
+        item_id = selected[0]
+        self._file_path_var.set(str(self._file_queue_items[item_id].file_path))
+        self._refresh_file_workflow()
+
+    def _remove_selected_file_queue_items(self) -> None:
+        if self._file_worker is not None:
+            return
+        selected = list(self._file_queue_table.selection())
+        if not selected:
+            return
+        current_selection = None
+        for item_id in selected:
+            item = self._file_queue_items.pop(item_id, None)
+            if item is None:
+                continue
+            self._file_queue_lookup.pop(self._file_queue_key(item.file_path), None)
+            self._file_queue_table.delete(item_id)
+        children = self._file_queue_table.get_children()
+        if children:
+            current_selection = children[0]
+        self._select_file_queue_item(current_selection)
+        if current_selection is None:
+            self._file_path_var.set("")
+        self._refresh_file_workflow()
+
+    def _clear_file_queue(self) -> None:
+        if self._file_worker is not None:
+            return
+        self._replace_file_queue([])
+        self._file_status_label.configure(text=self._tr("file.status.cleared_list"))
+        self._refresh_file_workflow()
+
     def _refresh_file_workflow(self) -> None:
         transcript_ready = self._file_seg_count > 0
-        self._file_workflow_label.configure(
-            text=_build_file_workflow_status(
-                last_recorded_file=self._last_recorded_file,
-                transcript_ready=transcript_ready,
+        has_queued_items = any(item.status == "Queued" for item in self._file_queue_items.values())
+        if has_queued_items and not transcript_ready and self._file_worker is None:
+            workflow_text = self._tr(
+                "file.workflow.step2_queue",
+                count=len(self._file_queue_items),
             )
-        )
+        else:
+            if transcript_ready:
+                workflow_text = self._tr("file.workflow.step3")
+            elif self._last_recorded_file is not None:
+                workflow_text = self._tr(
+                    "file.workflow.step2_recorded",
+                    file_name=self._last_recorded_file.name,
+                )
+            else:
+                workflow_text = self._tr("file.workflow.step1")
+        self._file_workflow_label.configure(text=workflow_text)
         llm_enabled = transcript_ready and self._llm_worker is None and self._file_worker is None
         self._llm_summarize_btn.configure(state=(tk.NORMAL if llm_enabled else tk.DISABLED))
         if self._last_transcript_path is not None and self._last_transcript_path.exists():
-            self._file_artifact_label.configure(text=f"Transcript file: {self._last_transcript_path}")
+            self._file_artifact_label.configure(
+                text=self._tr("file.label.transcript_file", path=self._last_transcript_path)
+            )
         else:
-            self._file_artifact_label.configure(text="Transcript file: not created yet.")
+            self._file_artifact_label.configure(text=self._tr("file.label.transcript_missing"))
 
     def _refresh_llm_models(self) -> None:
         if self._llm_model_refreshing:
             return
         self._llm_model_refreshing = True
-        self._llm_status_label.configure(text="Loading models from Open WebUI...")
+        self._llm_status_label.configure(text=self._tr("file.status.loading_models"))
         self._persist_gui_settings()
         base_url = self._llm_url_var.get().strip() or DEFAULT_BASE_URL
         api_key = self._llm_key_var.get().strip()
@@ -1245,19 +2219,23 @@ class TranscriptionGUI:
     def _on_llm_models_loaded(self, models: list[str], error: str | None) -> None:
         self._llm_model_refreshing = False
         if error:
-            self._llm_status_label.configure(text=f"Model load failed: {error}")
+            self._llm_status_label.configure(
+                text=self._tr("file.status.model_load_failed", error=error)
+            )
             return
         self._available_llm_models = models
         self._llm_model_combo.configure(values=models)
         if models and self._llm_model_var.get().strip() not in models:
             self._llm_model_var.set(models[0])
         self._persist_gui_settings()
-        self._llm_status_label.configure(text=f"Loaded {len(models)} model(s) from Open WebUI.")
+        self._llm_status_label.configure(
+            text=self._tr("file.status.loaded_models", count=len(models))
+        )
 
     def _open_settings(self) -> None:
         """Open the application settings dialog (proxy / network)."""
         dlg = tk.Toplevel(self.root)
-        dlg.title("Settings")
+        dlg.title(self._tr("settings.title"))
         dlg.geometry("580x480")
         dlg.resizable(False, False)
         dlg.grab_set()
@@ -1272,13 +2250,13 @@ class TranscriptionGUI:
 
         pad = {"padx": 8, "pady": 3}
 
-        proxy_frame = ttk.LabelFrame(dlg, text="Network / Proxy", padding=(10, 8))
+        proxy_frame = ttk.LabelFrame(dlg, text=self._tr("settings.section.network"), padding=(10, 8))
         proxy_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 4))
         proxy_frame.columnconfigure(1, weight=1)
 
         ttk.Checkbutton(
             proxy_frame,
-            text="Use system proxy  (Windows automatic / environment variables)",
+            text=self._tr("settings.label.use_system_proxy"),
             variable=use_sys,
         ).grid(row=0, column=0, columnspan=3, sticky="w", **pad)
 
@@ -1305,51 +2283,54 @@ class TranscriptionGUI:
                     row=row + 1, column=1, columnspan=2, sticky="w", padx=8
                 )
 
-        _lbl_entry(2, "HTTP Proxy:", http_v, "e.g. http://proxy.corp.ru:3128")
-        _lbl_entry(4, "HTTPS Proxy:", https_v, "e.g. http://proxy.corp.ru:3128")
-        _lbl_entry(6, "No proxy:", no_v, "comma-separated hosts, e.g. localhost,*.corp.ru")
+        _lbl_entry(2, self._tr("settings.label.http_proxy"), http_v, self._tr("settings.hint.http_proxy"))
+        _lbl_entry(4, self._tr("settings.label.https_proxy"), https_v, self._tr("settings.hint.https_proxy"))
+        _lbl_entry(6, self._tr("settings.label.no_proxy"), no_v, self._tr("settings.hint.no_proxy"))
 
-        ttk.Label(proxy_frame, text="CA Bundle:").grid(row=8, column=0, sticky="w", **pad)
+        ttk.Label(proxy_frame, text=self._tr("settings.label.ca_bundle")).grid(row=8, column=0, sticky="w", **pad)
         ca_entry = ttk.Entry(proxy_frame, textvariable=ca_v, width=36)
         ca_entry.grid(row=8, column=1, sticky="ew", **pad)
         manual_widgets.append(ca_entry)
 
         def _browse_ca() -> None:
             path = filedialog.askopenfilename(
-                title="Select CA certificate",
-                filetypes=[("PEM/CRT certificate", "*.pem *.crt *.cer"), ("All files", "*.*")],
+                title=self._tr("dialog.title.select_ca_certificate"),
+                filetypes=[
+                    (self._tr("dialog.filetype.pem_crt"), "*.pem *.crt *.cer"),
+                    (self._tr("dialog.filetype.all_files"), "*.*"),
+                ],
             )
             if path:
                 ca_v.set(path)
 
-        browse_ca_btn = ttk.Button(proxy_frame, text="Browse...", command=_browse_ca)
+        browse_ca_btn = ttk.Button(proxy_frame, text=self._tr("settings.button.browse"), command=_browse_ca)
         browse_ca_btn.grid(row=8, column=2, padx=(0, 4), pady=3)
         manual_widgets.append(browse_ca_btn)
 
-        ttk.Label(proxy_frame, text="(path to .pem/.crt for corporate SSL)", foreground="#777777").grid(
+        ttk.Label(proxy_frame, text=self._tr("settings.hint.ca_bundle"), foreground="#777777").grid(
             row=9, column=1, columnspan=2, sticky="w", padx=8
         )
 
         _field_state()  # set initial enabled/disabled state
 
         # -- HuggingFace Token --
-        hf_frame = ttk.LabelFrame(dlg, text="HuggingFace", padding=(10, 8))
+        hf_frame = ttk.LabelFrame(dlg, text=self._tr("settings.section.hf"), padding=(10, 8))
         hf_frame.pack(fill=tk.X, padx=10, pady=(0, 4))
         hf_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(hf_frame, text="HF Token:").grid(row=0, column=0, sticky="w", **pad)
+        ttk.Label(hf_frame, text=self._tr("settings.label.hf_token")).grid(row=0, column=0, sticky="w", **pad)
         hf_entry = ttk.Entry(hf_frame, textvariable=hf_token_v, width=44, show="*")
         hf_entry.grid(row=0, column=1, sticky="ew", **pad)
 
         def _toggle_token_visibility() -> None:
             hf_entry.configure(show="" if hf_entry.cget("show") == "*" else "*")
 
-        ttk.Button(hf_frame, text="Show", command=_toggle_token_visibility).grid(
+        ttk.Button(hf_frame, text=self._tr("settings.button.show"), command=_toggle_token_visibility).grid(
             row=0, column=2, padx=(0, 4), pady=3
         )
         ttk.Label(
             hf_frame,
-            text="Required for gated models (e.g. GigaAM). Get a free token at huggingface.co/settings/tokens",
+            text=self._tr("settings.hint.hf_token"),
             foreground="#777777",
         ).grid(row=1, column=0, columnspan=3, sticky="w", padx=8)
 
@@ -1389,21 +2370,23 @@ class TranscriptionGUI:
                 os.environ.pop("HUGGING_FACE_HUB_TOKEN", None)
             dlg.destroy()
 
-        ttk.Button(btn_row, text="Detect system proxy", command=_detect).pack(side=tk.LEFT)
-        ttk.Button(btn_row, text="Cancel", command=dlg.destroy).pack(side=tk.RIGHT, padx=(4, 0))
-        ttk.Button(btn_row, text="Save", command=_save, style="Accent.TButton").pack(side=tk.RIGHT)
+        ttk.Button(btn_row, text=self._tr("settings.button.detect_proxy"), command=_detect).pack(side=tk.LEFT)
+        ttk.Button(btn_row, text=self._tr("settings.button.cancel"), command=dlg.destroy).pack(side=tk.RIGHT, padx=(4, 0))
+        ttk.Button(btn_row, text=self._tr("settings.button.save"), command=_save, style="Accent.TButton").pack(side=tk.RIGHT)
 
     def _open_prompt_editor(self) -> None:
         prompt_name = self._llm_prompt_var.get().strip() or "summarize"
         prompt_def = BUILTIN_PROMPTS[prompt_name]
         dialog = tk.Toplevel(self.root)
-        dialog.title("Prompt Template")
+        dialog.title(self._tr("prompt.title"))
         dialog.geometry("900x700")
 
-        ttk.Label(dialog, text=f"Prompt template: {prompt_name}", font=("", 10, "bold")).pack(
-            anchor="w", padx=10, pady=(10, 4)
-        )
-        ttk.Label(dialog, text="System prompt", anchor="w").pack(fill=tk.X, padx=10)
+        ttk.Label(
+            dialog,
+            text=self._tr("prompt.header", prompt_name=prompt_name),
+            font=("", 10, "bold"),
+        ).pack(anchor="w", padx=10, pady=(10, 4))
+        ttk.Label(dialog, text=self._tr("prompt.label.system"), anchor="w").pack(fill=tk.X, padx=10)
         system_text = scrolledtext.ScrolledText(dialog, height=8, wrap=tk.WORD)
         system_text.pack(fill=tk.BOTH, expand=False, padx=10, pady=(0, 8))
         system_text.insert("1.0", prompt_def["system"])
@@ -1411,7 +2394,7 @@ class TranscriptionGUI:
 
         ttk.Label(
             dialog,
-            text="User prompt template (must include {transcript})",
+            text=self._tr("prompt.label.user"),
             anchor="w",
         ).pack(fill=tk.X, padx=10)
         user_text = scrolledtext.ScrolledText(dialog, height=18, wrap=tk.WORD)
@@ -1429,17 +2412,19 @@ class TranscriptionGUI:
             prompt_text = user_text.get("1.0", tk.END).strip()
             if "{transcript}" not in prompt_text:
                 self._llm_status_label.configure(
-                    text="Prompt save failed: template must include {transcript}."
+                    text=self._tr("prompt.status.invalid")
                 )
                 return
             self._llm_custom_user_prompt = "" if prompt_text == prompt_def["user"] else prompt_text
             self._persist_gui_settings()
-            self._llm_status_label.configure(text=f"Prompt saved for template '{prompt_name}'.")
+            self._llm_status_label.configure(
+                text=self._tr("prompt.status.saved", prompt_name=prompt_name)
+            )
             dialog.destroy()
 
-        ttk.Button(button_row, text="Reset to Default", command=_reset).pack(side=tk.LEFT)
-        ttk.Button(button_row, text="Save Prompt", command=_save).pack(side=tk.RIGHT)
-        ttk.Button(button_row, text="Close", command=dialog.destroy).pack(side=tk.RIGHT, padx=(0, 6))
+        ttk.Button(button_row, text=self._tr("prompt.button.reset"), command=_reset).pack(side=tk.LEFT)
+        ttk.Button(button_row, text=self._tr("prompt.button.save"), command=_save).pack(side=tk.RIGHT)
+        ttk.Button(button_row, text=self._tr("prompt.button.close"), command=dialog.destroy).pack(side=tk.RIGHT, padx=(0, 6))
 
     def _poll_device_changes(self) -> None:
         """Check every 5 s if the audio device list has changed and refresh the menu."""
@@ -1463,11 +2448,7 @@ class TranscriptionGUI:
             devices = list_windows_capture_devices()
             options.extend(
                 DeviceOption(
-                    label=(
-                        f"Microphone: {device.label}"
-                        if device.kind == "microphone"
-                        else f"System: {device.label}"
-                    ),
+                    label=self._device_option_label(device.kind, device.label),
                     index=device.id,
                     kind=device.kind,
                     is_default=device.is_default,
@@ -1489,7 +2470,10 @@ class TranscriptionGUI:
         self._device_menu.delete(0, tk.END)
         self._device_check_vars = {}
         if not self._device_options:
-            self._device_menu.add_command(label="No audio devices found", state=tk.DISABLED)
+            self._device_menu.add_command(
+                label=self._tr("device.none_found"),
+                state=tk.DISABLED,
+            )
             return
         current_kind: str | None = None
         for option in self._device_options:
@@ -1594,22 +2578,26 @@ class TranscriptionGUI:
             None,
         )
         if mic_option is not None:
-            labels.append(f"Mic: {mic_option.label.removeprefix('Microphone: ')}")
+            labels.append(
+                self._device_short_label("microphone", mic_option.label.split(": ", 1)[-1])
+            )
         if system_option is not None:
-            labels.append(f"System: {system_option.label.removeprefix('System: ')}")
-        self._device_picker_var.set(" | ".join(labels) if labels else "Select devices...")
+            labels.append(
+                self._device_short_label("system", system_option.label.split(": ", 1)[-1])
+            )
+        self._device_picker_var.set(" | ".join(labels) if labels else self._tr("device.select"))
 
     # ------------------------------------------------------------------
     # File transcription methods
     # ------------------------------------------------------------------
 
     def _install_ffmpeg(self) -> None:
-        """Start FFmpeg winget installation in a background thread."""
-        self._ffmpeg_install_btn.configure(state="disabled", text="Installing...")
-        self._ffmpeg_install_status.configure(text="Running winget...")
+        """Start local FFmpeg installation in a background thread."""
+        self._ffmpeg_install_btn.configure(state="disabled", text=self._tr("ffmpeg.status.installing"))
+        self._ffmpeg_install_status.configure(text=self._tr("ffmpeg.status.preparing"))
 
         def _run() -> None:
-            ok = install_ffmpeg_winget(
+            ok = install_ffmpeg_local(
                 on_output=lambda line: self.root.after(
                     0, lambda l=line: self._ffmpeg_install_status.configure(text=l[:80])
                 )
@@ -1618,76 +2606,245 @@ class TranscriptionGUI:
             def _finish() -> None:
                 self._ffmpeg_path = find_ffmpeg()
                 if self._ffmpeg_path is not None:
-                    self._ffmpeg_install_status.configure(text="FFmpeg installed successfully.")
+                    self._ffmpeg_install_status.configure(text=self._tr("ffmpeg.status.installed"))
                     self._ffmpeg_banner.pack_forget()
                 elif ok:
                     self._ffmpeg_install_status.configure(
-                        text="Installed. Restart VoxFusion to pick up FFmpeg."
+                        text=self._tr("ffmpeg.status.restart_required")
                     )
                 else:
                     self._ffmpeg_install_status.configure(
-                        text="Installation failed. Install FFmpeg manually and restart."
+                        text=self._tr("ffmpeg.status.failed")
                     )
-                    self._ffmpeg_install_btn.configure(state="normal", text="Retry")
+                    self._ffmpeg_install_btn.configure(state="normal", text=self._tr("ffmpeg.button.retry"))
 
             self.root.after(0, _finish)
 
         threading.Thread(target=_run, daemon=True).start()
 
     def _browse_file(self) -> None:
-        path = filedialog.askopenfilename(
-            title="Select audio or video file",
-            filetypes=MEDIA_FILETYPES,
+        paths = filedialog.askopenfilenames(
+            title=self._tr("file.button.add_files"),
+            filetypes=self._media_filetypes(),
         )
-        if path:
-            self._file_path_var.set(path)
+        if paths:
+            added = self._add_files_to_queue([Path(path) for path in paths])
             self._last_transcript_path = None
-            self._file_status_label.configure(text=f"Ready: {Path(path).name}")
+            if added:
+                self._file_status_label.configure(text=self._tr("file.status.queued_files", count=added))
+            else:
+                self._file_status_label.configure(text=self._tr("file.status.queue_duplicate"))
             self._file_progress["value"] = 0
             self._clear_llm_output()
             self._refresh_file_workflow()
 
+    def _prepare_file_results_for_next_run(self) -> None:
+        for item in self._file_table.get_children():
+            self._file_table.delete(item)
+        self._file_seg_count = 0
+        self._file_segments = []
+        self._last_transcript_path = None
+        self._file_seg_counter_label.configure(text=self._tr("file.summary.segments", count=0))
+        self._file_progress["value"] = 0
+        self._file_current_progress = 0.0
+        self._file_progress_samples = []
+        self._clear_llm_output()
+
+    def _set_file_batch_ui_running(self, running: bool) -> None:
+        control_state = tk.DISABLED if running else tk.NORMAL
+        combo_state = "disabled" if running else "readonly"
+        self._file_transcribe_btn.configure(state=control_state)
+        self._file_cancel_btn.configure(state=(tk.NORMAL if running else tk.DISABLED))
+        self._file_model_combo.configure(state=combo_state)
+        self._file_lang_combo.configure(state=combo_state)
+        self._file_quality_combo.configure(state=combo_state)
+        self._file_download_btn.configure(state=control_state)
+        self._file_path_entry.configure(state=("disabled" if running else "normal"))
+        self._file_add_btn.configure(state=control_state)
+        self._file_remove_btn.configure(state=control_state)
+        self._file_clear_queue_btn.configure(state=control_state)
+        self._refresh_file_diarization_controls()
+
+    def _queue_position_label(self, item_id: str | None) -> str:
+        if item_id is None:
+            return ""
+        children = list(self._file_queue_table.get_children())
+        if item_id not in children:
+            return ""
+        return f"[{children.index(item_id) + 1}/{len(children)}] "
+
+    def _finish_file_batch_run(self) -> None:
+        self._file_active_queue_id = None
+        self._file_batch_cancel_requested = False
+        self._file_active_error_message = None
+        self._set_file_batch_ui_running(False)
+        self._file_start_time = None
+        self._file_time_label.configure(text="")
+
+        statuses = [item.status for item in self._file_queue_items.values()]
+        done = sum(status == "Done" for status in statuses)
+        errors = sum(status == "Error" for status in statuses)
+        cancelled = sum(status == "Cancelled" for status in statuses)
+        queued = sum(status == "Queued" for status in statuses)
+        total = len(statuses)
+
+        if total == 1 and done == 1 and self._file_seg_count > 0 and self._last_transcript_path is not None:
+            self._file_status_label.configure(
+                text=self._tr("file.status.ready_transcript", file_name=self._last_transcript_path.name),
+                foreground="",
+            )
+        elif total == 1 and done == 1:
+            self._file_status_label.configure(
+                text=self._tr("file.status.finished_no_speech"),
+                foreground="",
+            )
+        elif cancelled and done == 0 and errors == 0:
+            self._file_status_label.configure(
+                text=self._tr("file.status.queue_cancelled", queued=queued),
+                foreground="",
+            )
+        else:
+            self._file_status_label.configure(
+                text=self._tr(
+                    "file.status.queue_finished",
+                    done=done,
+                    errors=errors,
+                    cancelled=cancelled,
+                    queued=queued,
+                ),
+                foreground="",
+            )
+        self._refresh_file_workflow()
+
+    def _start_next_file_in_queue(self) -> None:
+        next_id = self._next_pending_file_queue_id()
+        if next_id is None:
+            self._finish_file_batch_run()
+            return
+
+        item = self._file_queue_items[next_id]
+        file_path = item.file_path
+        model = get_model_info(self._file_model_var.get() or "small").id
+        language = self._language_code_for_label(self._file_lang_var.get(), model)
+        diarization_strategy = (self._file_diarization_var.get() or "auto").strip().lower()
+        min_speakers = self._parse_optional_positive_int_localized(
+            self._file_min_speakers_var.get(),
+            self._tr("validation.field.min_speakers"),
+        )
+        max_speakers = self._parse_optional_positive_int_localized(
+            self._file_max_speakers_var.get(),
+            self._tr("validation.field.max_speakers"),
+        )
+
+        self._file_active_queue_id = next_id
+        self._file_active_error_message = None
+        item.status = "In progress"
+        item.progress = 0.0
+        item.result = ""
+        item.output_path = None
+        self._update_file_queue_row(next_id)
+        self._select_file_queue_item(next_id)
+
+        self._prepare_file_results_for_next_run()
+        self._file_progress["value"] = 0
+        self._file_start_time = monotonic()
+        self._file_current_progress = 0.0
+        self._file_progress_samples = []
+        self._file_time_label.configure(text="")
+        self._file_status_label.configure(
+            text=self._tr(
+                "file.status.transcribing_queue",
+                position=self._queue_position_label(next_id),
+                file_name=file_path.name,
+            ),
+            foreground="",
+        )
+        self._refresh_file_workflow()
+        self.root.after(500, self._tick_file_timer)
+
+        self._file_worker = FileTranscribeWorker(
+            file_path=file_path,
+            model=model,
+            language=language,
+            diarization_strategy=diarization_strategy,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+            quality=self._file_quality_var.get(),
+            on_status=self._schedule_file_status,
+            on_segments=self._schedule_file_segments,
+            on_error=self._schedule_file_error,
+            on_finished=self._schedule_file_finished,
+        )
+        self._file_worker.start()
+
     def _start_file_transcribe(self) -> None:
         raw_path = self._file_path_var.get().strip()
+
+        if self._file_worker is not None:
+            return  # already running
+
+        try:
+            min_speakers = self._parse_optional_positive_int_localized(
+                self._file_min_speakers_var.get(),
+                self._tr("validation.field.min_speakers"),
+            )
+            max_speakers = self._parse_optional_positive_int_localized(
+                self._file_max_speakers_var.get(),
+                self._tr("validation.field.max_speakers"),
+            )
+        except ValueError as exc:
+            self._file_status_label.configure(
+                text=self._tr("file.status.error", message=exc),
+                foreground="red",
+            )
+            self._refresh_file_workflow()
+            return
+        if min_speakers is not None and max_speakers is not None and min_speakers > max_speakers:
+            self._file_status_label.configure(
+                text=self._tr("file.status.min_max_invalid"),
+                foreground="red",
+            )
+            self._refresh_file_workflow()
+            return
+
+        if hasattr(self, "_file_queue_table"):
+            if not self._file_queue_items:
+                if not raw_path:
+                    self._file_status_label.configure(text=self._tr("file.status.no_files_queued"))
+                    self._refresh_file_workflow()
+                    return
+                file_path = Path(raw_path)
+                if not file_path.exists():
+                    self._file_status_label.configure(
+                        text=self._tr("file.status.file_missing_short", file_name=file_path.name)
+                    )
+                    self._refresh_file_workflow()
+                    return
+                self._add_files_to_queue([file_path])
+            self._clear_file_table()
+            self._file_batch_cancel_requested = False
+            self._set_file_batch_ui_running(True)
+            self._start_next_file_in_queue()
+            return
+
         if not raw_path:
-            self._file_status_label.configure(text="Error: no file selected.")
+            self._file_status_label.configure(text=self._tr("file.status.no_file_selected"))
             self._refresh_file_workflow()
             return
 
         file_path = Path(raw_path)
         if not file_path.exists():
-            self._file_status_label.configure(text=f"Error: file not found: {file_path.name}")
+            self._file_status_label.configure(
+                text=self._tr("file.status.file_missing_short", file_name=file_path.name)
+            )
             self._refresh_file_workflow()
             return
-
-        if self._file_worker is not None:
-            return  # already running
 
         self._clear_file_table()
 
         model = get_model_info(self._file_model_var.get() or "small").id
         language = self._language_code_for_label(self._file_lang_var.get(), model)
         diarization_strategy = (self._file_diarization_var.get() or "auto").strip().lower()
-        try:
-            min_speakers = self._parse_optional_positive_int(
-                self._file_min_speakers_var.get(),
-                "Min speakers",
-            )
-            max_speakers = self._parse_optional_positive_int(
-                self._file_max_speakers_var.get(),
-                "Max speakers",
-            )
-        except ValueError as exc:
-            self._file_status_label.configure(text=f"Error: {exc}", foreground="red")
-            self._refresh_file_workflow()
-            return
-        if min_speakers is not None and max_speakers is not None and min_speakers > max_speakers:
-            self._file_status_label.configure(
-                text="Error: Min speakers must be less than or equal to max speakers.",
-                foreground="red",
-            )
-            self._refresh_file_workflow()
-            return
 
         self._file_transcribe_btn.configure(state=tk.DISABLED)
         self._file_cancel_btn.configure(state=tk.NORMAL)
@@ -1701,7 +2858,9 @@ class TranscriptionGUI:
         self._file_current_progress = 0.0
         self._file_progress_samples = []
         self._file_time_label.configure(text="")
-        self._file_status_label.configure(text=f"Step 2: Transcribing {file_path.name}...")
+        self._file_status_label.configure(
+            text=self._tr("file.status.transcribing", file_name=file_path.name)
+        )
         self._refresh_file_workflow()
         self.root.after(500, self._tick_file_timer)
 
@@ -1740,19 +2899,39 @@ class TranscriptionGUI:
         self._file_status_label.configure(text=msg, foreground="")
         self._file_progress["value"] = int(progress * 100)
         self._file_current_progress = progress
+        if self._file_active_queue_id is not None:
+            item = self._file_queue_items[self._file_active_queue_id]
+            item.status = "In progress"
+            item.progress = progress
+            item.result = msg
+            self._update_file_queue_row(self._file_active_queue_id)
         self._refresh_file_workflow()
 
     def _show_file_error(self, message: str) -> None:
-        self._file_status_label.configure(text=f"Error: {message}", foreground="red")
+        self._file_status_label.configure(
+            text=self._tr("file.status.error", message=message),
+            foreground="red",
+        )
         self._file_progress["value"] = 0
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        self._append_log_line(f"{timestamp} | FILE ERROR | {message}\n")
+        self._file_current_progress = 0.0
+        self._file_active_error_message = message
+        if self._file_active_queue_id is not None:
+            item = self._file_queue_items[self._file_active_queue_id]
+            item.status = "Error"
+            item.progress = 0.0
+            item.result = message
+            self._update_file_queue_row(self._file_active_queue_id)
+        active_file = None
+        if self._file_active_queue_id is not None:
+            active_file = str(self._file_queue_items[self._file_active_queue_id].file_path)
+        log.error("gui.file_error", file=active_file, error=message)
         self._refresh_file_workflow()
 
     def _cancel_file_transcribe(self) -> None:
         if self._file_worker is not None:
+            self._file_batch_cancel_requested = True
             self._file_cancel_btn.configure(state=tk.DISABLED)
-            self._file_status_label.configure(text="Cancelling...", foreground="")
+            self._file_status_label.configure(text=self._tr("file.status.cancelling_queue"), foreground="")
             self._file_worker.cancel()
 
     def _download_file_model(self) -> None:
@@ -1762,7 +2941,8 @@ class TranscriptionGUI:
 
         self._file_download_btn.configure(state=tk.DISABLED)
         self._file_status_label.configure(
-            text=f"Downloading {model_info.name}…", foreground=""
+            text=self._tr("file.status.download_start", model_name=model_info.name),
+            foreground="",
         )
         timestamp = datetime.now().strftime("%H:%M:%S")
         self._append_log_line(f"{timestamp} | DOWNLOAD | Starting download of {model_info.name}…\n")
@@ -1773,11 +2953,11 @@ class TranscriptionGUI:
             self._file_download_btn.configure(state=tk.NORMAL)
             ts = datetime.now().strftime("%H:%M:%S")
             if error:
-                msg = f"Download failed: {error}"
+                msg = self._tr("file.status.download_failed", error=error)
                 self._file_status_label.configure(text=msg, foreground="red")
                 self._append_log_line(f"{ts} | DOWNLOAD ERROR | {error}\n")
             else:
-                msg = f"{model_info.name} downloaded successfully."
+                msg = self._tr("file.status.download_ready", model_name=model_info.name)
                 self._file_status_label.configure(text=msg, foreground="")
                 self._append_log_line(f"{ts} | DOWNLOAD | {model_info.name} ready.\n")
 
@@ -1875,45 +3055,52 @@ class TranscriptionGUI:
             self._file_seg_count += 1
 
         self._file_segments.extend(segments)
-        self._file_seg_counter_label.configure(text=f"Segments: {self._file_seg_count}")
+        self._file_seg_counter_label.configure(
+            text=self._tr("file.summary.segments", count=self._file_seg_count)
+        )
         self._file_table.yview_moveto(1.0)
         self._refresh_file_workflow()
 
     def _on_file_worker_finished(self) -> None:
         was_cancelled = self._file_worker is not None and self._file_worker._cancelled
+        active_id = self._file_active_queue_id
         self._file_worker = None
-        self._file_transcribe_btn.configure(state=tk.NORMAL)
-        self._file_cancel_btn.configure(state=tk.DISABLED)
-        self._file_model_combo.configure(state="readonly")
-        self._file_lang_combo.configure(state="readonly")
-        self._file_quality_combo.configure(state="readonly")
-        self._refresh_file_diarization_controls()
         self._file_start_time = None
         self._file_time_label.configure(text="")
-        if was_cancelled:
-            self._file_status_label.configure(
-                text="Transcription cancelled.", foreground=""
-            )
-            self._file_progress["value"] = 0
+        if active_id is None:
+            self._set_file_batch_ui_running(False)
             self._refresh_file_workflow()
             return
-        if self._file_seg_count > 0:
-            self._last_transcript_path = self._auto_save_transcript()
-            self._persist_gui_settings()
-            self._file_status_label.configure(
-                text=(
-                    f"Step 3: Transcript ready. Saved to {self._last_transcript_path.name}. "
-                    "Send it to Open WebUI or use Save... for another format."
-                )
-            )
-        else:
-            self._file_status_label.configure(
-                text=(
-                    "Transcription finished, but no speech segments were found. "
-                    "Transcript file was not created."
-                )
-            )
-        self._refresh_file_workflow()
+
+        item = self._file_queue_items[active_id]
+        if was_cancelled or self._file_batch_cancel_requested:
+            item.status = "Cancelled"
+            item.progress = 0.0
+            item.result = "Cancelled"
+            self._update_file_queue_row(active_id)
+            self._finish_file_batch_run()
+            return
+
+        if self._file_active_error_message is None:
+            item.status = "Done"
+            item.progress = 1.0
+            if self._file_seg_count > 0:
+                self._last_transcript_path = self._auto_save_transcript()
+                self._persist_gui_settings()
+                item.output_path = self._last_transcript_path
+                item.result = self._last_transcript_path.name
+            else:
+                item.result = self._tr("file.status.no_speech")
+            self._update_file_queue_row(active_id)
+
+        self._file_active_queue_id = None
+        self._file_active_error_message = None
+
+        if self._next_pending_file_queue_id() is not None:
+            self._start_next_file_in_queue()
+            return
+
+        self._finish_file_batch_run()
 
     def _file_copy_selected(self, _event: object | None = None) -> str:
         selected = self._file_table.selection()
@@ -1934,9 +3121,9 @@ class TranscriptionGUI:
         self._file_seg_count = 0
         self._file_segments = []
         self._last_transcript_path = None
-        self._file_seg_counter_label.configure(text="Segments: 0")
+        self._file_seg_counter_label.configure(text=self._tr("file.summary.segments", count=0))
         self._file_progress["value"] = 0
-        self._file_status_label.configure(text="Cleared. Select a file and click Transcribe.")
+        self._file_status_label.configure(text=self._tr("file.status.cleared"))
         self._clear_llm_output()
         self._refresh_file_workflow()
 
@@ -1947,11 +3134,11 @@ class TranscriptionGUI:
         path = filedialog.asksaveasfilename(
             defaultextension=".txt",
             filetypes=[
-                ("Text file", "*.txt"),
-                ("SRT subtitles", "*.srt"),
-                ("All files", "*.*"),
+                (self._tr("dialog.filetype.text_file"), "*.txt"),
+                (self._tr("dialog.filetype.srt_file"), "*.srt"),
+                (self._tr("dialog.filetype.all_files"), "*.*"),
             ],
-            title="Save file transcription",
+            title=self._tr("dialog.title.save_file_transcription"),
         )
         if not path:
             return
@@ -1962,10 +3149,10 @@ class TranscriptionGUI:
             else:
                 self._save_as_txt(out_path, children)
             self._file_status_label.configure(
-                text=f"Saved {self._file_seg_count} segments -> {out_path.name}"
+                text=self._tr("file.status.saved", count=self._file_seg_count, path=out_path.name)
             )
         except OSError as exc:
-            self._file_status_label.configure(text=f"Save failed: {exc}")
+            self._file_status_label.configure(text=self._tr("file.status.save_failed", error=exc))
         self._refresh_file_workflow()
 
     def _save_as_txt(self, path: Path, children: tuple[str, ...]) -> None:
@@ -2012,7 +3199,7 @@ class TranscriptionGUI:
         transcript = self._get_file_transcript_text()
         if not transcript:
             self._llm_status_label.configure(
-                text="No transcript available. Complete Step 2 first."
+                text=self._tr("llm.status.no_transcript")
             )
             self._refresh_file_workflow()
             return
@@ -2025,7 +3212,7 @@ class TranscriptionGUI:
 
         self._clear_llm_output()
         self._llm_summarize_btn.configure(state=tk.DISABLED)
-        self._llm_status_label.configure(text=f"Sending to {model}...")
+        self._llm_status_label.configure(text=self._tr("llm.status.sending", model=model))
 
         self._llm_worker = LLMWorker(
             text=transcript,
@@ -2059,7 +3246,7 @@ class TranscriptionGUI:
         self._llm_output.configure(state=tk.DISABLED)
 
     def _show_llm_error(self, message: str) -> None:
-        self._llm_status_label.configure(text=f"Error: {message[:80]}")
+        self._llm_status_label.configure(text=self._tr("llm.status.error", message=message[:80]))
         self._append_llm_token(f"\n\n[ERROR] {message}\n")
         self._refresh_file_workflow()
 
@@ -2067,8 +3254,8 @@ class TranscriptionGUI:
         self._llm_worker = None
         self._llm_summarize_btn.configure(state=tk.NORMAL)
         current = self._llm_status_label.cget("text")
-        if not current.startswith("Error"):
-            self._llm_status_label.configure(text="Done. Open WebUI response received.")
+        if not str(current).startswith(self._tr("llm.status.error", message="").split("{", 1)[0]):
+            self._llm_status_label.configure(text=self._tr("llm.status.done"))
         self._refresh_file_workflow()
 
     def _clear_llm_output(self) -> None:
@@ -2083,7 +3270,7 @@ class TranscriptionGUI:
         if text:
             self.root.clipboard_clear()
             self.root.clipboard_append(text)
-            self._llm_status_label.configure(text="Copied to clipboard.")
+            self._llm_status_label.configure(text=self._tr("llm.status.copied"))
 
     # ------------------------------------------------------------------
     # Shared helpers
@@ -2145,6 +3332,8 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     if sys.platform != "win32":
         print("Live capture requires Windows WASAPI. File transcription works on all platforms.")
+    else:
+        patch_subprocess_popen_no_window(force=True)
 
     # Redirect HuggingFace model cache next to the binary (or project root in dev mode).
     # Must happen before any model library is imported.

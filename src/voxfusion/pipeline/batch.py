@@ -18,6 +18,7 @@ from voxfusion.capture.file_source import FileAudioSource
 from voxfusion.config.models import PipelineConfig
 from voxfusion.diarization.alignment import SpeakerTurn
 from voxfusion.diarization.base import DiarizationEngine
+from voxfusion.diarization.types import DiarizationTurnResult
 from voxfusion.exceptions import AudioCaptureError, PipelineError
 from voxfusion.logging import get_logger
 from voxfusion.media.extractor import extract_audio_async, needs_extraction
@@ -104,6 +105,27 @@ def _remaining_diarization_eta(elapsed_s: float, estimated_total_s: float) -> fl
     if elapsed_s >= estimated_total_s:
         return None
     return max(0.0, estimated_total_s - elapsed_s)
+
+
+def _select_alignment_turns(
+    turn_result: DiarizationTurnResult | list[SpeakerTurn],
+) -> tuple[list[SpeakerTurn], dict[str, object]]:
+    if isinstance(turn_result, DiarizationTurnResult):
+        selected = list(turn_result.alignment_turns())
+        return selected, {
+            "turns": len(turn_result.turns),
+            "exclusive_turns": (
+                len(turn_result.exclusive_turns)
+                if turn_result.exclusive_turns is not None else None
+            ),
+            "alignment_turns": len(selected),
+            "used_exclusive": bool(turn_result.exclusive_turns),
+            "speaker_count_estimate": turn_result.speaker_count_estimate,
+            "model_id": turn_result.model_id,
+        }
+
+    turns = list(turn_result)
+    return turns, {"turns": len(turns)}
 
 
 def _normalize_turns(turns: list[SpeakerTurn]) -> list[SpeakerTurn]:
@@ -258,8 +280,14 @@ class BatchPipeline:
         self,
         full_audio: AudioChunk,
     ) -> list[DiarizedSegment] | None:
+        diarize_turns_result = getattr(self._diarizer, "diarize_turns_result", None)
         diarize_turns = getattr(self._diarizer, "diarize_turns", None)
-        if not callable(diarize_turns):
+        diarize_turn_callable = None
+        if callable(diarize_turns_result):
+            diarize_turn_callable = diarize_turns_result
+        elif callable(diarize_turns):
+            diarize_turn_callable = diarize_turns
+        if diarize_turn_callable is None:
             return None
 
         log.info(
@@ -277,7 +305,7 @@ class BatchPipeline:
             phase="speaker_turn_diarization",
             audio_duration_s=round(full_audio.duration, 2),
         )
-        turns_task = asyncio.create_task(diarize_turns(full_audio))
+        turns_task = asyncio.create_task(diarize_turn_callable(full_audio))
         started_at = time.monotonic()
         heartbeat_count = 0
         estimated_total = _estimate_initial_diarization_total(full_audio.duration)
@@ -313,8 +341,9 @@ class BatchPipeline:
                 eta_s=round(eta_remaining, 1) if eta_remaining is not None else None,
             )
 
-        turns = await turns_task
-        log.info("batch.diarization_turns_received", turns=len(turns))
+        turn_result = await turns_task
+        turns, turn_log = _select_alignment_turns(turn_result)
+        log.info("batch.diarization_turns_received", **turn_log)
         if not turns:
             self._warn(
                 "ML diarization produced no speaker turns. Falling back to the standard batch path.",
@@ -322,36 +351,86 @@ class BatchPipeline:
             )
             return None
 
-        diarized: list[DiarizedSegment] = []
         normalized_turns = _normalize_turns(turns)
         log.info("batch.diarization_turns_normalized", turns=len(normalized_turns))
         total_windows = len(normalized_turns)
+
+        max_concurrent = max(1, self._config.asr.parallel_windows)
+        log.info(
+            "batch.window_transcription_start",
+            total_windows=total_windows,
+            max_concurrent=max_concurrent,
+        )
         if total_windows:
             self._progress(
                 stage=PipelineStage.ASR,
-                message=f"Transcribing speaker windows 0/{total_windows} ({_format_eta(None)})",
+                message=(
+                    f"Transcribing speaker windows 0/{total_windows} "
+                    f"({_format_eta(None)})"
+                ),
                 progress=_ASR_PROGRESS_WINDOW_START,
                 phase="speaker_window_transcription",
                 completed_windows=0,
                 total_windows=total_windows,
             )
+
+        semaphore = asyncio.Semaphore(max_concurrent)
+        completed_count = 0
         window_phase_started_at = time.monotonic()
-        for index, turn in enumerate(normalized_turns, start=1):
-            window_progress = _ASR_PROGRESS_WINDOW_END
-            if total_windows:
-                window_progress = _ASR_PROGRESS_WINDOW_START + (
-                    ((_ASR_PROGRESS_WINDOW_END - _ASR_PROGRESS_WINDOW_START) * index)
-                    / total_windows
+
+        async def _process_one(
+            turn_index: int,
+            turn: SpeakerTurn,
+        ) -> list[DiarizedSegment]:
+            window = _slice_audio_chunk(full_audio, turn.start_time, turn.end_time)
+            if window.num_samples < _MIN_GIGAAM_WINDOW_SAMPLES:
+                log.warning(
+                    "batch.diarized_window_skipped",
+                    window=turn_index,
+                    total_windows=total_windows,
+                    speaker_id=turn.speaker_id,
+                    start_s=round(turn.start_time, 2),
+                    end_s=round(turn.end_time, 2),
+                    samples=window.num_samples,
+                    reason="too_short",
                 )
+                return []
+            async with semaphore:
+                segs = await self._asr.transcribe(
+                    window,
+                    language=self._config.asr.language,
+                    word_timestamps=self._config.asr.word_timestamps,
+                )
+            return [
+                DiarizedSegment(
+                    segment=_rebase_segment(s, window.timestamp_start),
+                    speaker_id=turn.speaker_id,
+                    speaker_source="ml",
+                )
+                for s in segs
+            ]
+
+        async def _tracked(turn_index: int, turn: "SpeakerTurn") -> list[DiarizedSegment]:
+            nonlocal completed_count
+            result = await _process_one(turn_index, turn)
+            completed_count += 1
             elapsed_window_phase = max(0.001, time.monotonic() - window_phase_started_at)
-            estimated_remaining = None
-            if index > 0 and total_windows > index:
-                avg_window_s = elapsed_window_phase / index
-                estimated_remaining = avg_window_s * (total_windows - index)
-            if index == 1 or index == total_windows or index % _WINDOW_PROGRESS_LOG_INTERVAL == 0:
+            estimated_remaining: float | None = None
+            if completed_count < total_windows:
+                avg_window_s = elapsed_window_phase / completed_count
+                estimated_remaining = avg_window_s * (total_windows - completed_count)
+            window_progress = _ASR_PROGRESS_WINDOW_START + (
+                (_ASR_PROGRESS_WINDOW_END - _ASR_PROGRESS_WINDOW_START)
+                * completed_count / max(1, total_windows)
+            )
+            if (
+                completed_count == 1
+                or completed_count == total_windows
+                or completed_count % _WINDOW_PROGRESS_LOG_INTERVAL == 0
+            ):
                 log.info(
                     "batch.diarized_window_progress",
-                    window=index,
+                    window=completed_count,
                     total_windows=total_windows,
                     speaker_id=turn.speaker_id,
                     start_s=round(turn.start_time, 2),
@@ -364,47 +443,27 @@ class BatchPipeline:
             self._progress(
                 stage=PipelineStage.ASR,
                 message=(
-                    f"Transcribing speaker windows {index}/{total_windows} "
+                    f"Transcribing speaker windows {completed_count}/{total_windows} "
                     f"({turn.speaker_id} {turn.start_time:.0f}-{turn.end_time:.0f}s, "
                     f"{_format_eta(estimated_remaining)})"
                 ),
                 progress=min(_ASR_PROGRESS_WINDOW_END, window_progress),
                 phase="speaker_window_transcription",
-                completed_windows=index,
+                completed_windows=completed_count,
                 total_windows=total_windows,
                 speaker_id=turn.speaker_id,
                 window_start_s=round(turn.start_time, 2),
                 window_end_s=round(turn.end_time, 2),
-                eta_s=round(estimated_remaining, 1) if estimated_remaining is not None else None,
+                eta_s=(
+                    round(estimated_remaining, 1) if estimated_remaining is not None else None
+                ),
             )
-            window = _slice_audio_chunk(full_audio, turn.start_time, turn.end_time)
-            if window.num_samples < _MIN_GIGAAM_WINDOW_SAMPLES:
-                log.warning(
-                    "batch.diarized_window_skipped",
-                    window=index,
-                    total_windows=total_windows,
-                    speaker_id=turn.speaker_id,
-                    start_s=round(turn.start_time, 2),
-                    end_s=round(turn.end_time, 2),
-                    samples=window.num_samples,
-                    reason="too_short_for_gigaam",
-                )
-                continue
-            segments = await self._asr.transcribe(
-                window,
-                language=self._config.asr.language,
-                word_timestamps=self._config.asr.word_timestamps,
-            )
-            for segment in segments:
-                rebased = _rebase_segment(segment, window.timestamp_start)
-                diarized.append(
-                    DiarizedSegment(
-                        segment=rebased,
-                        speaker_id=turn.speaker_id,
-                        speaker_source="ml",
-                    )
-                )
+            return result
 
+        nested = await asyncio.gather(
+            *[_tracked(i + 1, turn) for i, turn in enumerate(normalized_turns)]
+        )
+        diarized: list[DiarizedSegment] = [seg for batch in nested for seg in batch]
         diarized.sort(key=lambda item: (item.segment.start_time, item.segment.end_time))
         return diarized
 

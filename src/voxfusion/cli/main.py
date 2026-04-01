@@ -1,5 +1,7 @@
 """CLI entry point and main command group."""
 
+import sys
+
 import click
 
 from voxfusion.version import __version__
@@ -7,8 +9,8 @@ from voxfusion.version import __version__
 
 @click.group()
 @click.version_option(version=__version__, prog_name="voxfusion")
-@click.option("--verbose", "-v", is_flag=True, help="Enable verbose (debug) output.")
-@click.option("--quiet", "-q", is_flag=True, help="Suppress all output except errors.")
+@click.option("--debug", "--verbose", "-v", "verbose", is_flag=True, help="Enable debug logs from all stages.")
+@click.option("--quiet", "-q", is_flag=True, hidden=True, help="Legacy errors-only mode.")
 @click.option("--config", type=click.Path(exists=True), help="Path to config file.")
 @click.pass_context
 def cli(ctx: click.Context, verbose: bool, quiet: bool, config: str | None) -> None:
@@ -37,6 +39,20 @@ cli.add_command(devices)
 cli.add_command(models_group, "models")
 
 
+def _configure_utf8_stdio() -> None:
+    """Prefer UTF-8 for CLI stdout/stderr, including redirected output."""
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not callable(reconfigure):
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError, ValueError):
+            continue
+
+
 def main() -> None:
     """Run CLI entry point."""
+    _configure_utf8_stdio()
     cli(prog_name="voxfusion")

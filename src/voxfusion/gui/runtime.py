@@ -23,6 +23,7 @@ from voxfusion.diarization.channel import ChannelDiarizer
 from voxfusion.gui.progress import close_all_progress, get_stage_progress
 from voxfusion.llm.client import LLMError, stream_completion
 from voxfusion.llm.prompts import build_messages
+from voxfusion.logging import _should_suppress_log_message
 from voxfusion.logging import get_logger
 from voxfusion.models.translation import TranslatedSegment
 from voxfusion.pipeline.streaming import StreamingPipeline
@@ -33,22 +34,12 @@ from voxfusion.recording import AudioRecorder, RecordingStats, create_recording_
 
 log = get_logger(__name__)
 
-_GUI_NOISE_LINE_FRAGMENTS = (
-    "Megatron num_microbatches_calculator not found, using Apex version.",
-    "NOTE: Redirects are currently not supported in Windows or MacOs.",
-    "deprecate positional args:",
-    "NumExpr defaulting to ",
-    "OneLogger: Setting error_handling_strategy to DISABLE_QUIETLY_AND_REPORT_METRIC_ERROR",
-    "No exporters were provided. This means that no telemetry data will be collected.",
-    "Final configuration contains 0 exporter(s)",
-    "Initializing DefaultRecorder with no exporters, exporting is disabled",
-)
-
-
 def _configure_gui_noise_controls() -> None:
     """Suppress safe third-party noise and set runtime env defaults for the GUI."""
     os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+    os.environ.setdefault("PYANNOTE_METRICS_ENABLED", "false")
     thread_count = min(os.cpu_count() or 4, 16)
     os.environ.setdefault("NUMEXPR_MAX_THREADS", str(thread_count))
     os.environ.setdefault("NUMEXPR_NUM_THREADS", str(thread_count))
@@ -120,7 +111,7 @@ class TextRedirector:
         self._buffer = ""
         kept_lines = [
             line for line in text.splitlines(keepends=True)
-            if not any(fragment in line for fragment in _GUI_NOISE_LINE_FRAGMENTS)
+            if not _should_suppress_log_message(line)
         ]
         return "".join(kept_lines)
 
@@ -308,26 +299,6 @@ class FileTranscribeWorker:
                     self._on_status(f"Failed: {event.message}", 0.0)
                 case EventType.WARNING:
                     self._on_status(f"Warning: {event.message}", last_progress)
-
-        # Emit model download / cache hints to the log before loading
-        import os as _os
-        _hf_home = _os.environ.get("HF_HOME")
-        _cache = Path(_hf_home) / "hub" if _hf_home else Path.home() / ".cache" / "huggingface" / "hub"
-        _engine = config.asr.engine
-        if _engine == "faster-whisper":
-            _repo = f"Systran/faster-whisper-{self._model}"
-        elif _engine == "gigaam":
-            _repo = "ai-sage/GigaAM-v3"
-        else:
-            _repo = None
-        print(f"[VoxFusion] Model: '{self._model}'  |  HF cache: {_cache}")
-        if _repo:
-            print(f"[VoxFusion] Pre-download (avoids waiting at startup):")
-            print(f"[VoxFusion]   huggingface-cli download {_repo}")
-            print(f"[VoxFusion]   -- or place the folder directly in: {_cache}")
-            if not _os.environ.get("HF_TOKEN"):
-                print(f"[VoxFusion] If the model is gated, add your HF token in Settings → HuggingFace Token")
-        print(f"[VoxFusion] Faster HF downloads: pip install hf-xet")
 
         orchestrator = PipelineOrchestrator(config, on_event=on_event)
         self._on_status("Loading model...", 0.01)

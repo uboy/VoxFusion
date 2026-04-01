@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator
 from voxfusion.config.models import DiarizationConfig
 from voxfusion.diarization.alignment import SpeakerTurn
 from voxfusion.diarization.channel import ChannelDiarizer
+from voxfusion.diarization.types import DiarizationTurnResult
 from voxfusion.exceptions import DiarizationError
 from voxfusion.logging import get_logger
 from voxfusion.models.audio import AudioChunk
@@ -59,14 +60,11 @@ class HybridDiarizer:
         diarization is used.  If the source is ambiguous or ML
         is configured, ML diarization refines the result.
         """
-        # Start with channel-based assignment
         channel_result = await self._channel.diarize(segments, audio)
 
-        # If all segments got a known channel speaker, return as-is
         if audio and audio.source in self._config.channel_map:
             return channel_result
 
-        # Attempt ML refinement
         ml_engine = self._get_ml_engine()
         if ml_engine is None or audio is None:
             return channel_result
@@ -95,3 +93,17 @@ class HybridDiarizer:
         if ml_engine is None:
             raise DiarizationError("ML diarization is not available for hybrid mode.")
         return await ml_engine.diarize_turns(audio)  # type: ignore[union-attr]
+
+    async def diarize_turns_result(self, audio: AudioChunk) -> DiarizationTurnResult:
+        """Return the richer ML turn result when the provider supports it."""
+        ml_engine = self._get_ml_engine()
+        if ml_engine is None:
+            raise DiarizationError("ML diarization is not available for hybrid mode.")
+        diarize_turns_result = getattr(ml_engine, "diarize_turns_result", None)
+        if callable(diarize_turns_result):
+            return await diarize_turns_result(audio)
+        turns = await ml_engine.diarize_turns(audio)  # type: ignore[union-attr]
+        return DiarizationTurnResult(
+            turns=turns,
+            speaker_count_estimate=len({turn.speaker_id for turn in turns}) or None,
+        )
