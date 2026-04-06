@@ -16,6 +16,7 @@ from voxfusion.config.models import (
     CaptureConfig,
     DiarizationConfig,
     DiarizationMLConfig,
+    LiveGigaAMConfig,
     OutputConfig,
     PipelineConfig,
     SecurityConfig,
@@ -63,6 +64,15 @@ class TestPipelineConfig:
         cfg = TranslationConfig()
         assert cfg.enabled is False
 
+    def test_live_gigaam_config_defaults(self) -> None:
+        cfg = LiveGigaAMConfig()
+        assert cfg.worker_count == 2
+        assert cfg.stop_finalize_mode == "if_needed"
+        assert cfg.finalize_left_context_ms == 700
+        assert cfg.finalize_right_context_ms == 300
+        assert cfg.queue_warning_jobs == 8
+        assert cfg.queue_hard_limit_jobs == 16
+
     def test_vad_parameters_validation(self) -> None:
         with pytest.raises(Exception):
             VADParameters(threshold=2.0)  # must be <= 1.0
@@ -105,6 +115,15 @@ class TestConfigLoader:
     def test_load_config_with_overrides(self) -> None:
         config = load_config({"asr": {"model_size": "large-v3"}})
         assert config.asr.model_size == "large-v3"
+
+    def test_load_config_exposes_live_gigaam_defaults(self) -> None:
+        config = load_config()
+        assert config.live_gigaam.worker_count == 2
+        assert config.live_gigaam.stop_finalize_mode == "if_needed"
+        assert config.live_gigaam.finalize_left_context_ms == 700
+        assert config.live_gigaam.finalize_right_context_ms == 300
+        assert config.live_gigaam.queue_warning_jobs == 8
+        assert config.live_gigaam.queue_hard_limit_jobs == 16
 
     def test_load_config_reads_documented_voxfusion_diarization_token_env(
         self,

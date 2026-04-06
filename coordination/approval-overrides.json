@@ -1,0 +1,18 @@
+{
+  "approvals": [
+    {
+      "id": "2026-04-03-live-gigaam-runtime-docs-and-tests",
+      "recorded_at": "2026-04-03",
+      "source": "user",
+      "source_excerpt": "реализуй все, с детальной декомпозицией, ее ревью, имплементация всех частей, детальное ревью, тесты обязательно, ревью тестов и соответствие их дизайну и требованиям к функционалу",
+      "approved_files": [
+        "tests/unit/test_capture_cli.py",
+        "README.md",
+        "SPEC.md",
+        "docs/REQUIREMENTS_TRACEABILITY.md",
+        "docs/design/live-gigaam-v1.md"
+      ],
+      "rationale": "The existing CLI test encodes the old file-only GigaAM contract, and the live GigaAM feature changes external runtime behavior that requires tracked runtime/design documentation."
+    }
+  ]
+}

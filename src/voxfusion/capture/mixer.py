@@ -7,6 +7,7 @@ label so downstream diarization can distinguish speakers.
 
 import asyncio
 from collections.abc import AsyncIterator
+from contextlib import suppress
 
 import numpy as np
 
@@ -67,7 +68,11 @@ class AudioMixer:
             async for chunk in source.stream(chunk_duration_ms=chunk_duration_ms):
                 await self._queue.put(chunk)
         except Exception as exc:
-            log.warning("mixer.source_error", source=source.device_name, error=str(exc))
+            message = str(exc)
+            if not self._active and message.endswith("is not active"):
+                log.info("mixer.source_stopped", source=source.device_name)
+            else:
+                log.warning("mixer.source_error", source=source.device_name, error=message)
         finally:
             await self._queue.put(None)
 
@@ -94,10 +99,14 @@ class AudioMixer:
     async def stop(self) -> None:
         """Stop all capture sources and cancel tasks."""
         self._active = False
-        for task in self._tasks:
-            task.cancel()
         for source in self._sources:
             await source.stop()
+        for task in self._tasks:
+            task.cancel()
+        if self._tasks:
+            with suppress(Exception):
+                await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks = []
         log.info("mixer.stopped")
 
     async def stream(self, chunk_duration_ms: int = 500) -> AsyncIterator[AudioChunk]:

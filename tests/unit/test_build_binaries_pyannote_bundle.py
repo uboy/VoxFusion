@@ -93,3 +93,16 @@ def test_find_ffmpeg_binary_returns_absolute_path(tmp_path: Path, monkeypatch) -
     found = module._find_ffmpeg_binary()
 
     assert found == ffmpeg_path.resolve()
+
+
+def test_default_data_entries_include_gui_locales(monkeypatch) -> None:
+    module = _load_build_module()
+
+    monkeypatch.setattr(module, '_customtkinter_data_entries', lambda: [])
+    monkeypatch.setattr(module, '_pyannote_data_entries', lambda: [])
+    monkeypatch.setattr(module, '_ffmpeg_data_entries', lambda: [])
+
+    entries = module._default_data_entries()
+
+    expected = module.PROJECT_ROOT / 'src' / 'voxfusion' / 'gui' / 'locales'
+    assert f"{expected}{module.os.pathsep}voxfusion/gui/locales" in entries

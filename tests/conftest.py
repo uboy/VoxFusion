@@ -1,9 +1,16 @@
 """Shared pytest fixtures for VoxFusion tests."""
 
 from datetime import datetime, timezone
+from pathlib import Path
+import sys
 
 import numpy as np
 import pytest
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_SRC_ROOT = _REPO_ROOT / "src"
+if str(_SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SRC_ROOT))
 
 from voxfusion.config.models import (
     ASRConfig,
@@ -16,6 +23,24 @@ from voxfusion.models.diarization import DiarizedSegment
 from voxfusion.models.result import TranscriptionResult
 from voxfusion.models.transcription import TranscriptionSegment, WordTiming
 from voxfusion.models.translation import TranslatedSegment
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--run-hardware",
+        action="store_true",
+        default=False,
+        help="run opt-in hardware-in-the-loop tests",
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    if config.getoption("--run-hardware"):
+        return
+    skip_hardware = pytest.mark.skip(reason="need --run-hardware to execute hardware tests")
+    for item in items:
+        if "hardware" in item.keywords:
+            item.add_marker(skip_hardware)
 
 
 # -- Audio fixtures -----------------------------------------------------------

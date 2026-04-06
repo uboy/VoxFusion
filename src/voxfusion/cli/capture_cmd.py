@@ -3,7 +3,9 @@
 import asyncio
 import signal
 import sys
+import threading
 from contextlib import suppress
+from datetime import datetime
 
 import click
 
@@ -30,6 +32,20 @@ def _event_printer(event: PipelineEvent) -> None:
     except (OSError, IOError):
         # Ignore console output errors (Windows handle issues)
         pass
+
+
+def _print_status(message: str, *, err: bool = False) -> None:
+    try:
+        click.echo(message, err=err)
+    except (OSError, IOError):
+        print(message)
+
+
+async def _schedule_duration_stop(stop_event: threading.Event, duration_s: float | None) -> None:
+    if duration_s is None or duration_s <= 0:
+        return
+    await asyncio.sleep(duration_s)
+    stop_event.set()
 
 
 @click.command("capture")
@@ -150,57 +166,11 @@ def capture(
             print(f"Source: {source}")
             print(f"Format: {output_format}")
 
-    # Build the streaming pipeline
-    from voxfusion.asr.faster_whisper import FasterWhisperEngine
-    from voxfusion.capture.windows_factory import create_windows_capture_source
-    from voxfusion.diarization.channel import ChannelDiarizer
     from voxfusion.models.translation import TranslatedSegment
-    from voxfusion.pipeline.streaming import StreamingPipeline
-    from voxfusion.preprocessing.normalize import Normalizer
-    from voxfusion.preprocessing.pipeline import PreProcessingPipeline
-    from voxfusion.preprocessing.resample import Resampler
-    from voxfusion.translation.registry import get_translation_engine
-
-    preprocessor = PreProcessingPipeline([Resampler(16_000), Normalizer()])
-
-    # Загружаем модель ASR заранее
-    if not quiet:
-        try:
-            print(f"Загрузка модели {config.asr.model_size}...")
-        except (OSError, IOError):
-            pass
-
-    asr_engine = FasterWhisperEngine(config.asr)
-    asr_engine.load_model()  # Предзагрузка модели
-
-    if not quiet:
-        try:
-            print("Модель загружена!")
-        except (OSError, IOError):
-            pass
-
-    diarizer = ChannelDiarizer(config.diarization)
-
-    # Initialize translation if enabled
-    translator = None
-    if config.translation.enabled:
-        try:
-            translator = get_translation_engine(config.translation.backend, config.translation)
-            if not quiet:
-                try:
-                    click.echo(f"Translation: {config.translation.backend} -> {config.translation.target_language}", err=True)
-                except (OSError, IOError):
-                    print(f"Translation: {config.translation.backend} -> {config.translation.target_language}")
-        except Exception as exc:
-            try:
-                echo_warning(f"Translation unavailable: {exc}")
-            except (OSError, IOError):
-                print(f"WARNING: Translation unavailable: {exc}")
 
     formatter = get_formatter(output_format)
 
     # Auto-save setup
-    from datetime import datetime
     save_file = None
     if not no_save:
         if save:
@@ -217,6 +187,7 @@ def capture(
             pass
 
     all_segments = []  # Store all segments for saving
+    finalized_segments: list[TranslatedSegment] = []
 
     def on_segments(segments: list[TranslatedSegment]) -> None:
         all_segments.extend(segments)  # Store for saving
@@ -231,25 +202,9 @@ def capture(
                 except Exception:
                     pass
 
-    pipeline = StreamingPipeline(
-        asr_engine=asr_engine,
-        diarizer=diarizer,
-        preprocessor=preprocessor,
-        translator=translator,
-        config=config,
-        on_event=_event_printer if not quiet else None,
-    )
-
     # Create the capture source
     try:
-        if platform == "wasapi":
-            audio_source = create_windows_capture_source(
-                source,
-                config.capture,
-                microphone_device_id=device if source != "system" else None,
-                system_device_id=device if source == "system" else None,
-            )
-        else:
+        if platform != "wasapi":
             echo_error(
                 f"Live capture on {platform} is not yet fully supported. "
                 "Try 'voxfusion transcribe <file>' for batch mode."
@@ -258,63 +213,176 @@ def capture(
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc
 
-    import signal
-    stop_event = asyncio.Event()
+    stop_event = threading.Event()
 
     def signal_handler(sig, frame):
         """Handle Ctrl+C gracefully."""
+        del sig, frame
         stop_event.set()
 
     signal.signal(signal.SIGINT, signal_handler)
 
-    async def _run() -> None:
-        await audio_source.start()
-        try:
-            # Run with timeout check for stop_event
-            pipeline_task = asyncio.create_task(
-                pipeline.run(audio_source, on_segments=on_segments)
+    if config.asr.engine == "gigaam":
+        if config.translation.enabled:
+            raise click.ClickException("Live GigaAM does not support translation.")
+
+        from voxfusion.live_gigaam.session import LiveGigaAMSessionController
+
+        def on_status(message: str) -> None:
+            if not quiet:
+                _print_status(f"  {message}", err=True)
+
+        def on_finalized(segments: list[TranslatedSegment]) -> None:
+            finalized_segments.clear()
+            finalized_segments.extend(segments)
+
+        controller = LiveGigaAMSessionController(
+            config=config,
+            microphone_device_id=device if source != "system" else None,
+            system_device_id=device if source == "system" else None,
+            on_status=on_status,
+            on_segments=on_segments,
+            on_finalized_segments=on_finalized,
+            requested_source=source,
+        )
+
+        async def _run_gigaam() -> None:
+            timer_task = (
+                asyncio.create_task(_schedule_duration_stop(stop_event, duration))
+                if duration is not None
+                else None
             )
+            try:
+                finalized = await controller.run(stop_event)
+                if finalized and not finalized_segments:
+                    finalized_segments.extend(finalized)
+            finally:
+                if timer_task is not None:
+                    timer_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await timer_task
+                _print_status("\n[STOPPED]")
 
-            while not stop_event.is_set() and not pipeline_task.done():
-                await asyncio.sleep(0.1)
+        try:
+            asyncio.run(_run_gigaam())
+        except KeyboardInterrupt:
+            pass
+    else:
+        # Build the streaming pipeline
+        from voxfusion.asr.faster_whisper import FasterWhisperEngine
+        from voxfusion.capture.windows_factory import create_windows_capture_source
+        from voxfusion.diarization.channel import ChannelDiarizer
+        from voxfusion.pipeline.streaming import StreamingPipeline
+        from voxfusion.preprocessing.normalize import Normalizer
+        from voxfusion.preprocessing.pipeline import PreProcessingPipeline
+        from voxfusion.preprocessing.resample import Resampler
+        from voxfusion.translation.registry import get_translation_engine
 
-            if stop_event.is_set():
-                pipeline_task.cancel()
+        preprocessor = PreProcessingPipeline([Resampler(16_000), Normalizer()])
+
+        # Загружаем модель ASR заранее
+        if not quiet:
+            _print_status(f"Загрузка модели {config.asr.model_size}...")
+
+        asr_engine = FasterWhisperEngine(config.asr)
+        asr_engine.load_model()
+
+        if not quiet:
+            _print_status("Модель загружена!")
+
+        diarizer = ChannelDiarizer(config.diarization)
+
+        translator = None
+        if config.translation.enabled:
+            try:
+                translator = get_translation_engine(config.translation.backend, config.translation)
+                if not quiet:
+                    _print_status(
+                        f"Translation: {config.translation.backend} -> {config.translation.target_language}",
+                        err=True,
+                    )
+            except Exception as exc:
                 try:
-                    await pipeline_task
-                except asyncio.CancelledError:
-                    pass
-        except Exception:
+                    echo_warning(f"Translation unavailable: {exc}")
+                except (OSError, IOError):
+                    print(f"WARNING: Translation unavailable: {exc}")
+
+        pipeline = StreamingPipeline(
+            asr_engine=asr_engine,
+            diarizer=diarizer,
+            preprocessor=preprocessor,
+            translator=translator,
+            config=config,
+            on_event=_event_printer if not quiet else None,
+        )
+        audio_source = create_windows_capture_source(
+            source,
+            config.capture,
+            microphone_device_id=device if source != "system" else None,
+            system_device_id=device if source == "system" else None,
+        )
+
+        async def _run() -> None:
+            timer_task = (
+                asyncio.create_task(_schedule_duration_stop(stop_event, duration))
+                if duration is not None
+                else None
+            )
+            await audio_source.start()
+            try:
+                # Run with timeout check for stop_event
+                pipeline_task = asyncio.create_task(
+                    pipeline.run(audio_source, on_segments=on_segments)
+                )
+
+                while not stop_event.is_set() and not pipeline_task.done():
+                    await asyncio.sleep(0.1)
+
+                if stop_event.is_set():
+                    pipeline_task.cancel()
+                    try:
+                        await pipeline_task
+                    except asyncio.CancelledError:
+                        pass
+            except Exception:
+                pass
+            finally:
+                if timer_task is not None:
+                    timer_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await timer_task
+                await pipeline.stop()
+                await audio_source.stop()
+                _print_status("\n[ОСТАНОВЛЕНО]")
+
+        try:
+            asyncio.run(_run())
+        except KeyboardInterrupt:
             pass
         finally:
-            await pipeline.stop()
-            await audio_source.stop()
-            try:
-                print("\n[ОСТАНОВЛЕНО]")
-            except (OSError, IOError):
-                pass
+            with suppress(Exception):
+                asr_engine.unload_model()
+                asr_engine.close()
 
-    try:
-        asyncio.run(_run())
-    except KeyboardInterrupt:
-        pass
-    finally:
-        with suppress(Exception):
-            asr_engine.unload_model()
-            asr_engine.close()
-        # Save transcription to file
-        if save_file and all_segments:
-            try:
-                from voxfusion.models.result import TranscriptionResult
-                result = TranscriptionResult(
-                    segments=all_segments,
-                    source_info={"source": source, "live": True},
-                    processing_info={"model": config.asr.model_size},
-                    created_at=datetime.now().isoformat(),
-                )
-                fmt = get_formatter(output_format)
-                with open(save_file, "w", encoding="utf-8") as f:
-                    f.write(fmt.format(result))
-                print(f"\n[СОХРАНЕНО]: {save_file} ({len(all_segments)} сегментов)")
-            except Exception as e:
-                print(f"\n[ОШИБКА СОХРАНЕНИЯ]: {e}")
+    segments_to_save = finalized_segments or all_segments
+    if config.asr.engine == "gigaam" and no_save and finalized_segments:
+        _print_status("\n[FINALIZED]")
+        for seg in finalized_segments:
+            _print_status(formatter.format_segment(seg, 0))
+
+    # Save transcription to file
+    if save_file and segments_to_save:
+        try:
+            from voxfusion.models.result import TranscriptionResult
+            result = TranscriptionResult(
+                segments=segments_to_save,
+                source_info={"source": source, "live": True, "engine": config.asr.engine},
+                processing_info={"model": config.asr.model_size},
+                created_at=datetime.now().isoformat(),
+            )
+            fmt = get_formatter(output_format)
+            with open(save_file, "w", encoding="utf-8") as f:
+                f.write(fmt.format(result))
+            _print_status(f"\n[СОХРАНЕНО]: {save_file} ({len(segments_to_save)} сегментов)")
+        except Exception as e:
+            _print_status(f"\n[ОШИБКА СОХРАНЕНИЯ]: {e}")

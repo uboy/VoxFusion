@@ -160,3 +160,70 @@ def test_wasapi_loopback_retries_after_invalid_channel_error(monkeypatch) -> Non
 
     assert attempts[:2] == [2, 1]
     assert capture.channels == 1
+
+
+def test_wasapi_input_explicit_device_falls_back_to_another_input(monkeypatch) -> None:
+    from voxfusion.config.models import CaptureConfig
+
+    attempts: list[int] = []
+
+    class StubStream:
+        def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class StubWasapiSettings:
+        def __init__(self, *args, **kwargs) -> None:
+            return None
+
+    class StubSoundDeviceModule:
+        default = type("Default", (), {"device": (3, 5)})()
+
+        @staticmethod
+        def query_hostapis() -> list[dict[str, object]]:
+            return [{
+                "name": "Windows WASAPI",
+                "default_input_device": 3,
+                "default_output_device": 5,
+                "devices": [3, 17],
+            }]
+
+        @staticmethod
+        def query_devices(index: int | None = None):
+            devices = [
+                {"name": "Fallback Mic", "hostapi": 0, "max_input_channels": 2, "max_output_channels": 0, "default_samplerate": 48000},
+                {"name": "Unused1", "hostapi": 0, "max_input_channels": 0, "max_output_channels": 0, "default_samplerate": 48000},
+                {"name": "Unused2", "hostapi": 0, "max_input_channels": 0, "max_output_channels": 0, "default_samplerate": 48000},
+                {"name": "Fallback Mic", "hostapi": 0, "max_input_channels": 2, "max_output_channels": 0, "default_samplerate": 48000},
+            ]
+            while len(devices) <= 17:
+                devices.append({"name": f"Pad{len(devices)}", "hostapi": 0, "max_input_channels": 0, "max_output_channels": 0, "default_samplerate": 48000})
+            devices[17] = {"name": "Headset (M51)", "hostapi": 0, "max_input_channels": 1, "max_output_channels": 0, "default_samplerate": 48000}
+            if index is None:
+                return devices
+            return devices[index]
+
+        WasapiSettings = StubWasapiSettings
+
+        @staticmethod
+        def InputStream(**kwargs):
+            device = kwargs.get("device")
+            attempts.append(int(device))
+            if device == 17:
+                raise OSError("Error starting stream: AUDCLNT_E_UNSUPPORTED_FORMAT")
+            return StubStream()
+
+    monkeypatch.setitem(sys.modules, "sounddevice", StubSoundDeviceModule)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(WASAPICapture, "_last_working_input_device", None)
+
+    capture = WASAPICapture(device_index=17, loopback=False, config=CaptureConfig(channels=1))
+    asyncio.run(capture.start())
+
+    assert attempts[0] == 17
+    assert capture.device_name == "wasapi:3:microphone"

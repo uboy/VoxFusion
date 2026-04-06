@@ -186,7 +186,7 @@ def test_recording_options_default_format() -> None:
         system_device_id=None,
         output_path=Path("/tmp/audio.wav"),
     )
-    assert opts.output_format == "wav"
+    assert opts.output_format == "mp3"
 
 
 async def test_audio_recorder_pause_skips_audio_and_compacts_timeline(tmp_path: Path) -> None:

@@ -597,7 +597,12 @@ def _package_file_data_entry(package_name: str, filename: str) -> str | None:
 
 def _default_data_entries() -> list[str]:
     defaults_yaml = PROJECT_ROOT / "src" / "voxfusion" / "config" / "defaults.yaml"
+    gui_locales_dir = PROJECT_ROOT / "src" / "voxfusion" / "gui" / "locales"
     entries = [f"{defaults_yaml}{os.pathsep}voxfusion/config"]
+    if gui_locales_dir.exists():
+        entries.append(f"{gui_locales_dir}{os.pathsep}voxfusion/gui/locales")
+    else:
+        print("[deps] WARNING: GUI locales directory not found, frozen GUI may fall back to raw i18n keys")
     entries.extend(_customtkinter_data_entries())
     entries.extend(_pyannote_data_entries())
     for package_name in ("lightning_fabric", "pytorch_lightning"):

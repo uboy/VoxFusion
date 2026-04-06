@@ -179,6 +179,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
     "integration: marks tests that require models or external resources",
+    "hardware: marks tests that require real local audio devices and optional local model assets",
     "platform: marks tests that are platform-specific",
     "slow: marks tests that take > 5 seconds",
     "download: marks tests that actively download models from the internet",

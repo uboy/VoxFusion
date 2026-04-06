@@ -203,13 +203,13 @@ ASR_MODEL_CATALOG: tuple[ASRModelInfo, ...] = (
         id="gigaam-v3-e2e-ctc",
         name="GigaAM v3",
         engine="gigaam",
-        description="Russian-focused model — best accuracy for Russian file transcription.",
+        description="Russian-focused model with quality-first draft+finalize live mode and best Russian file transcription.",
         accuracy_score=0.85,
         speed_score=0.75,
         supported_languages=("ru",),
         supports_translation=False,
-        supports_live_capture=False,
-        recommended=True,
+        supports_live_capture=True,
+        recommended=False,
         requires_packages=(
             "transformers",
             "torch",
@@ -385,14 +385,20 @@ def get_default_model_id(*, for_live_capture: bool = False) -> str:
     """Return the best default model id for the current runtime environment.
 
     Specialty backends (gigaam, parakeet, breeze) are preferred over Whisper
-    when their packages are installed.  Within each group models are ranked by
-    accuracy_score descending.  For live capture only live-capable models are
-    considered (specialty backends are file-only, so the result is always a
-    Whisper model).
+    when their packages are installed. Within each group models are ranked by
+    accuracy_score descending. For live capture, Whisper remains the default
+    even if other live-capable backends exist, because it is the lowest-risk
+    baseline for interactive use.
     """
     available = get_available_model_catalog()
     if for_live_capture:
         available = tuple(m for m in available if m.supports_live_capture)
+        whisper_live = sorted(
+            (m for m in available if m.engine == "faster-whisper"),
+            key=lambda m: (-m.accuracy_score, m.id),
+        )
+        if whisper_live:
+            return whisper_live[0].id
     if not available:
         return "small"
 

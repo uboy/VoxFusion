@@ -52,6 +52,17 @@ translation:
     max_size: 10000
     ttl: 3600
 
+live_gigaam:
+  worker_count: 2
+  threads_per_worker: null
+  utterance_max_duration_ms: 5000
+  stop_finalize_mode: if_needed
+  finalize_left_context_ms: 700
+  finalize_right_context_ms: 300
+  max_retries: 1
+  queue_warning_jobs: 8
+  queue_hard_limit_jobs: 16
+
 output:
   format: json
   include_word_timestamps: false

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from voxfusion.gui.i18n import detect_system_gui_language
 from voxfusion.gui.i18n import load_gui_locale
 from voxfusion.gui.i18n import normalize_gui_language
+from voxfusion.gui.i18n import resolve_initial_gui_language
 from voxfusion.gui.main import TranscriptionGUI
 
 
@@ -25,3 +27,25 @@ def test_gui_quality_and_speaker_labels_accept_localized_values() -> None:
     assert gui._normalize_quality_label("Качество") == "Quality"  # noqa: SLF001
     assert gui._normalize_speaker_preset("2 говорящих") == "2"  # noqa: SLF001
 
+
+
+def test_detect_system_gui_language_uses_supported_locale_prefix(monkeypatch) -> None:
+    monkeypatch.setattr("voxfusion.gui.i18n.locale.getlocale", lambda: ("ru_RU", "UTF-8"))
+    monkeypatch.delenv("VOXFUSION_GUI_LANGUAGE", raising=False)
+    monkeypatch.delenv("LC_ALL", raising=False)
+    monkeypatch.delenv("LC_MESSAGES", raising=False)
+    monkeypatch.delenv("LANG", raising=False)
+
+    assert detect_system_gui_language() == "ru"
+
+
+def test_resolve_initial_gui_language_migrates_legacy_english_default(monkeypatch) -> None:
+    monkeypatch.setattr("voxfusion.gui.i18n.detect_system_gui_language", lambda: "ru")
+
+    assert resolve_initial_gui_language("en", None) == ("ru", False)
+
+
+def test_resolve_initial_gui_language_preserves_explicit_english(monkeypatch) -> None:
+    monkeypatch.setattr("voxfusion.gui.i18n.detect_system_gui_language", lambda: "ru")
+
+    assert resolve_initial_gui_language("en", "true") == ("en", True)

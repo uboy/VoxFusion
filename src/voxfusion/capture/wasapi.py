@@ -208,51 +208,51 @@ class WASAPICapture:
                 return
             candidate_indices.append(index)
 
-        if self._device_index is not None:
-            _add_candidate(self._device_index)
+        explicit_device_requested = self._device_index
+        if explicit_device_requested is not None:
+            _add_candidate(explicit_device_requested)
             if not candidate_indices:
                 raise AudioCaptureError(
-                    f"Device {self._device_index} is not a valid "
+                    f"Device {explicit_device_requested} is not a valid "
                     f"{'loopback' if self._loopback else 'input'} device."
                 )
-        else:
-            if self._loopback:
+
+        if self._loopback:
+            if explicit_device_requested is None:
                 _add_candidate(self.__class__._last_working_loopback_device)
-            else:
-                _add_candidate(self.__class__._last_working_input_device)
-            if self._loopback:
                 _add_candidate(default_device)
                 _add_candidate(wasapi_default_output)
                 for idx in wasapi_device_ids:
                     _add_candidate(idx)
-            else:
-                _add_candidate(wasapi_default_input)
-                _add_candidate(default_device)
+        else:
+            _add_candidate(self.__class__._last_working_input_device)
+            _add_candidate(wasapi_default_input)
+            _add_candidate(default_device)
 
-                ranked_candidates: list[tuple[int, int]] = []
-                for idx, dev in enumerate(all_devices):
-                    if int(dev.get("max_input_channels", 0)) <= 0:
-                        continue
-                    hostapi_name = _hostapi_name(idx).lower()
-                    # Prioritize likely-working APIs for modern Windows drivers.
-                    # WASAPI > MME/DS > others > WDM-KS (WDM-KS often returns
-                    # silence with modern Realtek/Intel drivers even though the
-                    # device reports valid input channels).
-                    if "wasapi" in hostapi_name:
-                        priority = 0
-                    elif "mme" in hostapi_name:
-                        priority = 1
-                    elif "directsound" in hostapi_name:
-                        priority = 2
-                    elif "wdm-ks" in hostapi_name:
-                        priority = 4
-                    else:
-                        priority = 3
-                    ranked_candidates.append((priority, idx))
+            ranked_candidates: list[tuple[int, int]] = []
+            for idx, dev in enumerate(all_devices):
+                if int(dev.get("max_input_channels", 0)) <= 0:
+                    continue
+                hostapi_name = _hostapi_name(idx).lower()
+                # Prioritize likely-working APIs for modern Windows drivers.
+                # WASAPI > MME/DS > others > WDM-KS (WDM-KS often returns
+                # silence with modern Realtek/Intel drivers even though the
+                # device reports valid input channels).
+                if "wasapi" in hostapi_name:
+                    priority = 0
+                elif "mme" in hostapi_name:
+                    priority = 1
+                elif "directsound" in hostapi_name:
+                    priority = 2
+                elif "wdm-ks" in hostapi_name:
+                    priority = 4
+                else:
+                    priority = 3
+                ranked_candidates.append((priority, idx))
 
-                ranked_candidates.sort(key=lambda item: (item[0], item[1]))
-                for _priority, idx in ranked_candidates:
-                    _add_candidate(idx)
+            ranked_candidates.sort(key=lambda item: (item[0], item[1]))
+            for _priority, idx in ranked_candidates:
+                _add_candidate(idx)
 
         if not candidate_indices:
             mode = "loopback output" if self._loopback else "input"
@@ -375,6 +375,18 @@ class WASAPICapture:
                             # Only remember mic devices — not Stereo Mix or other
                             # virtual inputs used as system audio sources.
                             self.__class__._last_working_input_device = device_index
+                        if (
+                            explicit_device_requested is not None
+                            and device_index != explicit_device_requested
+                            and not self._loopback
+                        ):
+                            log.warning(
+                                "wasapi.explicit_device_fallback",
+                                requested_device_index=explicit_device_requested,
+                                selected_device_index=device_index,
+                                requested_device=sd.query_devices(explicit_device_requested).get("name", str(explicit_device_requested)),
+                                selected_device=dev.get("name", str(device_index)),
+                            )
                         log.info(
                             "wasapi.started",
                             device=dev.get("name", str(device_index)),
@@ -1082,18 +1094,29 @@ class PyAudioLoopbackCapture:
     async def stream(self, chunk_duration_ms: int = 500) -> AsyncIterator[AudioChunk]:
         """Yield audio chunks as they arrive."""
         while self._active:
+            read_task = asyncio.create_task(self.read_chunk(chunk_duration_ms))
             try:
                 chunk = await asyncio.wait_for(
-                    self.read_chunk(chunk_duration_ms),
+                    read_task,
                     timeout=chunk_duration_ms / 1000 * 3,
                 )
                 yield chunk
             except asyncio.TimeoutError:
+                if not read_task.done():
+                    read_task.cancel()
+                    with suppress(asyncio.CancelledError, AudioCaptureError):
+                        await read_task
                 if self._active:
                     log.debug("pyaudio_loopback.stream_timeout")
                     continue
                 break
+            except asyncio.CancelledError:
+                if not read_task.done():
+                    read_task.cancel()
+                    with suppress(asyncio.CancelledError, AudioCaptureError):
+                        await read_task
+                raise
             except AudioCaptureError as exc:
-                if not self._active:
+                if str(exc) == "PyAudioLoopbackCapture is not active" and not self._active:
                     break
                 raise
