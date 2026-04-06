@@ -45,6 +45,8 @@ def test_gui_settings_roundtrip(tmp_path: Path) -> None:
         {
             "llm_url": "http://localhost:3000",
             "llm_model": "qwen",
+            "live_model": "large-v3",
+            "live_language": "English",
             "file_diarization_strategy": "auto",
             "file_min_speakers": "2",
         },
@@ -53,6 +55,8 @@ def test_gui_settings_roundtrip(tmp_path: Path) -> None:
     loaded = _load_gui_settings(path)
     assert loaded["llm_url"] == "http://localhost:3000"
     assert loaded["llm_model"] == "qwen"
+    assert loaded["live_model"] == "large-v3"
+    assert loaded["live_language"] == "English"
     assert loaded["file_diarization_strategy"] == "auto"
     assert loaded["file_min_speakers"] == "2"
 

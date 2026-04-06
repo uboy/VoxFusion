@@ -107,7 +107,7 @@ class VadChunker:
             if should_emit:
                 combined = np.concatenate(pieces)
                 ts_end = (ts_start or 0.0) + acc_frames / last_sample_rate
-                log.debug(
+                log.info(
                     "vad_chunker.emit",
                     source=last_source,
                     duration_ms=round(acc_frames * 1000 / last_sample_rate),

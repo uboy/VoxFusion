@@ -66,6 +66,34 @@ class StreamingPipeline:
 
     def _emit(self, event: PipelineEvent) -> None:
         self._on_event(event)
+        match event.event_type:
+            case EventType.PIPELINE_STARTED:
+                log.info(
+                    "streaming.started",
+                    queue_size=self._queue_size,
+                    lossy_mode=self._config.capture.lossy_mode,
+                )
+            case EventType.STAGE_STARTED:
+                log.info(
+                    "streaming.stage_started",
+                    stage=event.stage.value if event.stage is not None else None,
+                )
+            case EventType.STAGE_COMPLETED:
+                log.info(
+                    "streaming.stage_completed",
+                    stage=event.stage.value if event.stage is not None else None,
+                )
+            case EventType.STAGE_FAILED:
+                log.error(
+                    "streaming.stage_failed",
+                    stage=event.stage.value if event.stage is not None else None,
+                    message=event.message,
+                    data=event.data,
+                )
+            case EventType.PIPELINE_FAILED:
+                log.error("streaming.failed", message=event.message, data=event.data)
+            case _:
+                return
 
     def get_stats(self) -> dict[str, int]:
         """Return current pipeline stats: queue depths, in-flight ASR, drop count."""
@@ -211,6 +239,12 @@ class StreamingPipeline:
             if item is _SENTINEL:
                 break
             translated_list: list[TranslatedSegment] = item  # type: ignore[assignment]
+            log.info(
+                "streaming.output_batch",
+                segments=len(translated_list),
+                first_speaker=translated_list[0].diarized.speaker_id if translated_list else None,
+                first_start_s=round(translated_list[0].diarized.segment.start_time, 2) if translated_list else None,
+            )
             if on_segments:
                 on_segments(translated_list)
 

@@ -1,5 +1,7 @@
 """Pydantic v2 configuration models for all VoxFusion settings."""
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -118,6 +120,20 @@ class TranslationConfig(BaseModel):
     cache: TranslationCacheConfig = Field(default_factory=TranslationCacheConfig)
 
 
+class LiveGigaAMConfig(BaseModel):
+    """Quality-first live GigaAM settings."""
+
+    worker_count: int = Field(default=2, ge=1, le=8)
+    threads_per_worker: int | None = Field(default=None, ge=1, le=64)
+    utterance_max_duration_ms: int = Field(default=5000, ge=500, le=15000)
+    stop_finalize_mode: Literal["if_needed", "always"] = "if_needed"
+    finalize_left_context_ms: int = Field(default=700, ge=0, le=5000)
+    finalize_right_context_ms: int = Field(default=300, ge=0, le=5000)
+    max_retries: int = Field(default=1, ge=0, le=3)
+    queue_warning_jobs: int = Field(default=8, ge=0, le=128)
+    queue_hard_limit_jobs: int = Field(default=16, ge=0, le=512)
+
+
 class OutputConfig(BaseModel):
     """Output formatting configuration."""
 
@@ -157,6 +173,7 @@ class PipelineConfig(BaseSettings):
     asr: ASRConfig = Field(default_factory=ASRConfig)
     diarization: DiarizationConfig = Field(default_factory=DiarizationConfig)
     translation: TranslationConfig = Field(default_factory=TranslationConfig)
+    live_gigaam: LiveGigaAMConfig = Field(default_factory=LiveGigaAMConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     log_level: str = "INFO"

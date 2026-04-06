@@ -1248,3 +1248,563 @@
   - noteworthy warnings during build:
     - build script reported `python311.dll` was not found next to `venv\Scripts\python.exe` for the optional root-level copy step, but the DLL is present under bundle `_internal/`, so the produced bundle is not missing it.
     - PyInstaller emitted environment warnings about `torchcodec`, `nvcuda.dll`, and `tbb12.dll`; the build still finished successfully. These are build-environment/runtime capability warnings, not fatal packaging failures in this pass.
+- 2026-04-01 GUI locale packaging fix:
+  - user reported raw i18n keys like `live.tab`, `file.tab`, `header.settings` in a clean binary archive.
+  - root cause confirmed:
+    - the previous GUI bundle did not contain `voxfusion/gui/locales/*.json`.
+    - `scripts/build_binaries.py` only bundled `defaults.yaml`, pyannote telemetry, optional package metadata, and ffmpeg files.
+  - code changes:
+    - `scripts/build_binaries.py`: `_default_data_entries()` now includes `src/voxfusion/gui/locales -> voxfusion/gui/locales` in PyInstaller `--add-data`.
+    - `tests/unit/test_build_binaries_pyannote_bundle.py`: added regression coverage that `GUI locales` are included in default data entries.
+  - verification:
+    - `PYTHONPATH=src python -m py_compile scripts\build_binaries.py tests\unit\test_build_binaries.py tests\unit\test_build_binaries_pyannote_bundle.py` -> pass
+    - `PYTHONPATH=src python -m pytest tests\unit\test_build_binaries.py tests\unit\test_build_binaries_pyannote_bundle.py tests\unit\test_build_binaries_is_installed.py -q` -> pass (`10 passed`)
+    - rebuilt GUI artifact:
+      - `.\venv\Scripts\python.exe scripts\build_binaries.py --target gui --backends all --skip-install` -> pass
+    - confirmed locale JSON files in rebuilt outputs:
+      - `dist/binaries/voxfusion-gui/_internal/voxfusion/gui/locales/en.json`
+      - `dist/binaries/voxfusion-gui/_internal/voxfusion/gui/locales/ru.json`
+      - `dist/binaries/voxfusion-gui/_internal/voxfusion/gui/locales/zh.json`
+      - ZIP contents also include those three files under `voxfusion-gui/_internal/voxfusion/gui/locales/`
+- 2026-04-02 LLM/Open WebUI logging audit bootstrap:
+  - task classified best-effort as `repo_change / non_trivial`; `policy/task-routing-matrix.json` and `policy/team-lead-orchestrator.md` are missing, so execution proceeds with best-effort orchestration.
+  - startup ritual revalidated against local runtime files.
+  - subscription tracking files are missing:
+    - `configs/subscription-limits.json`
+    - `coordination/state/session-usage.json`
+  - confirmed current blind spot:
+    - `src/voxfusion/llm/client.py` logs only `llm.stream.start` and `llm.stream.done`.
+    - `src/voxfusion/gui/runtime.py` LLM worker has no lifecycle/error logs.
+    - `src/voxfusion/gui/main.py` does not log model-refresh start/success/failure or summarize start/error/finish.
+    - `src/voxfusion/logging.py` normal mode currently drops all `llm.*` info events.
+  - live endpoint probe findings for user-provided Open WebUI:
+    - `GET /api/models` with the provided bearer token returns HTTP 200 and a model list, so URL and key are valid.
+    - configured default model `qwen2.5:32b` is not present there; direct chat request returned HTTP 400 `Model not found`.
+    - `llama3.2:3b` answered successfully.
+    - larger models such as `qwen3:32b` and `gpt-oss:120b` stalled until timeout in the probe environment.
+  - next implementation slice:
+    - add structured model-fetch and request-error logs,
+    - surface key LLM events in normal mode,
+    - add focused regression tests,
+    - then report whether the user's `503` is likely backend/model overload vs config mismatch.
+- 2026-04-02 LLM/Open WebUI logging audit checkpoint:
+  - implemented structured LLM lifecycle logging in:
+    - `src/voxfusion/llm/client.py`
+    - `src/voxfusion/gui/main.py`
+    - `src/voxfusion/logging.py`
+  - runtime behavior changes:
+    - model refresh now logs start/failure/success and auto-selection when the saved/default model is absent from the current Open WebUI catalog.
+    - summarize now logs request start, transcript size, prompt name, finish state, and GUI-surfaced errors.
+    - Open WebUI client now logs model-list start/done/failure and request start/http_error/connect_error/timeout/done with safe metadata only; API keys are never logged.
+    - normal log mode now keeps `llm.*` and `gui.llm_*` info events visible.
+  - focused regression coverage added in new files (existing tests untouched):
+    - `tests/unit/test_llm_client_logging.py`
+    - `tests/unit/test_logging_llm_modes.py`
+    - `tests/unit/test_gui_llm_logging.py`
+  - verification:
+    - `python -m py_compile src\voxfusion\llm\client.py src\voxfusion\logging.py src\voxfusion\gui\main.py tests\unit\test_llm_client_logging.py tests\unit\test_logging_llm_modes.py tests\unit\test_gui_llm_logging.py` -> pass
+    - `python -m pytest tests\unit\test_llm_client_logging.py tests\unit\test_logging_llm_modes.py tests\unit\test_gui_llm_logging.py tests\unit\test_llm_client.py tests\unit\test_logging_modes.py tests\unit\test_gui_detect_logging.py -q` -> pass (`15 passed`)
+    - `git diff --check -- README.md src/voxfusion/gui/main.py src/voxfusion/llm/client.py src/voxfusion/logging.py tests/unit/test_llm_client_logging.py tests/unit/test_logging_llm_modes.py tests/unit/test_gui_llm_logging.py` -> pass with line-ending warnings only, no formatting errors
+  - audit conclusion on log coverage:
+    - file transcription / diarization paths remain well covered by existing `gui.file_*`, `batch.*`, `diarization.*`, and `orchestrator.*` events.
+    - the major blind spot was the Open WebUI / LLM path; that is now covered in both normal and debug modes.
+    - remaining lighter gaps still not expressed as structured logs:
+      - `RecordingWorker` lifecycle in `src/voxfusion/gui/runtime.py`
+      - GUI model download helper `_download_file_model()` still uses status text / appended log lines instead of structured `log.*` events
+  - root-cause conclusion for the user-reported remote issue:
+    - the provided Open WebUI URL and bearer token are valid enough to fetch `/api/models`.
+    - the default `qwen2.5:32b` is not present on that server.
+    - small models respond, while heavier models stall/time out in the probe environment.
+    - likely cause of the user's reported `503`: backend/model overload or upstream unavailability for the chosen heavy model, not an invalid key.
+- 2026-04-02 GUI LLM probe button checkpoint:
+  - added a dedicated GUI `Test Model` action that sends a tiny real completion request to the currently selected Open WebUI model instead of only refreshing `/api/models`.
+  - code changes:
+    - `src/voxfusion/gui/main.py`:
+      - imports `complete` from the LLM client,
+      - adds `_LLM_PROBE_TIMEOUT_READ` and `_LLM_PROBE_MESSAGES`,
+      - wires `_llm_probe_running` state,
+      - adds the `Test Model` button to the LLM toolbar,
+      - adds `_probe_llm_model()` and `_on_llm_probe_finished()` with GUI logs:
+        - `gui.llm_probe_requested`
+        - `gui.llm_probe_succeeded`
+        - `gui.llm_probe_failed`
+      - disables the probe button while model-refresh, file-transcription, or LLM streaming work is already running.
+    - locale strings updated in:
+      - `src/voxfusion/gui/locales/en.json`
+      - `src/voxfusion/gui/locales/ru.json`
+      - `src/voxfusion/gui/locales/zh.json`
+    - `README.md` updated to mention the new probe button.
+    - `tests/unit/test_gui_llm_logging.py` expanded with probe success/failure coverage.
+  - verification:
+    - `python -m py_compile src\voxfusion\gui\main.py src\voxfusion\gui\locales\en.json src\voxfusion\gui\locales\ru.json src\voxfusion\gui\locales\zh.json tests\unit\test_gui_llm_logging.py` -> pass
+    - `python -m pytest tests\unit\test_gui_llm_logging.py tests\unit\test_llm_client_logging.py tests\unit\test_logging_llm_modes.py tests\unit\test_llm_client.py tests\unit\test_logging_modes.py tests\unit\test_gui_detect_logging.py -q` -> pass (`17 passed`)
+    - `git diff --check -- README.md src/voxfusion/gui/main.py src/voxfusion/gui/locales/en.json src/voxfusion/gui/locales/ru.json src/voxfusion/gui/locales/zh.json tests/unit/test_gui_llm_logging.py` -> pass
+  - practical outcome:
+    - the GUI can now distinguish `models endpoint works` from `selected model can answer a real request`.
+    - this directly addresses the observed case where model refresh alone was not enough to explain a backend-side `503`.
+- 2026-04-02 transcript import + live Open WebUI 503 checkpoint:
+  - user reproduced the issue in the GUI after the probe-button change:
+    - `GET /api/models` -> HTTP 503
+    - `POST /api/chat/completions` for `qwen2.5:32b` -> HTTP 503
+  - conclusion refined from the new live logs:
+    - the GUI button works and the client now logs the failure precisely;
+    - the current problem is on the remote Open WebUI / upstream backend side, not in local key parsing or the button wiring.
+  - implemented transcript-import workflow for LLM post-processing in:
+    - `src/voxfusion/gui/main.py`
+    - `src/voxfusion/gui/locales/en.json`
+    - `src/voxfusion/gui/locales/ru.json`
+    - `src/voxfusion/gui/locales/zh.json`
+  - behavior:
+    - new file-results button loads an existing transcript `.txt` into the table without rerunning ASR;
+    - preserves VoxFusion-style `[HH:MM:SS] [SPEAKER] text` rows when present;
+    - falls back to plain text line import with synthetic timestamps/speaker labels;
+    - clears prior LLM output and refreshes the file workflow so the imported transcript can be sent to Open WebUI immediately.
+  - focused verification:
+    - `python -m py_compile src\voxfusion\gui\main.py tests\unit\test_gui_transcript_import.py` -> pass
+    - `python -c "import json, pathlib; [json.loads(pathlib.Path(p).read_text(encoding='utf-8')) for p in ['src/voxfusion/gui/locales/en.json','src/voxfusion/gui/locales/ru.json','src/voxfusion/gui/locales/zh.json']]"` -> pass
+    - `python -m pytest tests\unit\test_gui_transcript_import.py tests\unit\test_gui_llm_logging.py tests\unit\test_llm_client_logging.py tests\unit\test_logging_llm_modes.py tests\unit\test_llm_client.py tests\unit\test_logging_modes.py tests\unit\test_gui_detect_logging.py tests\unit\test_gui_flow.py -q` -> pass (`34 passed`)
+    - `git diff --check -- README.md src/voxfusion/gui/main.py src/voxfusion/gui/locales/en.json src/voxfusion/gui/locales/ru.json src/voxfusion/gui/locales/zh.json tests/unit/test_gui_llm_logging.py tests/unit/test_gui_transcript_import.py` -> pass
+- 2026-04-02 Open WebUI model-fetch retry fix checkpoint:
+  - reproduced the live server behavior from this machine:
+    - direct probes now return `200` on `/api/models`;
+    - the advertised model ids are currently `arena-model`, `ohoswiki`, `qwen2.5-7b`;
+    - `qwen2.5:32b` returns `400 Model not found` when the backend is healthy.
+  - identified a real client-side bug in `src/voxfusion/llm/client.py`:
+    - `fetch_models()` failed immediately on the first non-404 response from `/api/models`;
+    - transient `503` responses therefore surfaced straight to the GUI with no retry, even though a second attempt could succeed moments later.
+  - implemented fix:
+    - added bounded retries for transient model-fetch statuses `429/502/503/504` with short backoff;
+    - kept `401` as immediate failure;
+    - kept structured logs for retry and final failure/success.
+  - focused verification:
+    - `python -m py_compile src\voxfusion\llm\client.py tests\unit\test_llm_client_logging.py` -> pass
+    - `python -m pytest tests\unit\test_llm_client_logging.py tests\unit\test_llm_client.py tests\unit\test_logging_llm_modes.py tests\unit\test_gui_llm_logging.py -q` -> pass (`13 passed`)
+    - `git diff --check -- src/voxfusion/llm/client.py tests/unit/test_llm_client_logging.py` -> clean except line-ending warning from git on Windows
+- 2026-04-02 Open WebUI cached model-list fallback checkpoint:
+  - after the retry fix, the user still reproduced repeated live `503` responses from both `/api/models` and `/api/tags` in the GUI.
+  - direct reproduction outside the sandbox with the exact saved GUI settings (`C:\Users\devl\.voxfusion\gui_settings.json`) succeeded and returned the current remote model list:
+    - `arena-model`
+    - `ohoswiki`
+    - `qwen2.5-7b`
+  - conclusion:
+    - the client-side retry bug was real and is fixed;
+    - the remote Open WebUI is still intermittently unavailable, so the GUI also needs a local last-known-good model cache to remain usable during flaps.
+  - implemented GUI fallback in `src/voxfusion/gui/main.py`:
+    - persist the last successful model list in GUI settings under a JSON cache key;
+    - reuse that list when refresh fails;
+    - auto-select a valid cached model when the saved one is no longer present;
+    - surface `gui.llm_models_loaded_from_cache` plus a clear status message.
+  - locale/docs updates:
+    - `src/voxfusion/gui/locales/en.json`
+    - `src/voxfusion/gui/locales/ru.json`
+    - `src/voxfusion/gui/locales/zh.json`
+    - `README.md`
+  - focused verification:
+    - `python -m py_compile src\voxfusion\gui\main.py tests\unit\test_gui_llm_logging.py` -> pass
+    - `python -m pytest tests\unit\test_gui_llm_logging.py tests\unit\test_llm_client_logging.py tests\unit\test_llm_client.py tests\unit\test_logging_llm_modes.py -q` -> pass (`14 passed`)
+    - `git diff --check -- README.md src/voxfusion/gui/main.py src/voxfusion/gui/locales/en.json src/voxfusion/gui/locales/ru.json src/voxfusion/gui/locales/zh.json tests/unit/test_gui_llm_logging.py` -> clean except Windows line-ending warnings
+- 2026-04-02 transcript import extension checkpoint (.srt/.md):
+  - extended `src/voxfusion/gui/main.py` transcript loading to accept:
+    - `.txt` (existing path)
+    - `.srt` with dedicated subtitle-block parsing and start timestamps
+    - `.md` / `.markdown` via the existing line-based transcript fallback
+  - implementation details:
+    - added `_IMPORTED_SRT_TIME_RANGE_RE` and `_IMPORTED_SRT_SPEAKER_RE`
+    - added `_parse_srt_rows(text)`
+    - updated the import file picker to expose `.txt`, `.srt`, `.md`, `.markdown`
+    - `.srt` rows keep `HH:MM:SS` start times and optional `[SPEAKER] ...` labels when present inside subtitle text
+  - locale/docs updates:
+    - `src/voxfusion/gui/locales/en.json`
+    - `src/voxfusion/gui/locales/ru.json`
+    - `src/voxfusion/gui/locales/zh.json`
+    - `README.md`
+  - focused regression coverage added in `tests/unit/test_gui_transcript_import.py` for:
+    - direct SRT row parsing
+    - Markdown file import fallback
+    - SRT file import into the results table
+  - verification:
+    - `python -m py_compile src\voxfusion\gui\main.py tests\unit\test_gui_transcript_import.py` -> pass
+    - `python -m pytest tests\unit\test_gui_transcript_import.py tests\unit\test_gui_llm_logging.py tests\unit\test_llm_client_logging.py tests\unit\test_llm_client.py tests\unit\test_logging_llm_modes.py tests\unit\test_gui_flow.py -q` -> pass (`34 passed`)
+    - `git diff --check -- README.md src/voxfusion/gui/main.py src/voxfusion/gui/locales/en.json src/voxfusion/gui/locales/ru.json src/voxfusion/gui/locales/zh.json tests/unit/test_gui_transcript_import.py` -> clean except Windows line-ending warnings
+- 2026-04-02 GUI startup language checkpoint:
+  - found two independent causes for the English startup UI:
+    - hardcoded product default in `src/voxfusion/gui/i18n.py` was `en`;
+    - saved settings already contained `"gui_language": "en"`, so every new window kept returning to English.
+  - implemented fix:
+    - added system-language detection and startup resolution helpers in `src/voxfusion/gui/i18n.py`;
+    - introduced `gui_language_explicit` persistence in `src/voxfusion/gui/main.py` so an old auto-saved default is no longer treated as an explicit user choice;
+    - manual language selection now marks the value explicit.
+  - focused verification:
+    - `python -m py_compile src\voxfusion\gui\i18n.py src\voxfusion\gui\main.py tests\unit\test_gui_i18n_locale.py` -> pass
+    - `python -m pytest tests\unit\test_gui_i18n_locale.py tests\unit\test_gui_transcript_import.py tests\unit\test_gui_llm_logging.py -q` -> pass (`18 passed`)
+  - live environment note:
+    - direct WinAPI probe on this machine reports Windows UI language `en_US` (`GetUserDefaultUILanguage()` -> `1033`), so the latest auto-detection still resolves to English here.
+    - if the user wants Russian regardless of OS UI language, that now needs to be an explicit saved GUI choice rather than inferred startup behavior.
+- 2026-04-02 long-transcript LLM chunking checkpoint:
+  - user hit Open WebUI `HTTP 400` because the selected model/backend only accepted `2048` tokens while imported transcript input exceeded that limit.
+  - implemented hierarchical chunked summarization in `src/voxfusion/gui/runtime.py`:
+    - estimate prompt size before request;
+    - split long transcript text into chunk-sized inputs;
+    - summarize each chunk with `complete(...)`;
+    - recursively merge partial outputs with `build_merge_messages(...)` until one final answer remains;
+    - if a normal streaming request still returns a context-length error, retry automatically via the chunked path and log `llm.chunking.context_retry`.
+  - added prompt helpers in `src/voxfusion/llm/prompts.py`:
+    - `build_chunk_messages(...)`
+    - `build_merge_messages(...)`
+  - added focused tests:
+    - `tests/unit/test_llm_prompts.py`
+    - `tests/unit/test_gui_llm_chunking.py`
+  - verification:
+    - `python -m py_compile src\voxfusion\llm\prompts.py src\voxfusion\gui\runtime.py tests\unit\test_llm_prompts.py tests\unit\test_gui_llm_chunking.py` -> pass
+    - `python -m pytest tests\unit\test_llm_prompts.py tests\unit\test_gui_llm_chunking.py tests\unit\test_gui_llm_logging.py tests\unit\test_llm_client_logging.py tests\unit\test_llm_client.py -q` -> pass (`16 passed`)
+    - `git diff --check -- src/voxfusion/llm/prompts.py src/voxfusion/gui/runtime.py tests/unit/test_llm_prompts.py tests/unit/test_gui_llm_chunking.py README.md` -> clean apart from existing LF->CRLF warnings on tracked files.
+  - practical behavior note:
+    - short transcripts still use streaming;
+    - long transcripts now return the merged final summary as one final text block after chunk processing rather than token-by-token streaming.
+- 2026-04-02 LLM model-context detection checkpoint:
+  - goal: avoid unnecessary chunking on larger-context models and expose a manual override for servers that do not publish context metadata.
+  - implemented in `src/voxfusion/llm/client.py`:
+    - `LLMModelDescriptor`
+    - `extract_model_catalog(payload)`
+    - `fetch_model_catalog(...)`
+    - recursive parsing of common metadata keys such as `context_length`, `context_window`, `num_ctx`, nested `details`/`metadata`/`info` containers, including simple `8k` string parsing.
+    - `fetch_models(...)` remains as a compatibility wrapper returning plain ids.
+  - implemented in `src/voxfusion/gui/main.py`:
+    - cached per-model context metadata in GUI settings;
+    - manual `Context` override field in the LLM panel;
+    - hint label showing whether the current limit comes from manual override, model metadata, environment override, or fallback default;
+    - resolved context is logged in `gui.llm_summarize_requested` and passed into `LLMWorker`.
+  - implemented in `src/voxfusion/gui/runtime.py`:
+    - `LLMWorker` now accepts `context_limit_tokens` and prefers it over env/default fallback when planning chunking.
+  - locale/docs updates:
+    - `src/voxfusion/gui/locales/en.json`
+    - `src/voxfusion/gui/locales/ru.json`
+    - `src/voxfusion/gui/locales/zh.json`
+    - `README.md`
+  - focused verification:
+    - `python -m py_compile src\voxfusion\llm\client.py src\voxfusion\gui\main.py src\voxfusion\gui\runtime.py tests\unit\test_llm_client.py tests\unit\test_gui_llm_logging.py tests\unit\test_gui_llm_chunking.py` -> pass
+    - `python -m pytest tests\unit\test_llm_client.py tests\unit\test_llm_client_logging.py tests\unit\test_gui_llm_logging.py tests\unit\test_gui_llm_chunking.py tests\unit\test_llm_prompts.py -q` -> pass (`19 passed`)
+    - `git diff --check -- src/voxfusion/llm/client.py src/voxfusion/gui/main.py src/voxfusion/gui/runtime.py src/voxfusion/gui/locales/en.json src/voxfusion/gui/locales/ru.json src/voxfusion/gui/locales/zh.json tests/unit/test_llm_client.py tests/unit/test_gui_llm_logging.py tests/unit/test_gui_llm_chunking.py README.md` -> clean.
+- 2026-04-02 live capture / WASAPI fallback checkpoint:
+  - reproduced the core defect from user logs in code inspection:
+    - when a concrete microphone device id like `sd:17` is selected, `WASAPICapture.start()` only tries that device and never falls back to other input devices;
+    - this matches the log pattern with repeated format failures for one headset device and no successful stream start on the microphone side.
+  - implemented in `src/voxfusion/capture/wasapi.py`:
+    - explicit microphone devices are still tried first;
+    - if they fail, the capture path now continues to other input candidates (last working, WASAPI default input, system default input, then ranked input devices);
+    - successful fallback logs `wasapi.explicit_device_fallback` with requested vs selected device.
+  - implemented in `src/voxfusion/gui/main.py`:
+    - added `gui.live_capture_requested` with model/language/translate/source/microphone/system device ids.
+  - implemented in `src/voxfusion/gui/runtime.py`:
+    - added `gui.live_capture_started` with active source names/count after startup;
+    - corrected partial-start status text so one surviving source is reported as `microphone only` or `system audio only` instead of the previous hardcoded wrong hint.
+  - focused tests:
+    - `tests/unit/test_windows_audio.py` now covers explicit microphone fallback to another input device;
+    - `tests/unit/test_gui_live_logging.py` covers `gui.live_capture_requested` emission.
+  - verification:
+    - `python -m py_compile src\voxfusion\capture\wasapi.py src\voxfusion\gui\main.py src\voxfusion\gui\runtime.py tests\unit\test_windows_audio.py tests\unit\test_gui_live_logging.py` -> pass
+    - `python -m pytest tests\unit\test_windows_audio.py tests\unit\test_gui_live_logging.py tests\unit\test_gui_detect_logging.py tests\unit\test_gui_i18n_locale.py -q` -> pass (`16 passed`)
+    - `git diff --check -- src/voxfusion/capture/wasapi.py src/voxfusion/gui/main.py src/voxfusion/gui/runtime.py tests/unit/test_windows_audio.py tests/unit/test_gui_live_logging.py` -> clean.
+- 2026-04-02 new multi-agent workstream started on branch `feature/live-gigaam-design-and-live-fix`:
+  - user requested two parallel tracks:
+    1. design-only architecture for live GigaAM transcription using chunked processing / multi-core scheduling;
+    2. parallel fix for current live transcription path where capture/model load starts fail or user sees no transcript and weak diagnostics.
+  - current branch/worktree note:
+    - repo had existing uncommitted changes on `main`; switched HEAD to a dedicated feature branch without resets so `main` branch history stays untouched.
+  - delegated agents:
+    - `Archimedes` -> write `.scratchpad/research-live-gigaam.md` and `.scratchpad/plan-live-gigaam.md` with critical design review only.
+    - `Anscombe` -> investigate/fix current live capture / live transcription / HF model-load diagnostics in production code and tests.
+  - local orchestration work in progress:
+    - collected current GigaAM/file-only/live-pipeline code context from `src/voxfusion/asr/gigaam_engine.py`, `src/voxfusion/asr_catalog.py`, `src/voxfusion/asr/streaming.py`, and related capture/gui paths.
+
+- 2026-04-02 orchestration checkpoint:
+  - live-fix sub-agent reported current root cause: normal GUI log mode hides key sr.*, streaming.*, wasapi.*, and pyaudio_loopback.* events, so live transcription looks stalled after gui.live_capture_started; separate shutdown defect still surfaces PyAudioLoopbackCapture is not active as unhandled exception.
+  - sub-agent only partially changed src/voxfusion/logging.py; no verification yet; remaining work still includes pipeline/runtime logging, loopback shutdown handling, tests.
+  - design sub-agent has not reported yet; .scratchpad/research-live-gigaam.md already exists and needs review/integration once the agent responds.
+
+[2026-04-02 18:10 MSK] Live GigaAM design artifacts drafted: research completed, plan completed, source-grounded refs added for current GigaAM batch chunking and StreamingASR overlap/dedup comparison. No production files changed.
+
+- 2026-04-03 live diagnostics fix checkpoint:
+  - completed live-fix on branch eature/live-gigaam-design-and-live-fix for the current no-transcript/no-logs issue after gui.live_capture_started.
+  - StreamingPipeline now emits structured streaming.started, streaming.stage_started, and streaming.output_batch logs; VadChunker emits ad_chunker.emit at info level; normal log mode now keeps mixer.* and ad_chunker.* events.
+  - CaptureWorker now logs recurring gui.live_waiting_for_segments heartbeat with pipeline stats when capture is active but no transcript segments have appeared yet.
+  - AudioMixer.stop() now awaits/cancels source tasks cleanly; PyAudioLoopbackCapture.stream() now owns/cancels its read task explicitly to avoid the previous shutdown noise around PyAudioLoopbackCapture is not active.
+  - verification completed: python -m py_compile ... passed; focused pytest suite passed (20 passed); git diff --check clean apart from line-ending warnings.
+
+- 2026-04-03 live GigaAM implementation resumed:
+  - task classified as `repo_change / non_trivial`; continuing on branch `feature/live-gigaam-design-and-live-fix`.
+  - startup ritual re-run:
+    - `coordination/tasks.jsonl` resumed;
+    - `coordination/state/codex.md` resumed;
+    - warm/cold policy files reloaded;
+    - project policy references `policy/task-routing-matrix.json`, `policy/team-lead-orchestrator.md`, `configs/subscription-limits.json`, and `session-usage.json`, but these files are absent in the repo.
+  - current implementation checkpoint:
+    - new `src/voxfusion/live_gigaam/` package exists with spool / dispatcher / commit / session controller / worker helpers;
+    - GUI runtime has a partial live GigaAM branch via `CaptureWorker._run_live_gigaam_async(...)`;
+    - GUI main has draft replacement callback wiring;
+    - CLI `capture` path is still old faster-whisper-only and must be integrated.
+  - missing pieces identified before completion:
+    - locale key `live.status.translate_unsupported` is referenced but absent in locale JSON files;
+    - no dedicated tests yet for live_gigaam spool/commit/dispatcher/session behavior;
+    - documentation contract still needs runtime docs updated for live GigaAM.
+  - independent parallel review agents launched:
+    - `Lovelace` (`019d52b6-1c86-79a0-955f-5fc0ce17a3e9`) for code/design review of current live GigaAM implementation.
+    - `Sagan` (`019d52b6-1cf3-7783-958b-46ea1218df05`) for test-plan / test-gap review against feature requirements.
+
+- 2026-04-03 live GigaAM implementation checkpoint:
+  - completed product/runtime changes:
+    - `src/voxfusion/live_gigaam/` now provides spool, worker, dispatcher, ordered committer, and session controller;
+    - GUI `CaptureWorker` routes `engine == "gigaam"` into `LiveGigaAMSessionController`;
+    - GUI transcript draft rows are replaced with finalized rows after stop;
+    - CLI `voxfusion capture --model gigaam-v3-e2e-ctc` now uses the same draft/finalize semantics and saves finalized output;
+    - catalog/config/defaults/locale wiring updated for live-capable GigaAM and no-live-translation messaging.
+  - correctness fixes applied after independent review + local verification:
+    - finalize fallback now preserves draft text instead of dropping the utterance;
+    - stop-time finalization now waits for draft jobs/collector before rebuilding the final transcript;
+    - finalize context is bounded inside same-source silence gaps to reduce adjacent-speech bleed;
+    - GUI live timestamps for GigaAM are anchored to the actual capture start callback, not pre-warmup time;
+    - `GigaAMCTCEngine.load_model()` now tolerates missing `torch` import in fake-module tests by skipping the TorchScript fallback path.
+  - docs contract satisfied:
+    - `README.md`
+    - `SPEC.md`
+    - `docs/REQUIREMENTS_TRACEABILITY.md`
+    - `docs/design/live-gigaam-v1.md`
+  - focused verification completed:
+    - `python -m py_compile src\voxfusion\asr\gigaam_engine.py src\voxfusion\cli\capture_cmd.py src\voxfusion\gui\runtime.py src\voxfusion\live_gigaam\__init__.py src\voxfusion\live_gigaam\commit.py src\voxfusion\live_gigaam\dispatcher.py src\voxfusion\live_gigaam\session.py src\voxfusion\live_gigaam\spool.py src\voxfusion\live_gigaam\types.py src\voxfusion\live_gigaam\worker.py tests\unit\test_capture_cli.py tests\unit\test_live_gigaam_cli.py tests\unit\test_live_gigaam_catalog.py tests\unit\test_live_gigaam_commit.py tests\unit\test_live_gigaam_dispatcher.py tests\unit\test_live_gigaam_gui_runtime.py tests\unit\test_live_gigaam_session.py tests\unit\test_live_gigaam_spool.py` -> pass
+    - `python -m pytest tests\unit\test_capture_cli.py tests\unit\test_live_gigaam_cli.py tests\unit\test_live_gigaam_catalog.py tests\unit\test_live_gigaam_commit.py tests\unit\test_live_gigaam_dispatcher.py tests\unit\test_live_gigaam_gui_runtime.py tests\unit\test_live_gigaam_session.py tests\unit\test_live_gigaam_spool.py tests\unit\test_gui_live_runtime.py tests\unit\test_gui_live_logging.py tests\unit\test_asr_catalog.py tests\unit\test_gigaam_engine.py tests\unit\test_config.py -q` -> `52 passed`
+    - `git diff --check -- ...` on touched live GigaAM/runtime/test paths -> only LF/CRLF warnings, no diff-format failures.
+  - current status:
+    - waiting for the final independent post-fix code review and test-coverage review results from:
+      - `Godel` (`019d5325-daf5-7253-b2ba-50fdbc5a7257`)
+      - `Bernoulli` (`019d5325-db3a-75f1-956f-15ae43e2fd47`)
+
+- 2026-04-03 final live GigaAM worktree review checkpoint:
+  - task classified as `repo_read / non_trivial`.
+  - scope restricted to:
+    - `src/voxfusion/live_gigaam/*.py`
+    - `src/voxfusion/cli/capture_cmd.py`
+    - `src/voxfusion/gui/runtime.py`
+    - `src/voxfusion/gui/main.py`
+    - `src/voxfusion/asr/gigaam_engine.py`
+    - `src/voxfusion/asr_catalog.py`
+    - `src/voxfusion/config/defaults.yaml`
+    - `src/voxfusion/config/models.py`
+  - review contract:
+    - read-only independent final code review;
+    - findings only, ordered by severity;
+    - if no findings remain, report brief residual risks.
+  - current step:
+    - collecting worktree diff and reading only changed sections in the scoped files.
+
+- 2026-04-03 repeat narrow live GigaAM review checkpoint:
+  - scope:
+    - `src/voxfusion/live_gigaam/session.py`
+    - `src/voxfusion/live_gigaam/commit.py`
+    - `src/voxfusion/live_gigaam/dispatcher.py`
+    - `src/voxfusion/cli/capture_cmd.py`
+    - `src/voxfusion/gui/runtime.py`
+  - previously reported issues verified as fixed:
+    - requested live source is now passed into the controller from CLI and GUI runtime;
+    - session startup cleanup now wraps spool/dispatcher setup in the main `try/finally`;
+    - CLI `--no-save` now prints finalized GigaAM transcript output;
+    - session spool cleanup now respects `security.auto_delete_temp_files`.
+  - new review findings:
+    - high: `gui/runtime.py` capture-source derivation still uses truthiness on `str | int | None` device ids, so GUI device index `0` can be treated as missing and block/misroute live capture.
+    - high: `live_gigaam/dispatcher.py` increments `in_flight` before `executor.submit(...)`, but synchronous submit failures are outside the retry/finally path and can escape as session-breaking errors.
+
+- 2026-04-03 live GigaAM finalization checkpoint:
+  - closed the two high review findings:
+    - `src/voxfusion/gui/runtime.py` and `src/voxfusion/live_gigaam/session.py` now treat device index `0` as a valid selection via `is not None` checks.
+    - `src/voxfusion/live_gigaam/dispatcher.py` now wraps synchronous `executor.submit(...)` failures inside the retry/finally path so `in_flight` is always released and retries return controlled per-job errors.
+  - added gap-closing regression coverage:
+    - `tests/unit/test_live_gigaam_dispatcher.py` now covers synchronous submit failure retry + `in_flight == 0` cleanup.
+    - `tests/unit/test_live_gigaam_gui_runtime.py` now covers source derivation with device index `0`.
+    - `tests/unit/test_live_gigaam_worker.py` now covers worker initialization and reuse of the persistent `GigaAMCTCEngine`.
+    - `tests/unit/test_config.py` now covers `LiveGigaAMConfig` defaults and `load_config()` exposure of those defaults.
+    - `tests/unit/test_live_gigaam_catalog.py` now asserts live-capable GigaAM metadata directly.
+  - independent review status:
+    - independent test reviewer now considers `LG-1` .. `LG-7` requirement coverage sufficient.
+    - independent code reviewer previously reported two highs; both are now fixed locally with regressions and no new blocking issues were introduced in the focused suite.
+  - final verification:
+    - `python -m pytest tests\unit\test_live_gigaam_worker.py tests\unit\test_live_gigaam_dispatcher.py tests\unit\test_capture_cli.py tests\unit\test_live_gigaam_cli.py tests\unit\test_live_gigaam_catalog.py tests\unit\test_live_gigaam_commit.py tests\unit\test_live_gigaam_gui_contract.py tests\unit\test_live_gigaam_gui_runtime.py tests\unit\test_live_gigaam_session.py tests\unit\test_live_gigaam_spool.py tests\unit\test_gui_live_runtime.py tests\unit\test_gui_live_logging.py tests\unit\test_asr_catalog.py tests\unit\test_gigaam_engine.py tests\unit\test_config.py -q` -> `66 passed`
+    - `git diff --check -- ...` on the live GigaAM scope -> clean apart from LF/CRLF warnings.
+  - review artifact:
+    - `coordination/reviews/2026-04-03-live-gigaam-v1.md`
+
+- 2026-04-03 hardware test layer kickoff:
+  - new task classified as `repo_change / non_trivial`.
+  - goal: add an opt-in Windows-only `hardware` pytest layer for real audio devices and live GigaAM without contaminating the default test suite.
+  - design artifacts created:
+    - `.scratchpad/hardware_tests_research.md`
+    - `.scratchpad/hardware_tests_plan.md`
+    - `.scratchpad/hardware_tests_checklist.md`
+  - chosen strategy:
+    - add `--run-hardware` gate plus `hardware` marker;
+    - keep tests under `tests/hardware/`;
+    - use env-configured device ids and a user-provided speech WAV;
+    - make microphone coverage smoke-only and system loopback the deterministic ASR path;
+    - require explicit local model path for live GigaAM hardware e2e to avoid accidental downloads.
+
+- 2026-04-03 hardware test layer completion:
+  - implemented:
+    - `pyproject.toml`: added `hardware` marker registration.
+    - `tests/conftest.py`: added `--run-hardware` and default skip behavior for hardware-marked tests.
+    - `tests/hardware/conftest.py`: added Windows hardware harness helpers driven by:
+      - `VOXFUSION_HW_MIC_DEVICE`
+      - `VOXFUSION_HW_SYSTEM_DEVICE`
+      - `VOXFUSION_HW_PLAYBACK_DEVICE`
+      - `VOXFUSION_HW_SPEECH_WAV`
+      - `VOXFUSION_HW_GIGAAM_MODEL_PATH`
+    - `tests/hardware/test_windows_hardware_capture.py`:
+      - microphone `start/stop` smoke
+      - controlled system-loopback capture assert on non-silent playback
+    - `tests/hardware/test_live_gigaam_hardware.py`:
+      - live GigaAM draft/finalize e2e over real system loopback with a local model directory
+    - `README.md`: documented how to run the new hardware layer and what env vars it expects.
+  - focused verification:
+    - `python -m py_compile tests\conftest.py tests\hardware\conftest.py tests\hardware\test_windows_hardware_capture.py tests\hardware\test_live_gigaam_hardware.py` -> pass
+    - `python -m pytest tests\unit\test_live_gigaam_dispatcher.py tests\unit\test_config.py tests\unit\test_capture_cli.py -q` -> `27 passed`
+    - `python -m pytest tests\hardware -m hardware -q` -> `3 skipped` (default gate confirmed)
+    - `python -m pytest tests\hardware -m hardware --run-hardware -q` -> `1 passed, 2 skipped`
+      - the passing test on this machine is the microphone hardware start/stop smoke.
+      - the skipped tests require explicit `VOXFUSION_HW_SPEECH_WAV` and `VOXFUSION_HW_GIGAAM_MODEL_PATH`.
+  - review artifact:
+    - `coordination/reviews/2026-04-03-hardware-tests.md`
+
+- 2026-04-03 hardware real-run closure:
+  - user asked to rerun tests and report what remains undone.
+  - found and fixed a real harness bug in `tests/hardware/conftest.py`:
+    - `wait_for_non_silent_chunk(...)` assumed `read_chunk(...)`, but `RobustLoopbackCapture` only guarantees `stream(...)`.
+    - helper now supports both capture styles.
+  - fixed a second test-infrastructure gap in `tests/conftest.py`:
+    - pytest now prepends local `src/` to `sys.path`, so the suite exercises the current worktree even if the venv has an older installed `voxfusion` package.
+  - reran full real hardware suite on this machine with:
+    - `VOXFUSION_HW_MIC_DEVICE=sd:18`
+    - `VOXFUSION_HW_SYSTEM_DEVICE=pa:21`
+    - `VOXFUSION_HW_SPEECH_WAV=tmp_sample_10s.wav`
+    - `VOXFUSION_HW_GIGAAM_MODEL_PATH=models\hub\models--ai-sage--GigaAM-v3\snapshots\ec1dc1f01d0d627ab2c0d3acc1e235702300d95e`
+  - verification:
+    - `python -m pytest tests\hardware -m hardware --run-hardware -vv -s` -> `3 passed`
+    - `python -m pytest tests\unit\test_live_gigaam_dispatcher.py tests\unit\test_config.py tests\unit\test_capture_cli.py -q` -> `27 passed`
+  - remaining gaps are now product-level limitations only, not a failing hardware harness:
+    - no automated assertion on room-mic speech text quality;
+    - hardware env preparation is still manual by design;
+    - no CI execution for `hardware` marker.
+
+- 2026-04-03 live GigaAM hardening kickoff:
+  - user asked to continue with the proposed post-feature hardening work.
+  - task classified as `repo_change / non_trivial`.
+  - policy files `policy/task-routing-matrix.json` and `policy/team-lead-orchestrator.md` are still missing in the repo, so routing/orchestration is being applied from the embedded repo policy with local artifacts.
+  - hardening research completed:
+    - current live GigaAM runtime warns on backlog but does not control it;
+    - `_pending_tasks` / draft jobs can grow without bound under ASR slowdown;
+    - final transcript quality is already protected by spool + finalize, so overload handling should degrade drafts first.
+  - current implementation plan:
+    - add a hard draft queue limit and deferred-draft path;
+    - expose backlog peak/deferred counts in stats and completion logs;
+    - add deterministic load/soak-style tests for backlog deferral and multi-worker behavior.
+
+- 2026-04-03 live GigaAM hardening completion:
+  - implemented overload control in `src/voxfusion/live_gigaam/session.py`:
+    - bounded draft backlog via `live_gigaam.queue_hard_limit_jobs`;
+    - deferred draft placeholders when capture outruns draft ASR;
+    - backlog peak / deferred draft / completed draft counters in `get_stats()` and completion logs;
+    - explicit status/log transitions for backlog warning, deferral start, and deferral recovery.
+  - implementation detail:
+    - deferred draft placeholders are marked explicitly in `LiveGigaAMResult.deferred`;
+    - only real draft results remain eligible for finalize fallback.
+  - config/docs contract updated:
+    - `src/voxfusion/config/models.py`
+    - `src/voxfusion/config/defaults.yaml`
+    - `README.md`
+    - `SPEC.md`
+    - `docs/design/live-gigaam-v1.md`
+    - `docs/REQUIREMENTS_TRACEABILITY.md`
+  - new deterministic hardening coverage:
+    - `tests/unit/test_live_gigaam_dispatcher.py::test_concurrent_dispatch_uses_multiple_workers_under_load`
+    - `tests/unit/test_live_gigaam_session.py::test_live_gigaam_session_defers_drafts_under_backlog_and_finalizes_all`
+    - config defaults/load assertions for `queue_hard_limit_jobs`
+  - verification completed:
+    - `python -m py_compile ...` on changed live GigaAM/config/test files -> pass
+    - focused live GigaAM suite -> `44 passed`
+    - broader live GigaAM/GUI/CLI suite -> `53 passed`
+    - real hardware suite on this machine -> `3 passed`
+    - post-cleanup focused suite -> `39 passed`
+  - self-review result:
+    - removed an extra noisy `draft_deferred_ack` info log discovered during diff review;
+    - no remaining blocking findings in this hardening slice.
+
+- 2026-04-03 live GigaAM soak/load harness kickoff:
+  - new task classified as `repo_change / non_trivial`.
+  - user request interpreted as the next agreed follow-up slice after hardening: add a separate long-running soak/load harness for 10-30 minute runs.
+  - repo policy references `policy/task-routing-matrix.json` and `policy/team-lead-orchestrator.md`, but these files are absent in the worktree; routing is being applied from the embedded repo policy with local coordination artifacts.
+  - artifacts created:
+    - `.scratchpad/live_gigaam_soak_harness_research.md`
+    - `.scratchpad/live_gigaam_soak_harness_plan.md`
+    - `.scratchpad/live_gigaam_soak_harness_checklist.md`
+  - intended implementation shape:
+    - standalone `scripts/live_gigaam_soak.py` command, not default pytest;
+    - replay a local WAV through the real `LiveGigaAMSessionController`;
+    - allow real-model runs and a fake-dispatcher smoke mode;
+    - emit periodic progress plus final JSON summary.
+  - next step:
+    - implement the harness script and pure-helper tests, then run a short local smoke pass.
+
+- 2026-04-03 live GigaAM soak/load harness completion:
+  - implemented:
+    - `src/voxfusion/live_gigaam/soak.py` with:
+      - replay WAV corpus builder,
+      - fake replay audio source,
+      - instrumented dispatcher metrics,
+      - fake-dispatcher smoke mode,
+      - JSON summary output and periodic soak progress logs.
+    - `scripts/live_gigaam_soak.py` as a standalone repo-root launcher.
+    - `tests/unit/test_live_gigaam_soak.py` for pure helper coverage.
+    - `README.md` manual harness usage notes.
+  - harness behavior:
+    - defaults to repo-local `tmp_sample_10s.wav` / `tmp_sample_120s.wav` when present;
+    - auto-discovers a cached local `models/hub/models--ai-sage--GigaAM-v3/snapshots/*` path when available;
+    - reuses the real `LiveGigaAMSessionController` path for replay-based long runs;
+    - supports `--mode fake` for cheap script-level smoke runs without a real model.
+  - verification:
+    - `python -m py_compile src\voxfusion\live_gigaam\soak.py scripts\live_gigaam_soak.py tests\unit\test_live_gigaam_soak.py` -> pass
+    - `python -m pytest tests\unit\test_live_gigaam_soak.py -q` -> `6 passed`
+    - `python scripts\live_gigaam_soak.py --mode fake ...` -> pass; JSON summary written to `build\live_gigaam_soak\smoke_summary.json`
+    - `git diff --check -- ...` on README/coordination/scratchpad/harness files -> clean aside from LF/CRLF warnings
+  - real-mode environment note:
+    - a short `--mode real` smoke in this Codex sandbox cannot start `ProcessPoolExecutor` due Windows pipe permission restrictions (`[WinError 5] Access is denied`);
+    - harness launcher now exits with a clear operator message instead of a raw traceback and recommends running outside the restricted sandbox or using `--mode fake`.
+
+- 2026-04-04 live GigaAM stop-latency + mp3-default slice:
+  - new task classified as `repo_change / non_trivial`.
+  - user-visible requests:
+    - make raw recording default to `mp3`;
+    - investigate why stopping online/live transcription can take 1-2 minutes.
+  - research result:
+    - no cache bug was found;
+    - root cause is architectural: `LiveGigaAMSessionController.run(...)` always re-ran stop-time finalization for every utterance, effectively doing a second full pass after stop even when drafts had already completed successfully.
+  - implemented:
+    - `src/voxfusion/gui/main.py`: GUI record format now defaults to `mp3` when FFmpeg is available, otherwise falls back to `wav`.
+    - `src/voxfusion/gui/runtime.py`: `RecordingOptions.output_format` default changed to `mp3`.
+    - `src/voxfusion/config/models.py` and `src/voxfusion/config/defaults.yaml`:
+      - added `live_gigaam.stop_finalize_mode` with default `if_needed`.
+    - `src/voxfusion/live_gigaam/session.py`:
+      - successful drafts are now reused as final output by default;
+      - only deferred or failed utterances are reprocessed on stop in the default mode;
+      - legacy full second-pass behavior is preserved via `stop_finalize_mode=always`;
+      - added stop-finalize plan telemetry and reprocessed-utterance count in completion logs.
+  - docs/spec updated:
+    - `README.md`
+    - `SPEC.md`
+    - `docs/design/live-gigaam-v1.md`
+    - `docs/REQUIREMENTS_TRACEABILITY.md`
+  - verification:
+    - `python -m py_compile src\voxfusion\config\models.py src\voxfusion\gui\main.py src\voxfusion\gui\runtime.py src\voxfusion\live_gigaam\session.py tests\unit\test_recording.py tests\unit\test_live_gigaam_session.py tests\unit\test_config.py` -> pass
+    - `python -m pytest tests\unit\test_recording.py tests\unit\test_live_gigaam_session.py tests\unit\test_config.py tests\unit\test_live_gigaam_gui_runtime.py tests\unit\test_live_gigaam_cli.py tests\unit\test_capture_cli.py -q` -> `45 passed, 2 skipped`
+
+## 2026-04-04 live model persistence
+- Added GUI persistence for live model/language via live_model and live_language keys in src/voxfusion/gui/main.py.
+- Added restart coverage in 	ests/integration/test_gui_smoke.py and extended settings roundtrip in 	ests/unit/test_gui_flow.py.
+- Isolated GUI integration tests from user-local settings with temporary VOXFUSION_GUI_SETTINGS_PATH.
+- Verification: .\\venv\\Scripts\\python.exe -m py_compile src\\voxfusion\\gui\\main.py tests\\unit\\test_gui_flow.py tests\\integration\\test_gui_smoke.py and .\\venv\\Scripts\\python.exe -m pytest tests\\unit\\test_gui_flow.py tests\\integration\\test_gui_smoke.py -q -> 19 passed.
+

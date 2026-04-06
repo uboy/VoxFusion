@@ -12,7 +12,7 @@ Runs on Windows, macOS, and Linux. Comes with a GUI and a CLI.
 - **Two log modes** — `Normal` keeps only key stages and errors, `Debug` shows full stage-by-stage logs
 - **Multiple ASR backends**
   - Whisper via faster-whisper — live and file, 99 languages
-  - GigaAM v3 — best accuracy for Russian, file only
+  - GigaAM v3 — best accuracy for Russian, file transcription plus quality-first live draft + finalize mode
   - Breeze ASR — Whisper-based multilingual, file only
   - Parakeet v3 — 25 European languages incl. Russian/Ukrainian, file only
   - OpenVINO Whisper — automatic when Intel Iris Xe / Arc GPU is detected
@@ -132,6 +132,10 @@ voxfusion capture
 # Live transcription from mic + system audio simultaneously
 voxfusion capture --source both
 
+# Live GigaAM draft transcription with stop-time finalization
+voxfusion capture --model gigaam-v3-e2e-ctc
+voxfusion capture --model gigaam-v3-e2e-ctc --source system --device pa:3
+
 # Record to WAV without transcription
 voxfusion record --source microphone --output recording.wav
 
@@ -159,10 +163,32 @@ voxfusion models download --asr gigaam-v3-e2e-ctc
 ```
 
 On Windows, `voxfusion devices` prints device IDs like `pa:3` (PyAudioWPatch loopback) and `sd:7` (WASAPI). Use `pa:*` IDs for system-audio capture.
+Live GigaAM uses a draft-plus-finalize flow: while capture is active it emits provisional transcript lines, and after stop it reuses successful draft utterances by default while reprocessing only deferred or failed utterances from the spooled session audio before saving or replacing the GUI draft. If you need the older full second-pass behavior, set `VOXFUSION_LIVE_GIGAAM__STOP_FINALIZE_MODE=always`. Live GigaAM currently does not support translation.
 In the GUI File Transcription tab, `Add Files...` creates a queue with per-file status, progress, and result columns, and VoxFusion processes those files one after another with the current settings.
 Queue metadata (duration and size) is loaded asynchronously, so adding large `webm`/video files does not block the GUI; transcription can start immediately and the metadata fills in when ready.
 The GUI layout uses resizable panes for setup, transcript, LLM output, and logs, and the interface language can be switched between English, Russian, and Chinese with the choice persisted across launches.
 The GUI toolbar includes `Logs: Normal/Debug`; `Normal` keeps the log pane readable by showing key milestones and errors only, while `Debug` exposes the full structured pipeline log.
+Open WebUI model loading and transcript-processing requests now emit dedicated `llm.*` / `gui.llm_*` lifecycle events in the log pane, including URL, model, and HTTP status diagnostics while keeping the API key out of the logs.
+Use the GUI `Test Model` button to send a tiny real completion request to the selected model when model-list refresh alone is not enough to diagnose backend failures.
+The file-results area also supports loading an existing transcript `.txt`, `.srt`, or `.md` file directly into the table so it can be reviewed or sent to Open WebUI without re-running transcription.
+If Open WebUI intermittently returns `503` while loading models, the GUI now keeps the last successful model list in a local cache and can continue using it until the server recovers.
+Long transcript post-processing now automatically falls back to hierarchical chunked summarization when the selected LLM model or backend cannot accept the full transcript in one context window.
+When model metadata exposes a context window, the GUI uses it before sending the request; otherwise you can set a manual context override next to the Open WebUI controls.
+Opt-in hardware-in-the-loop tests for Windows live capture and live GigaAM live mode live under `tests/hardware/` and do not run in the default suite; use `pytest tests/hardware -m hardware --run-hardware -v` when you have real devices and local model assets prepared.
+Hardware test environment variables:
+- `VOXFUSION_HW_MIC_DEVICE` — optional microphone device id like `sd:17` for the mic smoke test
+- `VOXFUSION_HW_SYSTEM_DEVICE` — optional loopback device id like `pa:21` or `sd:5`
+- `VOXFUSION_HW_PLAYBACK_DEVICE` — optional sounddevice output id `sd:<index>` for controlled WAV playback; leave unset to use the default output device
+- `VOXFUSION_HW_SPEECH_WAV` — local speech WAV file used for controlled loopback playback
+- `VOXFUSION_HW_GIGAAM_MODEL_PATH` — local GigaAM model directory for the live GigaAM hardware e2e; hardware tests intentionally skip instead of downloading models from the internet
+For reliable results, prefer a deterministic loopback setup such as VB-CABLE or another virtual audio cable and point both the playback and loopback env vars at the same Windows output path.
+For longer manual validation, use the separate replay-based soak/load harness instead of pytest. A typical real 10-minute run is:
+
+```powershell
+.\venv\Scripts\python.exe scripts\live_gigaam_soak.py --duration-minutes 10 --json-out build\live_gigaam_soak\run-10m.json
+```
+
+The harness replays a local WAV through the real `LiveGigaAMSessionController`, emits periodic progress logs, and writes a final JSON summary with backlog and latency metrics. By default it auto-discovers repo-local `tmp_sample_10s.wav` / `tmp_sample_120s.wav` and a cached local GigaAM snapshot when available. For a cheap script-level smoke run without the real model, use `--mode fake`.
 In the CLI, the default mode is the same compact `Normal` output. Use `voxfusion --debug ...` (or `-v`) when you need the full low-level logs.
 
 ## Build binaries
@@ -201,6 +227,10 @@ All settings can be set via environment variables (prefix `VOXFUSION_`, double u
 | `VOXFUSION_ASR__MODEL_SIZE` | ASR model: `tiny`, `small`, `medium`, `large-v3`, `gigaam-v3-e2e-ctc` |
 | `VOXFUSION_ASR__MODEL_PATH` | Path to a local model directory |
 | `VOXFUSION_ASR__LANGUAGE` | Force language code, e.g. `ru`, `en` |
+| `VOXFUSION_LIVE_GIGAAM__WORKER_COUNT` | Number of warm live GigaAM worker processes |
+| `VOXFUSION_LIVE_GIGAAM__STOP_FINALIZE_MODE` | `if_needed` to reprocess only deferred/failed utterances on stop, `always` for a full second pass |
+| `VOXFUSION_LIVE_GIGAAM__FINALIZE_LEFT_CONTEXT_MS` | Left context kept for stop-time live GigaAM finalization |
+| `VOXFUSION_LIVE_GIGAAM__QUEUE_HARD_LIMIT_JOBS` | Maximum live GigaAM draft backlog before new utterances defer to finalization-only |
 | `VOXFUSION_DIARIZATION__STRATEGY` | Diarization mode: `auto`, `channel`, `ml`, `hybrid` |
 | `VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN` | HuggingFace token for pyannote diarization models |
 | `VOXFUSION_GUI_SETTINGS_PATH` | Override GUI settings file location |

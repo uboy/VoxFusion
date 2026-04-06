@@ -19,10 +19,11 @@ from tkinter import scrolledtext
 from typing import Any
 
 from voxfusion.config.loader import load_config
+from voxfusion.config.models import PipelineConfig
 from voxfusion.diarization.channel import ChannelDiarizer
 from voxfusion.gui.progress import close_all_progress, get_stage_progress
-from voxfusion.llm.client import LLMError, stream_completion
-from voxfusion.llm.prompts import build_messages
+from voxfusion.llm.client import LLMError, complete, stream_completion
+from voxfusion.llm.prompts import build_chunk_messages, build_merge_messages, build_messages
 from voxfusion.logging import _should_suppress_log_message
 from voxfusion.logging import get_logger
 from voxfusion.models.translation import TranslatedSegment
@@ -33,6 +34,37 @@ from voxfusion.preprocessing.resample import Resampler
 from voxfusion.recording import AudioRecorder, RecordingStats, create_recording_source
 
 log = get_logger(__name__)
+
+
+def _describe_active_live_sources(audio_source: object) -> tuple[int, list[str], str | None]:
+    from voxfusion.capture.mixer import AudioMixer
+
+    if isinstance(audio_source, AudioMixer):
+        names = [getattr(source, "device_name", "unknown") for source in audio_source._sources]
+    else:
+        names = [getattr(audio_source, "device_name", "unknown")]
+    lowered = [str(name).lower() for name in names]
+    if lowered and all(("loopback" in name or "system" in name) for name in lowered):
+        mode = "system_only"
+    elif lowered and all("microphone" in name for name in lowered):
+        mode = "microphone_only"
+    else:
+        mode = None
+    return len(names), names, mode
+
+
+_LLM_CONTEXT_TOKEN_ENV = "VOXFUSION_LLM_CONTEXT_TOKENS"
+_LLM_DEFAULT_CONTEXT_TOKENS = 2048
+_LLM_ESTIMATED_CHARS_PER_TOKEN = 2
+_LLM_RESERVED_COMPLETION_TOKENS = 384
+_LLM_MIN_CHUNK_INPUT_TOKENS = 256
+_LLM_MAX_MERGE_ROUNDS = 6
+_LLM_CONTEXT_ERROR_MARKERS = (
+    "maximum context length",
+    "reduce the length of the input prompt",
+    "prompt contains at least",
+    "context length",
+)
 
 def _configure_gui_noise_controls() -> None:
     """Suppress safe third-party noise and set runtime env defaults for the GUI."""
@@ -134,7 +166,7 @@ class RecordingOptions:
     microphone_device_id: str | int | None
     system_device_id: str | int | None
     output_path: Path
-    output_format: str = "wav"
+    output_format: str = "mp3"
 
 
 @dataclass(frozen=True)
@@ -152,11 +184,11 @@ def derive_capture_source(
     system_device_id: str | int | None,
 ) -> str:
     """Derive capture mode from explicit mic/system selections."""
-    if microphone_device_id and system_device_id:
+    if microphone_device_id is not None and system_device_id is not None:
         return "both"
-    if system_device_id:
+    if system_device_id is not None:
         return "system"
-    if microphone_device_id:
+    if microphone_device_id is not None:
         return "microphone"
     return "none"
 
@@ -325,7 +357,7 @@ class FileTranscribeWorker:
 
 
 class LLMWorker:
-    """Streams an LLM response from Open WebUI in a background thread."""
+    """Streams or hierarchically summarizes an Open WebUI response in a background thread."""
 
     def __init__(
         self,
@@ -335,6 +367,7 @@ class LLMWorker:
         api_key: str,
         prompt_name: str,
         custom_user_prompt: str | None,
+        context_limit_tokens: int | None,
         on_token: Callable[[str], None],
         on_error: Callable[[str], None],
         on_finished: Callable[[], None],
@@ -345,6 +378,7 @@ class LLMWorker:
         self._api_key = api_key
         self._prompt_name = prompt_name
         self._custom_user_prompt = custom_user_prompt
+        self._context_limit_tokens_explicit = context_limit_tokens
         self._on_token = on_token
         self._on_error = on_error
         self._on_finished = on_finished
@@ -362,12 +396,239 @@ class LLMWorker:
         finally:
             self._on_finished()
 
+    @staticmethod
+    def _estimate_text_tokens(text: str) -> int:
+        clean = str(text or "")
+        if not clean:
+            return 0
+        return max(1, (len(clean) + _LLM_ESTIMATED_CHARS_PER_TOKEN - 1) // _LLM_ESTIMATED_CHARS_PER_TOKEN)
+
+    @classmethod
+    def _estimate_messages_tokens(cls, messages: list[dict[str, str]]) -> int:
+        total = 0
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            total += 8 + cls._estimate_text_tokens(str(message.get("content", "")))
+        return total
+
+    @staticmethod
+    def _looks_like_context_length_error(error_text: str) -> bool:
+        lowered = str(error_text or "").lower()
+        return any(marker in lowered for marker in _LLM_CONTEXT_ERROR_MARKERS)
+
+    def _context_limit_tokens(self) -> int:
+        if self._context_limit_tokens_explicit is not None:
+            return max(512, int(self._context_limit_tokens_explicit))
+        raw = os.environ.get(_LLM_CONTEXT_TOKEN_ENV, "").strip()
+        if raw.isdigit():
+            return max(512, int(raw))
+        return _LLM_DEFAULT_CONTEXT_TOKENS
+
+    def _input_token_budget(self, messages: list[dict[str, str]]) -> int:
+        available = (
+            self._context_limit_tokens()
+            - self._estimate_messages_tokens(messages)
+            - _LLM_RESERVED_COMPLETION_TOKENS
+        )
+        return max(_LLM_MIN_CHUNK_INPUT_TOKENS, available)
+
+    def _split_block_to_fit(self, block: str, max_tokens: int) -> list[str]:
+        max_chars = max_tokens * _LLM_ESTIMATED_CHARS_PER_TOKEN
+        clean = block.strip()
+        if not clean:
+            return []
+        if len(clean) <= max_chars:
+            return [clean]
+
+        pieces: list[str] = []
+        current = ""
+        for word in clean.split():
+            if len(word) > max_chars:
+                if current:
+                    pieces.append(current)
+                    current = ""
+                for start in range(0, len(word), max_chars):
+                    pieces.append(word[start:start + max_chars])
+                continue
+            candidate = f"{current} {word}".strip()
+            if current and len(candidate) > max_chars:
+                pieces.append(current)
+                current = word
+            else:
+                current = candidate
+        if current:
+            pieces.append(current)
+        return pieces
+
+    def _pack_text_blocks(self, blocks: list[str], max_tokens: int, *, separator: str) -> list[str]:
+        expanded: list[str] = []
+        for block in blocks:
+            expanded.extend(self._split_block_to_fit(block, max_tokens))
+
+        packed: list[str] = []
+        current: list[str] = []
+        current_tokens = 0
+        separator_tokens = self._estimate_text_tokens(separator)
+        for block in expanded:
+            block_tokens = self._estimate_text_tokens(block)
+            projected = block_tokens if not current else current_tokens + separator_tokens + block_tokens
+            if current and projected > max_tokens:
+                packed.append(separator.join(current))
+                current = [block]
+                current_tokens = block_tokens
+                continue
+            current.append(block)
+            current_tokens = projected
+        if current:
+            packed.append(separator.join(current))
+        return packed
+
+    def _split_transcript_into_chunks(self) -> list[str]:
+        blocks = [line.strip() for line in self._text.splitlines() if line.strip()]
+        if not blocks and self._text.strip():
+            blocks = [self._text.strip()]
+        if not blocks:
+            return []
+        max_tokens = self._input_token_budget(
+            build_chunk_messages(
+                self._prompt_name,
+                "",
+                chunk_index=1,
+                chunk_count=1,
+                custom_user=self._custom_user_prompt,
+            )
+        )
+        return self._pack_text_blocks(blocks, max_tokens, separator="\n")
+
+    def _pack_partial_outputs(self, partial_outputs: list[str]) -> list[str]:
+        numbered_blocks = [
+            f"### Partial {index}\n{output.strip()}"
+            for index, output in enumerate(partial_outputs, start=1)
+            if output.strip()
+        ]
+        if not numbered_blocks:
+            return []
+        max_tokens = self._input_token_budget(
+            build_merge_messages(
+                self._prompt_name,
+                "",
+                custom_user=self._custom_user_prompt,
+            )
+        )
+        return self._pack_text_blocks(numbered_blocks, max_tokens, separator="\n\n")
+
+    def _needs_chunked_summary(self, messages: list[dict[str, str]]) -> bool:
+        return self._estimate_messages_tokens(messages) > (
+            self._context_limit_tokens() - _LLM_RESERVED_COMPLETION_TOKENS
+        )
+
+    async def _summarize_chunks(self, reason: str, initial_messages: list[dict[str, str]]) -> str:
+        chunks = self._split_transcript_into_chunks()
+        if not chunks:
+            raise LLMError("No transcript text available for chunked summarization.")
+        log.info(
+            "llm.chunking.plan",
+            model=self._model,
+            reason=reason,
+            transcript_chars=len(self._text),
+            estimated_input_tokens=self._estimate_messages_tokens(initial_messages),
+            context_tokens=self._context_limit_tokens(),
+            chunk_count=len(chunks),
+        )
+
+        partial_outputs: list[str] = []
+        for chunk_index, chunk_text in enumerate(chunks, start=1):
+            log.info(
+                "llm.chunking.chunk_start",
+                model=self._model,
+                chunk_index=chunk_index,
+                chunk_count=len(chunks),
+                input_chars=len(chunk_text),
+            )
+            chunk_messages = build_chunk_messages(
+                self._prompt_name,
+                chunk_text,
+                chunk_index=chunk_index,
+                chunk_count=len(chunks),
+                custom_user=self._custom_user_prompt,
+            )
+            chunk_output = (await complete(
+                chunk_messages,
+                base_url=self._base_url,
+                model=self._model,
+                api_key=self._api_key,
+            )).strip()
+            log.info(
+                "llm.chunking.chunk_done",
+                model=self._model,
+                chunk_index=chunk_index,
+                chunk_count=len(chunks),
+                output_chars=len(chunk_output),
+            )
+            if chunk_output:
+                partial_outputs.append(chunk_output)
+
+        if not partial_outputs:
+            raise LLMError("LLM returned empty chunk summaries.")
+
+        current_outputs = partial_outputs
+        for round_index in range(1, _LLM_MAX_MERGE_ROUNDS + 1):
+            if len(current_outputs) <= 1:
+                return current_outputs[0]
+            batches = self._pack_partial_outputs(current_outputs)
+            if not batches:
+                raise LLMError("Failed to prepare partial summaries for final merge.")
+            log.info(
+                "llm.chunking.merge_round",
+                model=self._model,
+                round_index=round_index,
+                input_count=len(current_outputs),
+                batch_count=len(batches),
+            )
+            next_outputs: list[str] = []
+            for batch_index, batch_text in enumerate(batches, start=1):
+                merge_messages = build_merge_messages(
+                    self._prompt_name,
+                    batch_text,
+                    custom_user=self._custom_user_prompt,
+                )
+                merged_output = (await complete(
+                    merge_messages,
+                    base_url=self._base_url,
+                    model=self._model,
+                    api_key=self._api_key,
+                )).strip()
+                log.info(
+                    "llm.chunking.merge_batch_done",
+                    model=self._model,
+                    round_index=round_index,
+                    batch_index=batch_index,
+                    batch_count=len(batches),
+                    output_chars=len(merged_output),
+                )
+                if merged_output:
+                    next_outputs.append(merged_output)
+            if not next_outputs:
+                raise LLMError("LLM returned an empty merged summary.")
+            current_outputs = next_outputs
+
+        raise LLMError("Failed to merge chunk summaries within the allowed number of rounds.")
+
     async def _run_async(self) -> None:
         messages = build_messages(
             self._prompt_name,
             self._text,
             custom_user=self._custom_user_prompt,
         )
+        if self._needs_chunked_summary(messages):
+            try:
+                final_output = await self._summarize_chunks("estimated_context", messages)
+                self._on_token(final_output)
+            except LLMError as exc:
+                self._on_error(str(exc))
+            return
+
         try:
             async for token in stream_completion(
                 messages,
@@ -377,6 +638,19 @@ class LLMWorker:
             ):
                 self._on_token(token)
         except LLMError as exc:
+            if self._looks_like_context_length_error(str(exc)):
+                log.warning(
+                    "llm.chunking.context_retry",
+                    model=self._model,
+                    reason="context_error",
+                    error=str(exc),
+                )
+                try:
+                    final_output = await self._summarize_chunks("context_error_retry", messages)
+                    self._on_token(final_output)
+                except LLMError as retry_exc:
+                    self._on_error(str(retry_exc))
+                return
             self._on_error(str(exc))
 
 
@@ -488,11 +762,13 @@ class CaptureWorker:
         on_segment: Callable[[str, str, str, str | None], None],
         on_error: Callable[[str], None],
         on_finished: Callable[[], None],
+        on_replace_segments: Callable[[list[tuple[str, str, str, str | None]]], None] | None = None,
         on_drop: Callable[[str, str], None] | None = None,
     ) -> None:
         self._options = options
         self._on_status = on_status
         self._on_segment = on_segment
+        self._on_replace_segments = on_replace_segments or (lambda _rows: None)
         self._on_error = on_error
         self._on_finished = on_finished
         self._on_drop = on_drop or (lambda _t, _s: None)
@@ -555,6 +831,11 @@ class CaptureWorker:
             }
 
         config = load_config(overrides)
+        if config.asr.engine == "gigaam":
+            if self._options.translate:
+                raise RuntimeError("Live GigaAM translation is not supported.")
+            await self._run_live_gigaam_async(config)
+            return
 
         preprocessor = PreProcessingPipeline([Resampler(16_000), Normalizer()])
         from voxfusion.asr.factory import create_asr_engine
@@ -647,9 +928,9 @@ class CaptureWorker:
         segment_progress = get_stage_progress("segments")
 
         def on_segments(segments: list[TranslatedSegment]) -> None:
-            nonlocal last_segment_ts, waiting_hint_shown
+            nonlocal last_segment_ts, next_wait_log_ts
             last_segment_ts = monotonic()
-            waiting_hint_shown = False
+            next_wait_log_ts = last_segment_ts + 10
             segment_progress.update(len(segments))
             for segment in segments:
                 transcription = segment.diarized.segment
@@ -665,24 +946,42 @@ class CaptureWorker:
         self._on_status("Starting capture...")
         pipeline_task: asyncio.Task[None] | None = None
         last_segment_ts = monotonic()
-        waiting_hint_shown = False
+        capture_loop_started_at = last_segment_ts
+        next_wait_log_ts = capture_loop_started_at + 10
         await audio_source.start()
         capture_start_time = datetime.now()
 
-        from voxfusion.capture.mixer import AudioMixer
+        active_source_count, active_sources, surviving_mode = _describe_active_live_sources(audio_source)
+        log.info(
+            "gui.live_capture_started",
+            requested_source=source,
+            active_source_count=active_source_count,
+            active_sources=active_sources,
+        )
 
-        if isinstance(audio_source, AudioMixer) and len(audio_source._sources) < 2:
-            self._on_status("Capture started (loopback unavailable — mic only). Waiting for speech...")
+        if active_source_count < 2 and surviving_mode == "microphone_only":
+            self._on_status("Capture started (microphone only). Waiting for speech...")
+        elif active_source_count < 2 and surviving_mode == "system_only":
+            self._on_status("Capture started (system audio only). Waiting for speech...")
         else:
             self._on_status("Capture started. Waiting for speech...")
         try:
             pipeline_task = asyncio.create_task(pipeline.run(audio_source, on_segments=on_segments))
             while not self._stop_event.is_set() and not pipeline_task.done():
-                if not waiting_hint_shown and monotonic() - last_segment_ts >= 10:
+                now = monotonic()
+                if now >= next_wait_log_ts:
+                    stats = pipeline.get_stats()
                     self._on_status(
                         "Capture started. No speech segments yet — check microphone level/device."
                     )
-                    waiting_hint_shown = True
+                    log.info(
+                        "gui.live_waiting_for_segments",
+                        elapsed_s=round(now - capture_loop_started_at, 1),
+                        since_last_segment_s=round(now - last_segment_ts, 1),
+                        pipeline_stats=stats or {},
+                        active_sources=active_sources,
+                    )
+                    next_wait_log_ts = now + 10
                 await asyncio.sleep(0.1)
             if self._stop_event.is_set() and pipeline_task is not None:
                 pipeline_task.cancel()
@@ -699,3 +998,54 @@ class CaptureWorker:
             await audio_source.stop()
             asr_engine.unload_model()
             asr_engine.close()
+
+    async def _run_live_gigaam_async(self, config: PipelineConfig) -> None:
+        from voxfusion.live_gigaam.session import LiveGigaAMSessionController
+        segment_progress = get_stage_progress("segments")
+        capture_start_time: datetime | None = None
+
+        def _rows_for_segments(segments: list[TranslatedSegment]) -> list[tuple[str, str, str, str | None]]:
+            rows: list[tuple[str, str, str, str | None]] = []
+            anchor = capture_start_time or datetime.now()
+            for segment in segments:
+                transcription = segment.diarized.segment
+                speaker = segment.diarized.speaker_id
+                spoken_at = anchor + timedelta(seconds=transcription.start_time)
+                rows.append(
+                    (
+                        spoken_at.strftime("%H:%M:%S"),
+                        speaker,
+                        transcription.text,
+                        segment.translated_text,
+                    )
+                )
+            return rows
+
+        def on_segments(segments: list[TranslatedSegment]) -> None:
+            segment_progress.update(len(segments))
+            for row in _rows_for_segments(segments):
+                self._on_segment(*row)
+
+        def on_finalized_segments(segments: list[TranslatedSegment]) -> None:
+            rows = _rows_for_segments(segments)
+            self._on_replace_segments(rows)
+
+        def on_capture_started(started_at: datetime) -> None:
+            nonlocal capture_start_time
+            capture_start_time = started_at
+
+        controller = LiveGigaAMSessionController(
+            config=config,
+            microphone_device_id=self._options.microphone_device_id,
+            system_device_id=self._options.system_device_id,
+            on_status=self._on_status,
+            on_segments=on_segments,
+            on_finalized_segments=on_finalized_segments,
+            on_capture_started=on_capture_started,
+            requested_source=derive_capture_source(
+                self._options.microphone_device_id,
+                self._options.system_device_id,
+            ),
+        )
+        self._pipeline = controller
+        await controller.run(self._stop_event)

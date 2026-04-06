@@ -186,9 +186,12 @@ class GigaAMCTCEngine:
             kwargs: dict = {"trust_remote_code": True, "token": token}
             if local_only:
                 kwargs["local_files_only"] = True
-            import torch
+            try:
+                import torch  # type: ignore[import-not-found]
+            except ImportError:
+                torch = None
 
-            if _should_use_torchscript_source_fallback(torch):
+            if torch is not None and _should_use_torchscript_source_fallback(torch):
                 with _temporary_torchscript_source_fallback(torch):
                     self._model = AutoModel.from_pretrained(model_ref, **kwargs)
             else:
@@ -323,6 +326,17 @@ class GigaAMCTCEngine:
                 no_speech_prob=0.0,
             )
         ]
+
+    def transcribe_samples_sync(
+        self,
+        samples: np.ndarray,
+        *,
+        sample_rate: int = _SAMPLE_RATE,
+        language: str | None = None,
+    ) -> list[TranscriptionSegment]:
+        """Synchronously transcribe a numpy waveform."""
+        mono = self._normalize_audio(samples, sample_rate)
+        return self._transcribe_sync(mono, language=language)
 
     @staticmethod
     def _normalize_audio(samples: np.ndarray, sample_rate: int) -> np.ndarray:

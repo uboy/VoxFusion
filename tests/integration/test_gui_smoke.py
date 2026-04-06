@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from voxfusion.asr_catalog import get_available_model_catalog
 from voxfusion.gui.main import CaptureOptions, TranscriptionGUI
 from voxfusion.gui.runtime import DeviceOption
 
@@ -18,6 +19,11 @@ def _make_root() -> tk.Tk:
         pytest.skip(f"Tk is unavailable in this environment: {exc}")
     root.withdraw()
     return root
+
+
+@pytest.fixture(autouse=True)
+def _isolated_gui_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VOXFUSION_GUI_SETTINGS_PATH", str(tmp_path / "gui_settings.json"))
 
 
 @pytest.mark.integration
@@ -95,7 +101,14 @@ def test_gui_smoke_disables_live_start_for_file_only_model() -> None:
     )
     root.update_idletasks()
 
-    gui._model_var.set("gigaam-v3-e2e-ctc")
+    file_only_model = next(
+        (model.id for model in get_available_model_catalog() if not model.supports_live_capture),
+        None,
+    )
+    if file_only_model is None:
+        pytest.skip("No file-only ASR model is available in this environment.")
+
+    gui._model_var.set(file_only_model)
     gui._on_model_changed()
     root.update_idletasks()
 
@@ -104,6 +117,55 @@ def test_gui_smoke_disables_live_start_for_file_only_model() -> None:
 
     gui._restore_redirection()
     root.destroy()
+
+
+@pytest.mark.integration
+def test_gui_smoke_restores_last_live_model_after_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings_path = tmp_path / "gui_settings.json"
+    monkeypatch.setenv("VOXFUSION_GUI_SETTINGS_PATH", str(settings_path))
+
+    first_root = _make_root()
+    first_gui = TranscriptionGUI(
+        first_root,
+        CaptureOptions(
+            model="small",
+            language="ru",
+            translate=None,
+            microphone_device_id=None,
+            system_device_id=None,
+        ),
+    )
+    first_root.update_idletasks()
+
+    first_gui._model_var.set("large-v3")
+    first_gui._on_model_changed()
+    first_gui._language_var.set("English")
+    first_gui._on_live_language_changed()
+    first_gui._persist_gui_settings()
+    first_gui._restore_redirection()
+    first_root.destroy()
+
+    second_root = _make_root()
+    second_gui = TranscriptionGUI(
+        second_root,
+        CaptureOptions(
+            model="small",
+            language="ru",
+            translate=None,
+            microphone_device_id=None,
+            system_device_id=None,
+        ),
+    )
+    second_root.update_idletasks()
+
+    assert second_gui._model_var.get() == "large-v3"
+    assert second_gui._language_var.get() == "English"
+
+    second_gui._restore_redirection()
+    second_root.destroy()
 
 
 @pytest.mark.integration

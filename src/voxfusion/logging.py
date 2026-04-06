@@ -39,9 +39,21 @@ _NORMAL_MODE_KEY_EVENTS = frozenset({
 })
 
 _NORMAL_MODE_KEY_PREFIXES = (
+    "asr.",
+    "llm.",
     "gui.file_",
     "gui.live_",
+    "gui.llm_",
     "gui.speaker_detect_",
+    "streaming.",
+    "wasapi.",
+    "pyaudio_loopback.",
+    "gigaam.",
+    "live_gigaam.",
+    "coreaudio.",
+    "pulseaudio.",
+    "mixer.",
+    "vad_chunker.",
 )
 
 

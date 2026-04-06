@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import queue
+import re
 import sys
 import textwrap
 import threading
@@ -48,8 +50,10 @@ from voxfusion.gui.helpers import (
 from voxfusion.gui.i18n import (
     DEFAULT_GUI_LANGUAGE,
     SUPPORTED_GUI_LANGUAGES,
+    detect_system_gui_language,
     load_gui_locale,
     normalize_gui_language,
+    resolve_initial_gui_language,
 )
 from voxfusion.gui.model_summary import ModelSummaryCard
 from voxfusion.gui.tooltip import ToolTip, create_help_icon
@@ -71,7 +75,9 @@ from voxfusion.gui.theme import configure_gui_theme
 from voxfusion.llm.client import (
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
-    fetch_models,
+    LLMModelDescriptor,
+    complete,
+    fetch_model_catalog,
 )
 from voxfusion.llm.prompts import BUILTIN_PROMPTS
 from voxfusion.logging import get_logger
@@ -84,6 +90,19 @@ ASR_MODEL_CHOICES: tuple[str, ...] = tuple(m.id for m in get_available_model_cat
 GUI_DEFAULT_LANGUAGE = DEFAULT_LANGUAGE_CODE
 FILE_DIARIZATION_CHOICES: tuple[str, ...] = ("auto", "none", "channel", "ml", "hybrid")
 FILE_SPEAKER_PRESET_CODES: tuple[str, ...] = ("auto", "1", "2", "3", "4plus", "custom")
+_LLM_PROBE_TIMEOUT_READ = 30.0
+_LLM_PROBE_MESSAGES = [{"role": "user", "content": "Reply with OK and nothing else."}]
+_IMPORTED_TRANSCRIPT_SPEAKER = "IMPORTED"
+_LLM_MODELS_CACHE_KEY = "llm_models_cache_json"
+_LLM_MODEL_CONTEXT_CACHE_KEY = "llm_model_context_cache_json"
+_LLM_CONTEXT_TOKEN_ENV = "VOXFUSION_LLM_CONTEXT_TOKENS"
+_LLM_DEFAULT_CONTEXT_TOKENS = 2048
+_LLM_MIN_CONTEXT_TOKENS = 512
+_IMPORTED_TRANSCRIPT_LINE_RE = re.compile(r"^\[(?P<time>\d{2}:\d{2}:\d{2})\]\s+\[(?P<speaker>[^\]]+)\]\s*(?P<text>.+?)\s*$")
+_IMPORTED_SRT_TIME_RANGE_RE = re.compile(
+    r"^(?P<start>\d{2}:\d{2}:\d{2})(?:[,.]\d{3})?\s+-->\s+(?P<end>\d{2}:\d{2}:\d{2})(?:[,.]\d{3})?$"
+)
+_IMPORTED_SRT_SPEAKER_RE = re.compile(r"^\[(?P<speaker>[^\]]+)\]\s*(?P<text>.+?)\s*$")
 log = get_logger(__name__)
 
 # File dialog filter for supported media files
@@ -121,7 +140,8 @@ class TranscriptionGUI:
     def __init__(self, root: tk.Tk, options: CaptureOptions) -> None:
         self.root = root
         self.options = options
-        self._ui_language_code = DEFAULT_GUI_LANGUAGE
+        self._ui_language_code = detect_system_gui_language()
+        self._ui_language_explicit = False
         self._ui_language_var = tk.StringVar(value="")
         self._locale = load_gui_locale(self._ui_language_code)
         self._ui_refreshers: list[object] = []
@@ -160,7 +180,7 @@ class TranscriptionGUI:
         self._device_list_fingerprint: frozenset = frozenset()
         self._last_recorded_file: Path | None = None
         self._ffmpeg_path: Path | None = find_ffmpeg()
-        self._rec_format_var = tk.StringVar(value="wav")
+        self._rec_format_var = tk.StringVar(value="mp3" if self._ffmpeg_path is not None else "wav")
 
         # File tab state
         self._file_worker: FileTranscribeWorker | None = None
@@ -207,9 +227,17 @@ class TranscriptionGUI:
         self._llm_model_var = tk.StringVar(value=DEFAULT_MODEL)
         self._llm_key_var = tk.StringVar(value="")
         self._llm_prompt_var = tk.StringVar(value="summarize")
+        self._llm_context_var = tk.StringVar(value="")
         self._llm_custom_user_prompt = ""
         self._available_llm_models: list[str] = []
+        self._cached_llm_models: list[str] = []
+        self._llm_model_contexts: dict[str, int] = {}
+        self._cached_llm_model_contexts: dict[str, int] = {}
         self._llm_model_refreshing = False
+        self._llm_probe_running = False
+        self._llm_last_error_message: str | None = None
+        self._llm_model_var.trace_add("write", lambda *_: self._refresh_llm_context_hint())
+        self._llm_context_var.trace_add("write", lambda *_: self._refresh_llm_context_hint())
         self._apply_saved_gui_settings()
 
         self._build_layout()
@@ -451,6 +479,7 @@ class TranscriptionGUI:
     def _on_ui_language_changed(self, _event: object | None = None) -> None:
         selected_code = self._language_code_from_label(self._ui_language_var.get())
         self._ui_language_code = normalize_gui_language(selected_code)
+        self._ui_language_explicit = True
         self._locale = load_gui_locale(self._ui_language_code)
         self._apply_localized_ui()
         self._persist_gui_settings()
@@ -586,6 +615,7 @@ class TranscriptionGUI:
             width=18,
         )
         self.language_combo.pack(side=tk.LEFT, padx=(0, 12))
+        self.language_combo.bind("<<ComboboxSelected>>", self._on_live_language_changed)
         self._bind_tooltip(self.language_combo, "tooltip.live.language")
         self._live_translate_label = ttk.Label(lang_row, text="")
         self._live_translate_label.pack(side=tk.LEFT, padx=(0, 4))
@@ -1077,6 +1107,10 @@ class TranscriptionGUI:
         file_ctrl = ttk.Frame(results_frame)
         file_ctrl.pack(fill=tk.X, padx=0, pady=(0, 4))
 
+        self._file_load_transcript_btn = ttk.Button(file_ctrl, text="", command=self._load_transcript_file)
+        self._file_load_transcript_btn.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_text(self._file_load_transcript_btn, "file.button.load_transcript")
+        self._bind_tooltip(self._file_load_transcript_btn, "tooltip.file.load_transcript")
         self._file_clear_btn = ttk.Button(file_ctrl, text="", command=self._clear_file_table)
         self._file_clear_btn.pack(side=tk.LEFT, padx=(0, 4))
         self._bind_text(self._file_clear_btn, "file.button.clear")
@@ -1110,9 +1144,13 @@ class TranscriptionGUI:
         self._llm_url_entry.pack(side=tk.LEFT, padx=(0, 10))
         self._bind_tooltip(self._llm_url_entry, "tooltip.llm.url")
         self._llm_refresh_btn = ttk.Button(llm_cfg, text="", command=self._refresh_llm_models)
-        self._llm_refresh_btn.pack(side=tk.LEFT, padx=(0, 10))
+        self._llm_refresh_btn.pack(side=tk.LEFT, padx=(0, 4))
         self._bind_text(self._llm_refresh_btn, "file.button.refresh_models")
         self._bind_tooltip(self._llm_refresh_btn, "tooltip.llm.refresh_models")
+        self._llm_probe_btn = ttk.Button(llm_cfg, text="", command=self._probe_llm_model)
+        self._llm_probe_btn.pack(side=tk.LEFT, padx=(0, 10))
+        self._bind_text(self._llm_probe_btn, "llm.button.test_model")
+        self._bind_tooltip(self._llm_probe_btn, "tooltip.llm.test_model")
         self._llm_model_label = ttk.Label(llm_cfg, text="")
         self._llm_model_label.pack(side=tk.LEFT, padx=(0, 4))
         self._bind_text(self._llm_model_label, "llm.label.model")
@@ -1166,6 +1204,17 @@ class TranscriptionGUI:
         self._llm_status_label.pack(side=tk.LEFT, padx=(12, 0))
         self._bind_tooltip(self._llm_status_label, "tooltip.llm.status")
 
+        llm_ctx_cfg = ttk.Frame(llm_box)
+        llm_ctx_cfg.pack(fill=tk.X, pady=(0, 2))
+        self._llm_context_label = ttk.Label(llm_ctx_cfg, text="")
+        self._llm_context_label.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_text(self._llm_context_label, "llm.label.context")
+        self._llm_context_entry = ttk.Entry(llm_ctx_cfg, textvariable=self._llm_context_var, width=8)
+        self._llm_context_entry.pack(side=tk.LEFT, padx=(0, 8))
+        self._bind_tooltip(self._llm_context_entry, "tooltip.llm.context")
+        self._llm_context_hint_label = ttk.Label(llm_ctx_cfg, text="", anchor="w", foreground="#666666")
+        self._llm_context_hint_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
         llm_out_frame = ttk.Frame(llm_box)
         llm_out_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 0))
 
@@ -1179,6 +1228,7 @@ class TranscriptionGUI:
         self._bind_tooltip(self._llm_output, "tooltip.llm.output")
         self._refresh_file_diarization_controls()
         self._refresh_file_workflow()
+        self._refresh_llm_context_hint()
 
     # ------------------------------------------------------------------
     # Live capture methods
@@ -1214,12 +1264,31 @@ class TranscriptionGUI:
             microphone_device_id=self._selected_microphone_id,
             system_device_id=self._selected_system_id,
         )
-        if _derive_capture_source(
+        if options.translate and not model_info.supports_translation:
+            self._set_live_status(
+                self._tr(
+                    "live.status.translate_unsupported",
+                    model_name=model_info.name,
+                )
+            )
+            return
+        capture_source = _derive_capture_source(
             self._selected_microphone_id,
             self._selected_system_id,
-        ) == "none":
+        )
+        if capture_source == "none":
             self._set_live_status(self._tr("live.status.select_device_capture"))
             return
+
+        log.info(
+            "gui.live_capture_requested",
+            model=model_info.id,
+            language=options.language,
+            translate=options.translate,
+            source=capture_source,
+            microphone_device_id=self._selected_microphone_id,
+            system_device_id=self._selected_system_id,
+        )
 
         self._set_live_controls_enabled(False)
         self.stop_button.configure(state=tk.NORMAL)
@@ -1229,6 +1298,7 @@ class TranscriptionGUI:
             options=options,
             on_status=self._schedule_live_status,
             on_segment=self._schedule_segment,
+            on_replace_segments=self._schedule_replace_segments,
             on_error=self._schedule_error,
             on_finished=self._schedule_finished,
             on_drop=self._schedule_drop,
@@ -1336,6 +1406,10 @@ class TranscriptionGUI:
         with suppress(tk.TclError, RuntimeError):
             self.root.after(0, self._add_segment, time_str, speaker, text, translation)
 
+    def _schedule_replace_segments(self, rows: list[tuple[str, str, str, str | None]]) -> None:
+        with suppress(tk.TclError, RuntimeError):
+            self.root.after(0, self._replace_segments, rows)
+
     def _schedule_error(self, message: str) -> None:
         with suppress(tk.TclError, RuntimeError):
             self.root.after(0, self._show_error, message)
@@ -1403,6 +1477,11 @@ class TranscriptionGUI:
     def _schedule_drop(self, time_str: str, source: str) -> None:
         with suppress(tk.TclError, RuntimeError):
             self.root.after(0, self._add_dropped_row, time_str, source)
+
+    def _replace_segments(self, rows: list[tuple[str, str, str, str | None]]) -> None:
+        self._clear_table()
+        for row in rows:
+            self._add_segment(*row)
 
     def _poll_stats(self) -> None:
         if self._worker is not None:
@@ -1616,6 +1695,13 @@ class TranscriptionGUI:
     def _on_model_changed(self, _event: object | None = None) -> None:
         self._model_var.set(get_model_info(self._model_var.get()).id)
         self._refresh_language_choices()
+        self._persist_gui_settings()
+
+    def _on_live_language_changed(self, _event: object | None = None) -> None:
+        live_model = get_model_info(self._model_var.get()).id
+        current_live = self._language_code_for_label(self._language_var.get(), live_model)
+        self._language_var.set(self._language_label_for_code(current_live, live_model))
+        self._persist_gui_settings()
 
     def _on_file_model_changed(self, _event: object | None = None) -> None:
         self._file_model_var.set(get_model_info(self._file_model_var.get()).id)
@@ -1842,8 +1928,9 @@ class TranscriptionGUI:
 
     def _apply_saved_gui_settings(self) -> None:
         settings = _load_gui_settings()
-        self._ui_language_code = normalize_gui_language(
-            settings.get("gui_language", DEFAULT_GUI_LANGUAGE)
+        self._ui_language_code, self._ui_language_explicit = resolve_initial_gui_language(
+            settings.get("gui_language", DEFAULT_GUI_LANGUAGE),
+            settings.get("gui_language_explicit", ""),
         )
         self._locale = load_gui_locale(self._ui_language_code)
         self._log_mode_code = (
@@ -1855,7 +1942,13 @@ class TranscriptionGUI:
         self._llm_model_var.set(settings.get("llm_model", DEFAULT_MODEL))
         self._llm_key_var.set(settings.get("llm_api_key", ""))
         self._llm_prompt_var.set(settings.get("llm_prompt", "summarize"))
+        self._llm_context_var.set(settings.get("llm_context_tokens_override", "").strip())
         self._llm_custom_user_prompt = settings.get("llm_custom_user_prompt", "")
+        self._cached_llm_models = self._load_cached_llm_models(settings)
+        self._cached_llm_model_contexts = self._load_cached_llm_model_contexts(settings)
+        if self._cached_llm_models:
+            self._available_llm_models = list(self._cached_llm_models)
+            self._llm_model_contexts = dict(self._cached_llm_model_contexts)
 
         # Proxy settings
         self._proxy_use_system_var.set(
@@ -1902,8 +1995,15 @@ class TranscriptionGUI:
             self._normalize_speaker_preset(settings.get("file_speaker_preset", "auto"))
         )
 
-        saved_file_model = settings.get("file_model", "")
+        saved_live_model = settings.get("live_model", "")
         _avail = {m.id for m in get_available_model_catalog()}
+        if saved_live_model and saved_live_model in _avail:
+            self._model_var.set(saved_live_model)
+            saved_live_lang = settings.get("live_language", "")
+            if saved_live_lang:
+                self._language_var.set(saved_live_lang)
+
+        saved_file_model = settings.get("file_model", "")
         if saved_file_model and saved_file_model in _avail:
             self._file_model_var.set(saved_file_model)
             saved_file_lang = settings.get("file_language", "")
@@ -1917,8 +2017,12 @@ class TranscriptionGUI:
                 "llm_model": self._llm_model_var.get().strip(),
                 "llm_api_key": self._llm_key_var.get(),
                 "llm_prompt": self._llm_prompt_var.get().strip() or "summarize",
+                "llm_context_tokens_override": self._llm_context_var.get().strip(),
                 "llm_custom_user_prompt": self._llm_custom_user_prompt,
+                _LLM_MODELS_CACHE_KEY: json.dumps(self._cached_llm_models, ensure_ascii=False),
+                _LLM_MODEL_CONTEXT_CACHE_KEY: json.dumps(self._cached_llm_model_contexts, ensure_ascii=False),
                 "gui_language": self._ui_language_code,
+                "gui_language_explicit": "true" if self._ui_language_explicit else "false",
                 "gui_log_mode": self._current_log_mode(),
                 "last_recorded_file": str(self._last_recorded_file) if self._last_recorded_file else "",
                 "last_transcript_path": str(self._last_transcript_path) if self._last_transcript_path else "",
@@ -1930,6 +2034,9 @@ class TranscriptionGUI:
                 "proxy_ca_bundle": self._proxy_ca_var.get().strip(),
                 # HuggingFace
                 "hf_token": self._hf_token_var.get().strip(),
+                # Live transcription model/language
+                "live_model": self._model_var.get().strip(),
+                "live_language": self._language_var.get().strip(),
                 # Transcription quality
                 "file_quality": self._file_quality_var.get(),
                 "file_diarization_strategy": self._file_diarization_var.get().strip(),
@@ -2180,12 +2287,147 @@ class TranscriptionGUI:
         self._file_workflow_label.configure(text=workflow_text)
         llm_enabled = transcript_ready and self._llm_worker is None and self._file_worker is None
         self._llm_summarize_btn.configure(state=(tk.NORMAL if llm_enabled else tk.DISABLED))
+        llm_probe_enabled = (
+            self._llm_worker is None
+            and self._file_worker is None
+            and not self._llm_model_refreshing
+            and not self._llm_probe_running
+        )
+        if hasattr(self, "_llm_probe_btn"):
+            self._llm_probe_btn.configure(state=(tk.NORMAL if llm_probe_enabled else tk.DISABLED))
         if self._last_transcript_path is not None and self._last_transcript_path.exists():
             self._file_artifact_label.configure(
                 text=self._tr("file.label.transcript_file", path=self._last_transcript_path)
             )
         else:
             self._file_artifact_label.configure(text=self._tr("file.label.transcript_missing"))
+
+    @staticmethod
+    def _parse_llm_context_tokens(value: object) -> int | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            parsed = value
+        elif isinstance(value, float) and value.is_integer():
+            parsed = int(value)
+        else:
+            text = str(value).strip()
+            if not text.isdigit():
+                return None
+            parsed = int(text)
+        return parsed if parsed >= _LLM_MIN_CONTEXT_TOKENS else None
+
+    @staticmethod
+    def _load_cached_llm_models(settings: dict[str, str]) -> list[str]:
+        raw = settings.get(_LLM_MODELS_CACHE_KEY, "").strip()
+        if not raw:
+            return []
+        try:
+            payload = json.loads(raw)
+        except ValueError:
+            return []
+        if not isinstance(payload, list):
+            return []
+        models = [str(item).strip() for item in payload if str(item).strip()]
+        return list(dict.fromkeys(models))
+
+    @classmethod
+    def _load_cached_llm_model_contexts(cls, settings: dict[str, str]) -> dict[str, int]:
+        raw = settings.get(_LLM_MODEL_CONTEXT_CACHE_KEY, "").strip()
+        if not raw:
+            return {}
+        try:
+            payload = json.loads(raw)
+        except ValueError:
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        contexts: dict[str, int] = {}
+        for key, value in payload.items():
+            model_id = str(key).strip()
+            parsed = cls._parse_llm_context_tokens(value)
+            if model_id and parsed is not None:
+                contexts[model_id] = parsed
+        return contexts
+
+    @staticmethod
+    def _model_context_map(model_descriptors: list[LLMModelDescriptor]) -> dict[str, int]:
+        contexts: dict[str, int] = {}
+        for descriptor in model_descriptors:
+            if descriptor.context_tokens is not None:
+                contexts[descriptor.id] = descriptor.context_tokens
+        return contexts
+
+    def _fallback_llm_context_limit(self) -> tuple[int, str]:
+        raw = os.environ.get(_LLM_CONTEXT_TOKEN_ENV, "").strip()
+        if raw.isdigit():
+            return max(_LLM_MIN_CONTEXT_TOKENS, int(raw)), "env"
+        return _LLM_DEFAULT_CONTEXT_TOKENS, "default"
+
+    def _resolve_llm_context_limit(self) -> tuple[int, str]:
+        manual_raw = self._llm_context_var.get().strip()
+        if manual_raw:
+            manual = self._parse_llm_context_tokens(manual_raw)
+            if manual is None:
+                raise ValueError(self._tr("llm.status.invalid_context"))
+            return manual, "manual"
+        model = self._llm_model_var.get().strip() or DEFAULT_MODEL
+        detected = self._llm_model_contexts.get(model)
+        if detected is not None:
+            return detected, "model_metadata"
+        return self._fallback_llm_context_limit()
+
+    def _refresh_llm_context_hint(self) -> None:
+        if not hasattr(self, "_llm_context_hint_label"):
+            return
+        manual_raw = self._llm_context_var.get().strip()
+        if manual_raw:
+            manual = self._parse_llm_context_tokens(manual_raw)
+            if manual is None:
+                text = self._tr("llm.context.invalid")
+            else:
+                text = self._tr("llm.context.manual", tokens=manual)
+        else:
+            model = self._llm_model_var.get().strip() or DEFAULT_MODEL
+            detected = self._llm_model_contexts.get(model)
+            if detected is not None:
+                text = self._tr("llm.context.model_metadata", tokens=detected)
+            else:
+                fallback, source = self._fallback_llm_context_limit()
+                key = "llm.context.env" if source == "env" else "llm.context.default"
+                text = self._tr(key, tokens=fallback)
+        self._llm_context_hint_label.configure(text=text)
+
+    def _apply_llm_model_choices(
+        self,
+        models: list[str],
+        *,
+        contexts: dict[str, int] | None = None,
+        base_url: str,
+        source: str,
+    ) -> str:
+        self._available_llm_models = list(models)
+        self._llm_model_contexts = {
+            model_id: tokens
+            for model_id, tokens in (contexts or {}).items()
+            if model_id in models
+        }
+        self._llm_model_combo.configure(values=models)
+        requested_model = self._llm_model_var.get().strip()
+        selected_model = requested_model
+        if models and requested_model not in models:
+            selected_model = models[0]
+            self._llm_model_var.set(selected_model)
+            log.warning(
+                "gui.llm_model_auto_selected",
+                base_url=base_url,
+                requested_model=requested_model or DEFAULT_MODEL,
+                selected_model=selected_model,
+                model_count=len(models),
+                source=source,
+            )
+        self._refresh_llm_context_hint()
+        return selected_model
 
     def _refresh_llm_models(self) -> None:
         if self._llm_model_refreshing:
@@ -2195,7 +2437,12 @@ class TranscriptionGUI:
         self._persist_gui_settings()
         base_url = self._llm_url_var.get().strip() or DEFAULT_BASE_URL
         api_key = self._llm_key_var.get().strip()
-        result_q: queue.Queue[tuple[list[str], str | None]] = queue.Queue()
+        log.info(
+            "gui.llm_models_refresh_requested",
+            base_url=base_url,
+            api_key_present=bool(api_key),
+        )
+        result_q: queue.Queue[tuple[list[LLMModelDescriptor], str | None]] = queue.Queue()
 
         def _poll() -> None:
             try:
@@ -2208,7 +2455,7 @@ class TranscriptionGUI:
 
         def _run() -> None:
             try:
-                models = asyncio.run(fetch_models(base_url=base_url, api_key=api_key))
+                models = asyncio.run(fetch_model_catalog(base_url=base_url, api_key=api_key))
                 result_q.put((models, None))
             except Exception as exc:  # pragma: no cover
                 result_q.put(([], str(exc)))
@@ -2216,21 +2463,141 @@ class TranscriptionGUI:
         threading.Thread(target=_run, daemon=True).start()
         self.root.after(100, _poll)
 
-    def _on_llm_models_loaded(self, models: list[str], error: str | None) -> None:
+    def _on_llm_models_loaded(self, models: list[LLMModelDescriptor], error: str | None) -> None:
         self._llm_model_refreshing = False
+        base_url = self._llm_url_var.get().strip() or DEFAULT_BASE_URL
         if error:
+            log.error(
+                "gui.llm_models_load_failed",
+                base_url=base_url,
+                error=error,
+            )
+            cached_models = list(getattr(self, "_cached_llm_models", []))
+            if cached_models:
+                selected_model = self._apply_llm_model_choices(
+                    cached_models,
+                    contexts=getattr(self, "_cached_llm_model_contexts", {}),
+                    base_url=base_url,
+                    source="cache",
+                )
+                self._persist_gui_settings()
+                log.warning(
+                    "gui.llm_models_loaded_from_cache",
+                    base_url=base_url,
+                    model_count=len(cached_models),
+                    selected_model=selected_model,
+                    error=error,
+                )
+                self._llm_status_label.configure(
+                    text=self._tr(
+                        "file.status.loaded_models_cached",
+                        count=len(cached_models),
+                        error=error,
+                    )
+                )
+                return
             self._llm_status_label.configure(
                 text=self._tr("file.status.model_load_failed", error=error)
             )
             return
-        self._available_llm_models = models
-        self._llm_model_combo.configure(values=models)
-        if models and self._llm_model_var.get().strip() not in models:
-            self._llm_model_var.set(models[0])
-        self._persist_gui_settings()
-        self._llm_status_label.configure(
-            text=self._tr("file.status.loaded_models", count=len(models))
+        model_ids = [descriptor.id for descriptor in models]
+        model_contexts = self._model_context_map(models)
+        self._cached_llm_models = list(model_ids)
+        self._cached_llm_model_contexts = dict(model_contexts)
+        selected_model = self._apply_llm_model_choices(
+            model_ids,
+            contexts=model_contexts,
+            base_url=base_url,
+            source="remote",
         )
+        self._persist_gui_settings()
+        log.info(
+            "gui.llm_models_loaded",
+            base_url=base_url,
+            model_count=len(models),
+            selected_model=selected_model,
+        )
+        self._llm_status_label.configure(
+            text=self._tr("file.status.loaded_models", count=len(model_ids))
+        )
+
+    def _probe_llm_model(self) -> None:
+        if self._llm_probe_running or self._llm_worker is not None:
+            log.warning("gui.llm_probe_skipped", reason="busy")
+            return
+
+        url = self._llm_url_var.get().strip() or DEFAULT_BASE_URL
+        model = self._llm_model_var.get().strip() or DEFAULT_MODEL
+        api_key = self._llm_key_var.get().strip()
+        self._persist_gui_settings()
+        self._llm_probe_running = True
+        self._llm_status_label.configure(text=self._tr("llm.status.testing_model", model=model))
+        self._refresh_file_workflow()
+        log.info(
+            "gui.llm_probe_requested",
+            base_url=url,
+            model=model,
+            timeout_read=_LLM_PROBE_TIMEOUT_READ,
+            api_key_present=bool(api_key),
+        )
+        result_q: queue.Queue[tuple[bool, str]] = queue.Queue()
+
+        def _poll() -> None:
+            try:
+                success, detail = result_q.get_nowait()
+            except queue.Empty:
+                with suppress(tk.TclError, RuntimeError):
+                    self.root.after(100, _poll)
+                return
+            self._on_llm_probe_finished(success, detail, model=model, base_url=url)
+
+        def _run() -> None:
+            try:
+                reply = asyncio.run(
+                    complete(
+                        _LLM_PROBE_MESSAGES,
+                        base_url=url,
+                        model=model,
+                        api_key=api_key,
+                        timeout_read=_LLM_PROBE_TIMEOUT_READ,
+                    )
+                )
+                result_q.put((True, (reply or "").strip()))
+            except Exception as exc:  # pragma: no cover
+                result_q.put((False, str(exc)))
+
+        threading.Thread(target=_run, daemon=True).start()
+        self.root.after(100, _poll)
+
+    def _on_llm_probe_finished(
+        self,
+        success: bool,
+        detail: str,
+        *,
+        model: str,
+        base_url: str,
+    ) -> None:
+        self._llm_probe_running = False
+        if success:
+            preview = " ".join(detail.split())[:80] or "OK"
+            log.info(
+                "gui.llm_probe_succeeded",
+                base_url=base_url,
+                model=model,
+                response_preview=preview,
+            )
+            self._llm_status_label.configure(text=self._tr("llm.status.model_ok", model=model))
+        else:
+            log.error(
+                "gui.llm_probe_failed",
+                base_url=base_url,
+                model=model,
+                error=detail,
+            )
+            self._llm_status_label.configure(
+                text=self._tr("llm.status.model_failed", error=detail[:80])
+            )
+        self._refresh_file_workflow()
 
     def _open_settings(self) -> None:
         """Open the application settings dialog (proxy / network)."""
@@ -3127,6 +3494,146 @@ class TranscriptionGUI:
         self._clear_llm_output()
         self._refresh_file_workflow()
 
+    @staticmethod
+    def _read_transcript_text(path: Path) -> str:
+        data = path.read_bytes()
+        last_error: UnicodeDecodeError | None = None
+        for encoding in ("utf-8-sig", "utf-16", "cp1251"):
+            try:
+                return data.decode(encoding)
+            except UnicodeDecodeError as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        return data.decode("utf-8-sig")
+
+    @staticmethod
+    def _transcript_time_label(seconds: int) -> str:
+        hours, remainder = divmod(max(0, seconds), 3600)
+        minutes, secs = divmod(remainder, 60)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+    @staticmethod
+    def _parse_transcript_rows(text: str) -> list[tuple[str, str, str]]:
+        rows: list[tuple[str, str, str]] = []
+        fallback_seconds = 0
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            match = _IMPORTED_TRANSCRIPT_LINE_RE.match(line)
+            if match is not None:
+                rows.append((
+                    match.group("time"),
+                    match.group("speaker").strip() or _IMPORTED_TRANSCRIPT_SPEAKER,
+                    match.group("text").strip(),
+                ))
+                continue
+            rows.append((
+                TranscriptionGUI._transcript_time_label(fallback_seconds),
+                _IMPORTED_TRANSCRIPT_SPEAKER,
+                line,
+            ))
+            fallback_seconds += 1
+        return rows
+
+    @staticmethod
+    def _parse_srt_rows(text: str) -> list[tuple[str, str, str]]:
+        rows: list[tuple[str, str, str]] = []
+        current_block: list[str] = []
+
+        def _flush_block(lines: list[str]) -> None:
+            block = [line.strip() for line in lines if line.strip()]
+            if not block:
+                return
+            if block[0].isdigit():
+                block = block[1:]
+            if len(block) < 2:
+                return
+            time_match = _IMPORTED_SRT_TIME_RANGE_RE.match(block[0])
+            if time_match is None:
+                return
+            text_value = " ".join(part.strip() for part in block[1:] if part.strip())
+            if not text_value:
+                return
+            speaker = _IMPORTED_TRANSCRIPT_SPEAKER
+            speaker_match = _IMPORTED_SRT_SPEAKER_RE.match(text_value)
+            if speaker_match is not None:
+                speaker = speaker_match.group("speaker").strip() or _IMPORTED_TRANSCRIPT_SPEAKER
+                text_value = speaker_match.group("text").strip()
+            rows.append((time_match.group("start"), speaker, text_value))
+
+        for raw_line in text.splitlines():
+            if raw_line.strip():
+                current_block.append(raw_line)
+                continue
+            _flush_block(current_block)
+            current_block = []
+        _flush_block(current_block)
+        return rows
+
+    def _load_transcript_file(self) -> None:
+        path = filedialog.askopenfilename(
+            title=self._tr("dialog.title.load_transcript"),
+            filetypes=[
+                (self._tr("dialog.filetype.text_file"), "*.txt"),
+                (self._tr("dialog.filetype.srt_file"), "*.srt"),
+                (self._tr("dialog.filetype.markdown_file"), "*.md *.markdown"),
+                (self._tr("dialog.filetype.all_files"), "*.*"),
+            ],
+        )
+        if not path:
+            return
+
+        transcript_path = Path(path)
+        try:
+            transcript_text = self._read_transcript_text(transcript_path)
+            if transcript_path.suffix.lower() == ".srt":
+                rows = self._parse_srt_rows(transcript_text)
+            else:
+                rows = self._parse_transcript_rows(transcript_text)
+        except (OSError, UnicodeError) as exc:
+            log.error("gui.transcript_load_failed", file=str(transcript_path), error=str(exc))
+            self._file_status_label.configure(
+                text=self._tr("file.status.transcript_load_failed", error=exc)
+            )
+            self._refresh_file_workflow()
+            return
+
+        if not rows:
+            log.warning("gui.transcript_load_empty", file=str(transcript_path))
+            self._file_status_label.configure(text=self._tr("file.status.transcript_empty"))
+            self._refresh_file_workflow()
+            return
+
+        for item in self._file_table.get_children():
+            self._file_table.delete(item)
+        self._file_seg_count = 0
+        self._file_segments = []
+        self._last_transcript_path = transcript_path
+        self._file_progress["value"] = 0
+        self._clear_llm_output()
+        for time_str, speaker, segment_text in rows:
+            self._file_table.insert("", tk.END, values=(time_str, speaker, segment_text))
+        self._file_seg_count = len(rows)
+        self._file_seg_counter_label.configure(
+            text=self._tr("file.summary.segments", count=self._file_seg_count)
+        )
+        self._file_table.yview_moveto(1.0)
+        self._file_status_label.configure(
+            text=self._tr(
+                "file.status.transcript_loaded",
+                count=self._file_seg_count,
+                file_name=transcript_path.name,
+            )
+        )
+        log.info(
+            "gui.transcript_loaded",
+            file=str(transcript_path),
+            rows=self._file_seg_count,
+        )
+        self._refresh_file_workflow()
+
     def _save_file_result(self) -> None:
         children = self._file_table.get_children()
         if not children:
@@ -3195,9 +3702,11 @@ class TranscriptionGUI:
 
     def _start_llm_summarize(self) -> None:
         if self._llm_worker is not None:
+            log.warning("gui.llm_summarize_skipped", reason="already_running")
             return
         transcript = self._get_file_transcript_text()
         if not transcript:
+            log.warning("gui.llm_summarize_skipped", reason="no_transcript")
             self._llm_status_label.configure(
                 text=self._tr("llm.status.no_transcript")
             )
@@ -3208,11 +3717,35 @@ class TranscriptionGUI:
         model = self._llm_model_var.get().strip() or DEFAULT_MODEL
         api_key = self._llm_key_var.get().strip()
         prompt_name = self._llm_prompt_var.get().strip() or "summarize"
+        try:
+            context_tokens, context_source = self._resolve_llm_context_limit()
+        except ValueError as exc:
+            log.warning(
+                "gui.llm_summarize_skipped",
+                reason="invalid_context",
+                raw_context=self._llm_context_var.get().strip(),
+            )
+            self._llm_status_label.configure(text=str(exc))
+            self._refresh_file_workflow()
+            return
         self._persist_gui_settings()
+        self._llm_last_error_message = None
 
         self._clear_llm_output()
         self._llm_summarize_btn.configure(state=tk.DISABLED)
         self._llm_status_label.configure(text=self._tr("llm.status.sending", model=model))
+        log.info(
+            "gui.llm_summarize_requested",
+            base_url=url,
+            model=model,
+            prompt_name=prompt_name,
+            transcript_chars=len(transcript),
+            transcript_lines=transcript.count("\n") + 1,
+            api_key_present=bool(api_key),
+            custom_user_prompt=bool(self._llm_custom_user_prompt),
+            context_tokens_resolved=context_tokens,
+            context_source=context_source,
+        )
 
         self._llm_worker = LLMWorker(
             text=transcript,
@@ -3221,6 +3754,7 @@ class TranscriptionGUI:
             api_key=api_key,
             prompt_name=prompt_name,
             custom_user_prompt=(self._llm_custom_user_prompt or None),
+            context_limit_tokens=context_tokens,
             on_token=self._schedule_llm_token,
             on_error=self._schedule_llm_error,
             on_finished=self._schedule_llm_finished,
@@ -3246,11 +3780,26 @@ class TranscriptionGUI:
         self._llm_output.configure(state=tk.DISABLED)
 
     def _show_llm_error(self, message: str) -> None:
+        self._llm_last_error_message = message
+        log.error(
+            "gui.llm_error",
+            base_url=self._llm_url_var.get().strip() or DEFAULT_BASE_URL,
+            model=self._llm_model_var.get().strip() or DEFAULT_MODEL,
+            prompt_name=self._llm_prompt_var.get().strip() or "summarize",
+            error=message,
+        )
         self._llm_status_label.configure(text=self._tr("llm.status.error", message=message[:80]))
         self._append_llm_token(f"\n\n[ERROR] {message}\n")
         self._refresh_file_workflow()
 
     def _on_llm_finished(self) -> None:
+        log.info(
+            "gui.llm_finished",
+            base_url=self._llm_url_var.get().strip() or DEFAULT_BASE_URL,
+            model=self._llm_model_var.get().strip() or DEFAULT_MODEL,
+            prompt_name=self._llm_prompt_var.get().strip() or "summarize",
+            success=self._llm_last_error_message is None,
+        )
         self._llm_worker = None
         self._llm_summarize_btn.configure(state=tk.NORMAL)
         current = self._llm_status_label.cget("text")

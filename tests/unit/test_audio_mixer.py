@@ -89,6 +89,19 @@ class _FailingSource:
             yield
 
 
+class _CancellationNoiseSource(_WorkingSource):
+    """Fake source that raises an inactivity error during cancellation."""
+
+    async def stream(self, *, chunk_duration_ms: int = 500) -> AsyncIterator[AudioChunk]:
+        del chunk_duration_ms
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError as exc:
+            raise AudioCaptureError("PyAudioLoopbackCapture is not active") from exc
+        if False:  # pragma: no cover
+            yield
+
+
 @pytest.mark.asyncio
 async def test_mixer_falls_back_to_working_source() -> None:
     """Mixer should stay operational when one source fails to start."""
@@ -131,3 +144,18 @@ async def test_mixer_forwards_all_sources_when_both_work() -> None:
     sources = {c.source for c in chunks}
     assert sources == {"mic", "system"}
     await mixer.stop()
+
+
+@pytest.mark.asyncio
+async def test_mixer_stop_waits_for_cancelled_source_tasks() -> None:
+    """Mixer stop should await and clear cancelled consumer tasks."""
+    source = _CancellationNoiseSource("system")
+    mixer = AudioMixer([source])
+    mixer._active = True
+    task = asyncio.create_task(mixer._consume_source(source, 500))
+    mixer._tasks = [task]
+
+    await mixer.stop()
+
+    assert mixer._tasks == []
+    assert task.done()
