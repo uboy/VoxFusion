@@ -30,6 +30,7 @@ _COMPLETIONS_PATH = "/api/chat/completions"
 _MODEL_PATHS = ("/api/models", "/api/tags")
 _TIMEOUT_CONNECT = 10.0   # seconds to establish connection
 _TIMEOUT_READ = 300.0     # seconds to wait for first token / full response
+_TIMEOUT_READY_CHECK = 15.0
 _MODEL_FETCH_RETRY_STATUSES = frozenset({429, 502, 503, 504})
 _MODEL_FETCH_MAX_ATTEMPTS = 3
 _MODEL_FETCH_RETRY_DELAY_S = 1.0
@@ -510,3 +511,20 @@ async def complete(
     ):
         parts.append(token)
     return "".join(parts)
+
+
+async def verify_model_ready(
+    *,
+    base_url: str = DEFAULT_BASE_URL,
+    model: str = DEFAULT_MODEL,
+    api_key: str = "",
+    timeout_read: float = _TIMEOUT_READY_CHECK,
+) -> None:
+    """Run a tiny request to verify the API and selected model are responsive."""
+    await complete(
+        [{"role": "user", "content": "Reply with OK and nothing else."}],
+        base_url=base_url,
+        model=model,
+        api_key=api_key,
+        timeout_read=timeout_read,
+    )

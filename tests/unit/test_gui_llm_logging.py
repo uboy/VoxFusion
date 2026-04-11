@@ -45,6 +45,8 @@ def test_start_llm_summarize_logs_request(monkeypatch) -> None:
 
     gui = object.__new__(TranscriptionGUI)
     gui._llm_worker = None
+    gui._file_worker = None
+    gui._llm_preflight_running = False
     gui._llm_url_var = _FakeVar("http://openwebui:3000")
     gui._llm_model_var = _FakeVar("llama3.2:3b")
     gui._llm_key_var = _FakeVar("secret")
@@ -60,12 +62,18 @@ def test_start_llm_summarize_logs_request(monkeypatch) -> None:
     gui._schedule_llm_token = MagicMock()
     gui._schedule_llm_error = MagicMock()
     gui._schedule_llm_finished = MagicMock()
+    gui.root = type("Root", (), {"after": staticmethod(lambda _delay, fn, *args: fn(*args))})()
     gui._get_file_transcript_text = lambda: "[00:00:01] [SPEAKER_00] Hello\n[00:00:03] [SPEAKER_01] World"
     gui._tr = lambda key, **kwargs: key if not kwargs else f"{key}:{kwargs}"
     gui._llm_last_error_message = None
 
     monkeypatch.setattr(gui_main, "log", fake_log)
     monkeypatch.setattr(gui_main, "LLMWorker", _FakeWorker)
+    monkeypatch.setattr(gui_main, "verify_model_ready", lambda **kwargs: _fake_ready())
+    monkeypatch.setattr(gui_main.threading, "Thread", _ImmediateThread)
+
+    async def _fake_ready() -> None:
+        return None
 
     TranscriptionGUI._start_llm_summarize(gui)
 
@@ -83,6 +91,56 @@ def test_start_llm_summarize_logs_request(monkeypatch) -> None:
         context_source="model_metadata",
     )
     assert worker_instances[0].kwargs["context_limit_tokens"] == 8192
+
+
+def test_start_llm_summarize_reports_preflight_failure(monkeypatch) -> None:
+    fake_log = MagicMock()
+    worker_instances: list[object] = []
+
+    class _FakeWorker:
+        def __init__(self, **kwargs: object) -> None:
+            worker_instances.append(kwargs)
+
+        def start(self) -> None:
+            return None
+
+    async def _fake_ready_fail() -> None:
+        raise RuntimeError("Cannot connect to Open WebUI")
+
+    gui = object.__new__(TranscriptionGUI)
+    gui._llm_worker = None
+    gui._file_worker = None
+    gui._llm_preflight_running = False
+    gui._llm_url_var = _FakeVar("http://openwebui:3000")
+    gui._llm_model_var = _FakeVar("llama3.2:3b")
+    gui._llm_key_var = _FakeVar("")
+    gui._llm_prompt_var = _FakeVar("summarize")
+    gui._llm_context_var = _FakeVar("")
+    gui._llm_custom_user_prompt = ""
+    gui._llm_model_contexts = {"llama3.2:3b": 8192}
+    gui._llm_summarize_btn = MagicMock()
+    gui._llm_status_label = MagicMock()
+    gui._persist_gui_settings = MagicMock()
+    gui._clear_llm_output = MagicMock()
+    gui._refresh_file_workflow = MagicMock()
+    gui._schedule_llm_token = MagicMock()
+    gui._schedule_llm_error = MagicMock()
+    gui._schedule_llm_finished = MagicMock()
+    gui._show_llm_error = MagicMock()
+    gui.root = type("Root", (), {"after": staticmethod(lambda _delay, fn, *args: fn(*args))})()
+    gui._get_file_transcript_text = lambda: "[00:00:01] [SPEAKER_00] Hello"
+    gui._tr = lambda key, **kwargs: key if not kwargs else f"{key}:{kwargs}"
+    gui._llm_last_error_message = None
+
+    monkeypatch.setattr(gui_main, "log", fake_log)
+    monkeypatch.setattr(gui_main, "LLMWorker", _FakeWorker)
+    monkeypatch.setattr(gui_main, "verify_model_ready", lambda **kwargs: _fake_ready_fail())
+    monkeypatch.setattr(gui_main.threading, "Thread", _ImmediateThread)
+
+    TranscriptionGUI._start_llm_summarize(gui)
+
+    assert not worker_instances
+    gui._show_llm_error.assert_called_once()
 
 
 def test_on_llm_models_loaded_logs_failure(monkeypatch) -> None:
@@ -178,6 +236,7 @@ def test_probe_llm_model_logs_success(monkeypatch) -> None:
     gui._file_worker = None
     gui._llm_model_refreshing = False
     gui._llm_probe_running = False
+    gui._llm_preflight_running = False
     gui._llm_url_var = _FakeVar("http://openwebui:3000")
     gui._llm_model_var = _FakeVar("llama3.2:3b")
     gui._llm_key_var = _FakeVar("secret")
@@ -220,6 +279,7 @@ def test_probe_llm_model_logs_failure(monkeypatch) -> None:
     gui._file_worker = None
     gui._llm_model_refreshing = False
     gui._llm_probe_running = False
+    gui._llm_preflight_running = False
     gui._llm_url_var = _FakeVar("http://openwebui:3000")
     gui._llm_model_var = _FakeVar("qwen3:32b")
     gui._llm_key_var = _FakeVar("secret")

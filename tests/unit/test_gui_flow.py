@@ -1,6 +1,8 @@
 """Unit tests for guided GUI flow helpers."""
 
+import importlib
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from voxfusion.gui.main import (
@@ -12,6 +14,8 @@ from voxfusion.gui.main import (
     TranscriptionGUI,
 )
 from voxfusion.gui.runtime import derive_capture_source
+
+gui_main = importlib.import_module("voxfusion.gui.main")
 
 
 def test_workflow_status_without_recording_or_transcript() -> None:
@@ -159,3 +163,47 @@ def test_file_transcribe_clears_table_on_start(tmp_path: Path) -> None:
 
     assert cleared, "_clear_file_table was not called before starting the worker"
     assert gui._file_seg_count == 0
+
+
+def test_save_as_vtt_writes_webvtt_content(tmp_path: Path) -> None:
+    gui = object.__new__(TranscriptionGUI)
+    gui._tr = lambda key, **kwargs: key if not kwargs else f"{key}:{kwargs}"
+    gui._file_segments = [
+        SimpleNamespace(
+            diarized=SimpleNamespace(
+                speaker="SPEAKER_01",
+                segment=SimpleNamespace(
+                    start_time=1.25,
+                    end_time=3.5,
+                    text="Hello world",
+                ),
+            )
+        )
+    ]
+
+    out_path = tmp_path / "meeting.vtt"
+    TranscriptionGUI._save_as_vtt(gui, out_path)
+
+    content = out_path.read_text(encoding="utf-8")
+    assert content.startswith("WEBVTT\n\n")
+    assert "00:00:01.250 --> 00:00:03.500" in content
+    assert "[SPEAKER_01] Hello world" in content
+
+
+def test_download_file_model_cancels_when_existing_model_redownload_declined(monkeypatch) -> None:
+    gui = object.__new__(TranscriptionGUI)
+    gui._file_model_var = MagicMock(**{"get.return_value": "small"})
+    gui._file_status_label = MagicMock()
+    gui._file_download_btn = MagicMock()
+    gui._append_log_line = MagicMock()
+    gui._refresh_file_workflow = MagicMock()
+    gui.root = object()
+    gui._tr = lambda key, **kwargs: key if not kwargs else f"{key}:{kwargs}"
+
+    monkeypatch.setattr(gui_main.messagebox, "askyesno", lambda *args, **kwargs: False)
+    monkeypatch.setattr(TranscriptionGUI, "_is_model_cached_locally", classmethod(lambda cls, info: True))
+
+    TranscriptionGUI._download_file_model(gui)
+
+    gui._file_status_label.configure.assert_called_once()
+    gui._file_download_btn.configure.assert_not_called()

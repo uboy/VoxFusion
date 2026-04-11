@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from time import monotonic
-from tkinter import filedialog, scrolledtext, ttk
+from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from voxfusion.asr_catalog import (
     DEFAULT_LANGUAGE_CODE,
@@ -78,6 +78,7 @@ from voxfusion.llm.client import (
     LLMModelDescriptor,
     complete,
     fetch_model_catalog,
+    verify_model_ready,
 )
 from voxfusion.llm.prompts import BUILTIN_PROMPTS
 from voxfusion.logging import get_logger
@@ -235,6 +236,7 @@ class TranscriptionGUI:
         self._cached_llm_model_contexts: dict[str, int] = {}
         self._llm_model_refreshing = False
         self._llm_probe_running = False
+        self._llm_preflight_running = False
         self._llm_last_error_message: str | None = None
         self._llm_model_var.trace_add("write", lambda *_: self._refresh_llm_context_hint())
         self._llm_context_var.trace_add("write", lambda *_: self._refresh_llm_context_hint())
@@ -490,6 +492,34 @@ class TranscriptionGUI:
 
     def _build_layout(self) -> None:
         """Build the top-level layout with a two-tab Notebook and resizable log pane."""
+        header = ttk.Frame(self.root)
+        header.pack(fill=tk.X, padx=6, pady=(6, 2))
+
+        header_title = ttk.Label(header, text=self._tr("app.title"), anchor="w")
+        header_title.pack(side=tk.LEFT)
+
+        header_controls = ttk.Frame(header)
+        header_controls.pack(side=tk.RIGHT)
+
+        self._settings_button = ttk.Button(header_controls, text="", command=self._open_settings)
+        self._settings_button.pack(side=tk.RIGHT, padx=(8, 0))
+        self._bind_text(self._settings_button, "header.settings")
+        self._bind_tooltip(self._settings_button, "tooltip.header.settings")
+
+        self._ui_language_combo = ttk.Combobox(
+            header_controls,
+            textvariable=self._ui_language_var,
+            state="readonly",
+            width=10,
+        )
+        self._ui_language_combo.pack(side=tk.RIGHT, padx=(0, 8))
+        self._ui_language_combo.bind("<<ComboboxSelected>>", self._on_ui_language_changed)
+        self._bind_tooltip(self._ui_language_combo, "tooltip.header.language")
+
+        self._ui_language_label = ttk.Label(header_controls, text="")
+        self._ui_language_label.pack(side=tk.RIGHT, padx=(0, 4))
+        self._bind_text(self._ui_language_label, "header.language")
+
         paned = ttk.PanedWindow(self.root, orient=tk.VERTICAL)
         paned.pack(fill=tk.BOTH, expand=True, padx=2, pady=(2, 2))
 
@@ -518,11 +548,6 @@ class TranscriptionGUI:
         log_controls = ttk.Frame(log_header)
         log_controls.pack(side=tk.RIGHT)
 
-        self._settings_button = ttk.Button(log_controls, text="", command=self._open_settings)
-        self._settings_button.pack(side=tk.RIGHT, padx=(8, 0))
-        self._bind_text(self._settings_button, "header.settings")
-        self._bind_tooltip(self._settings_button, "tooltip.header.settings")
-
         self._log_mode_combo = ttk.Combobox(
             log_controls,
             textvariable=self._log_mode_var,
@@ -536,20 +561,6 @@ class TranscriptionGUI:
         self._log_mode_caption = ttk.Label(log_controls, text="")
         self._log_mode_caption.pack(side=tk.RIGHT, padx=(0, 4))
         self._bind_text(self._log_mode_caption, "header.log_mode")
-
-        self._ui_language_combo = ttk.Combobox(
-            log_controls,
-            textvariable=self._ui_language_var,
-            state="readonly",
-            width=10,
-        )
-        self._ui_language_combo.pack(side=tk.RIGHT, padx=(0, 8))
-        self._ui_language_combo.bind("<<ComboboxSelected>>", self._on_ui_language_changed)
-        self._bind_tooltip(self._ui_language_combo, "tooltip.header.language")
-
-        self._ui_language_label = ttk.Label(log_controls, text="")
-        self._ui_language_label.pack(side=tk.RIGHT, padx=(0, 4))
-        self._bind_text(self._ui_language_label, "header.language")
 
         self.log_widget = scrolledtext.ScrolledText(
             log_frame,
@@ -2285,13 +2296,19 @@ class TranscriptionGUI:
             else:
                 workflow_text = self._tr("file.workflow.step1")
         self._file_workflow_label.configure(text=workflow_text)
-        llm_enabled = transcript_ready and self._llm_worker is None and self._file_worker is None
+        llm_enabled = (
+            transcript_ready
+            and self._llm_worker is None
+            and self._file_worker is None
+            and not self._llm_preflight_running
+        )
         self._llm_summarize_btn.configure(state=(tk.NORMAL if llm_enabled else tk.DISABLED))
         llm_probe_enabled = (
             self._llm_worker is None
             and self._file_worker is None
             and not self._llm_model_refreshing
             and not self._llm_probe_running
+            and not self._llm_preflight_running
         )
         if hasattr(self, "_llm_probe_btn"):
             self._llm_probe_btn.configure(state=(tk.NORMAL if llm_probe_enabled else tk.DISABLED))
@@ -2522,7 +2539,7 @@ class TranscriptionGUI:
         )
 
     def _probe_llm_model(self) -> None:
-        if self._llm_probe_running or self._llm_worker is not None:
+        if self._llm_probe_running or self._llm_worker is not None or self._llm_preflight_running:
             log.warning("gui.llm_probe_skipped", reason="busy")
             return
 
@@ -3305,6 +3322,22 @@ class TranscriptionGUI:
         """Download the currently selected file-transcription model in a background thread."""
         model_id = self._file_model_var.get() or "small"
         model_info = get_model_info(model_id)
+        if self._is_model_cached_locally(model_info):
+            should_redownload = messagebox.askyesno(
+                self._tr("dialog.title.redownload_model"),
+                self._tr("dialog.message.redownload_model", model_name=model_info.name),
+                parent=self.root,
+            )
+            if not should_redownload:
+                self._file_status_label.configure(
+                    text=self._tr(
+                        "file.status.download_cancelled_existing",
+                        model_name=model_info.name,
+                    ),
+                    foreground="",
+                )
+                self._refresh_file_workflow()
+                return
 
         self._file_download_btn.configure(state=tk.DISABLED)
         self._file_status_label.configure(
@@ -3339,16 +3372,19 @@ class TranscriptionGUI:
         def _run() -> None:
             try:
                 if model_info.engine == "gigaam":
-                    import os
                     from transformers import AutoModel
                     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
                     AutoModel.from_pretrained(
-                        "ai-sage/GigaAM-v3", trust_remote_code=True, token=token
+                        "ai-sage/GigaAM-v3",
+                        trust_remote_code=True,
+                        token=token,
+                        force_download=True,
                     )
                 elif model_info.engine == "breeze":
                     from huggingface_hub import snapshot_download
                     snapshot_download(
                         "MediaTek-Research/Breeze-ASR-25",
+                        force_download=True,
                         ignore_patterns=[
                             "optimizer.bin",
                             "scheduler.bin",
@@ -3359,11 +3395,16 @@ class TranscriptionGUI:
                     )
                 elif model_info.engine == "parakeet":
                     from nemo.collections.asr.models import ASRModel
-                    ASRModel.from_pretrained(model_name="nvidia/parakeet-tdt-0.6b-v3")
+                    ASRModel.from_pretrained(
+                        model_name="nvidia/parakeet-tdt-0.6b-v3",
+                        refresh_cache=True,
+                    )
                 else:
-                    # faster-whisper downloads on first use; trigger it here explicitly
-                    from faster_whisper import WhisperModel
-                    WhisperModel(model_info.id, device="cpu", compute_type="int8")
+                    from huggingface_hub import snapshot_download
+                    snapshot_download(
+                        f"Systran/faster-whisper-{model_info.id}",
+                        force_download=True,
+                    )
                 result_q.put(None)
             except Exception as exc:
                 result_q.put(exc)
@@ -3642,6 +3683,7 @@ class TranscriptionGUI:
             defaultextension=".txt",
             filetypes=[
                 (self._tr("dialog.filetype.text_file"), "*.txt"),
+                (self._tr("dialog.filetype.vtt_file"), "*.vtt"),
                 (self._tr("dialog.filetype.srt_file"), "*.srt"),
                 (self._tr("dialog.filetype.all_files"), "*.*"),
             ],
@@ -3651,14 +3693,17 @@ class TranscriptionGUI:
             return
         try:
             out_path = Path(path)
-            if out_path.suffix.lower() == ".srt":
+            suffix = out_path.suffix.lower()
+            if suffix == ".srt":
                 self._save_as_srt(out_path)
+            elif suffix == ".vtt":
+                self._save_as_vtt(out_path)
             else:
                 self._save_as_txt(out_path, children)
             self._file_status_label.configure(
                 text=self._tr("file.status.saved", count=self._file_seg_count, path=out_path.name)
             )
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             self._file_status_label.configure(text=self._tr("file.status.save_failed", error=exc))
         self._refresh_file_workflow()
 
@@ -3687,6 +3732,23 @@ class TranscriptionGUI:
             lines.append(f"{i}\n{start} --> {end}\n{text}\n")
         path.write_text("\n".join(lines), encoding="utf-8")
 
+    def _save_as_vtt(self, path: Path) -> None:
+        if not self._file_segments:
+            raise ValueError(self._tr("file.status.vtt_requires_timestamps"))
+        lines = ["WEBVTT", ""]
+        for seg in self._file_segments:
+            ts = seg.diarized.segment
+            start = _secs_to_vtt(ts.start_time)
+            end = _secs_to_vtt(ts.end_time)
+            speaker = seg.diarized.speaker.strip()
+            text = ts.text.strip()
+            if speaker:
+                text = f"[{speaker}] {text}"
+            lines.append(f"{start} --> {end}")
+            lines.append(text)
+            lines.append("")
+        path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
     # ------------------------------------------------------------------
     # LLM summarize methods
     # ------------------------------------------------------------------
@@ -3701,7 +3763,7 @@ class TranscriptionGUI:
         return "\n".join(lines)
 
     def _start_llm_summarize(self) -> None:
-        if self._llm_worker is not None:
+        if self._llm_worker is not None or self._llm_preflight_running:
             log.warning("gui.llm_summarize_skipped", reason="already_running")
             return
         transcript = self._get_file_transcript_text()
@@ -3733,7 +3795,7 @@ class TranscriptionGUI:
 
         self._clear_llm_output()
         self._llm_summarize_btn.configure(state=tk.DISABLED)
-        self._llm_status_label.configure(text=self._tr("llm.status.sending", model=model))
+        self._llm_status_label.configure(text=self._tr("llm.status.checking_api", model=model))
         log.info(
             "gui.llm_summarize_requested",
             base_url=url,
@@ -3746,20 +3808,52 @@ class TranscriptionGUI:
             context_tokens_resolved=context_tokens,
             context_source=context_source,
         )
+        self._llm_preflight_running = True
+        self._refresh_file_workflow()
+        result_q: queue.Queue[tuple[bool, str | None]] = queue.Queue()
 
-        self._llm_worker = LLMWorker(
-            text=transcript,
-            model=model,
-            base_url=url,
-            api_key=api_key,
-            prompt_name=prompt_name,
-            custom_user_prompt=(self._llm_custom_user_prompt or None),
-            context_limit_tokens=context_tokens,
-            on_token=self._schedule_llm_token,
-            on_error=self._schedule_llm_error,
-            on_finished=self._schedule_llm_finished,
-        )
-        self._llm_worker.start()
+        def _poll() -> None:
+            try:
+                success, error = result_q.get_nowait()
+            except queue.Empty:
+                with suppress(tk.TclError, RuntimeError):
+                    self.root.after(100, _poll)
+                return
+            self._llm_preflight_running = False
+            if not success:
+                self._llm_summarize_btn.configure(state=tk.NORMAL)
+                self._show_llm_error(error or self._tr("llm.status.api_unavailable"))
+                return
+            self._llm_status_label.configure(text=self._tr("llm.status.sending", model=model))
+            self._llm_worker = LLMWorker(
+                text=transcript,
+                model=model,
+                base_url=url,
+                api_key=api_key,
+                prompt_name=prompt_name,
+                custom_user_prompt=(self._llm_custom_user_prompt or None),
+                context_limit_tokens=context_tokens,
+                on_token=self._schedule_llm_token,
+                on_error=self._schedule_llm_error,
+                on_finished=self._schedule_llm_finished,
+            )
+            self._llm_worker.start()
+
+        def _run() -> None:
+            try:
+                asyncio.run(
+                    verify_model_ready(
+                        base_url=url,
+                        model=model,
+                        api_key=api_key,
+                    )
+                )
+                result_q.put((True, None))
+            except Exception as exc:  # pragma: no cover
+                result_q.put((False, str(exc)))
+
+        threading.Thread(target=_run, daemon=True).start()
+        self.root.after(100, _poll)
 
     def _schedule_llm_token(self, token: str) -> None:
         with suppress(tk.TclError, RuntimeError):
@@ -3821,6 +3915,55 @@ class TranscriptionGUI:
             self.root.clipboard_append(text)
             self._llm_status_label.configure(text=self._tr("llm.status.copied"))
 
+    @staticmethod
+    def _hf_cache_roots() -> tuple[Path, ...]:
+        candidates: list[Path] = []
+        for raw in (
+            os.environ.get("HUGGINGFACE_HUB_CACHE", "").strip(),
+            os.environ.get("HF_HUB_CACHE", "").strip(),
+        ):
+            if raw:
+                candidates.append(Path(raw).expanduser())
+        hf_home = os.environ.get("HF_HOME", "").strip()
+        if hf_home:
+            candidates.append(Path(hf_home).expanduser() / "hub")
+        candidates.extend(
+            (
+                models_dir() / "hub",
+                Path.home() / ".cache" / "huggingface" / "hub",
+            )
+        )
+        deduped: list[Path] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            key = str(candidate).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(candidate)
+        return tuple(deduped)
+
+    @classmethod
+    def _snapshot_exists(cls, repo_id: str) -> bool:
+        cache_name = f"models--{repo_id.replace('/', '--')}"
+        for root in cls._hf_cache_roots():
+            snapshot_dir = root / cache_name / "snapshots"
+            if snapshot_dir.exists() and any(snapshot_dir.iterdir()):
+                return True
+        return False
+
+    @classmethod
+    def _is_model_cached_locally(cls, model_info: object) -> bool:
+        engine = getattr(model_info, "engine", "")
+        model_id = getattr(model_info, "id", "")
+        if engine == "gigaam":
+            return cls._snapshot_exists("ai-sage/GigaAM-v3")
+        if engine == "breeze":
+            return cls._snapshot_exists("MediaTek-Research/Breeze-ASR-25")
+        if engine == "parakeet":
+            return cls._snapshot_exists("nvidia/parakeet-tdt-0.6b-v3")
+        return cls._snapshot_exists(f"Systran/faster-whisper-{model_id}")
+
     # ------------------------------------------------------------------
     # Shared helpers
     # ------------------------------------------------------------------
@@ -3844,6 +3987,15 @@ def _secs_to_srt(secs: float) -> str:
     s = int(secs % 60)
     ms = int((secs - int(secs)) * 1000)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def _secs_to_vtt(secs: float) -> str:
+    """Convert float seconds to WebVTT timestamp (HH:MM:SS.mmm)."""
+    h = int(secs // 3600)
+    m = int((secs % 3600) // 60)
+    s = int(secs % 60)
+    ms = int((secs - int(secs)) * 1000)
+    return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
 
 
 # ---------------------------------------------------------------------------
