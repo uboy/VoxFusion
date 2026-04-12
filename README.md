@@ -170,7 +170,7 @@ The GUI layout uses resizable panes for setup, transcript, LLM output, and logs,
 The GUI toolbar includes `Logs: Normal/Debug`; `Normal` keeps the log pane readable by showing key milestones and errors only, while `Debug` exposes the full structured pipeline log.
 Open WebUI model loading and transcript-processing requests now emit dedicated `llm.*` / `gui.llm_*` lifecycle events in the log pane, including URL, model, and HTTP status diagnostics while keeping the API key out of the logs.
 Use the GUI `Test Model` button to send a tiny real completion request to the selected model when model-list refresh alone is not enough to diagnose backend failures.
-The file-results area also supports loading an existing transcript `.txt`, `.srt`, or `.md` file directly into the table so it can be reviewed or sent to Open WebUI without re-running transcription.
+The file-results area also supports loading an existing transcript `.txt`, `.srt`, `.vtt`, or `.md` file directly into the table so it can be reviewed or sent to Open WebUI without re-running transcription.
 The file-results area `Export...` button supports `TXT`, `VTT`, and `SRT`; the auto-saved sidecar transcript remains `.transcript.txt`.
 If the selected ASR model is already cached locally, the GUI now warns before downloading again and lets you cancel or force a redownload in case the cache may be corrupted.
 Before `Send to LLM` starts the real transcript request, VoxFusion now runs a lightweight API/model readiness check so unreachable-server failures are reported immediately instead of looking like a long model-load timeout.

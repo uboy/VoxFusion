@@ -1145,6 +1145,20 @@ class TranscriptionGUI:
         self._llm_header_label.pack(side=tk.LEFT)
         self._bind_text(self._llm_header_label, "llm.header")
 
+        self._llm_export_btn = ttk.Button(llm_hdr, text="", command=self._save_file_result)
+        self._llm_export_btn.pack(side=tk.RIGHT, padx=(4, 0))
+        self._bind_text(self._llm_export_btn, "file.button.save")
+        self._bind_tooltip(self._llm_export_btn, "tooltip.file.save")
+
+        self._llm_load_transcript_btn = ttk.Button(
+            llm_hdr,
+            text="",
+            command=self._load_transcript_file,
+        )
+        self._llm_load_transcript_btn.pack(side=tk.RIGHT, padx=(8, 0))
+        self._bind_text(self._llm_load_transcript_btn, "file.button.load_transcript")
+        self._bind_tooltip(self._llm_load_transcript_btn, "tooltip.file.load_transcript")
+
         llm_cfg = ttk.Frame(llm_box)
         llm_cfg.pack(fill=tk.X, pady=(0, 2))
 
@@ -3618,6 +3632,7 @@ class TranscriptionGUI:
             title=self._tr("dialog.title.load_transcript"),
             filetypes=[
                 (self._tr("dialog.filetype.text_file"), "*.txt"),
+                (self._tr("dialog.filetype.vtt_file"), "*.vtt"),
                 (self._tr("dialog.filetype.srt_file"), "*.srt"),
                 (self._tr("dialog.filetype.markdown_file"), "*.md *.markdown"),
                 (self._tr("dialog.filetype.all_files"), "*.*"),
@@ -3629,7 +3644,7 @@ class TranscriptionGUI:
         transcript_path = Path(path)
         try:
             transcript_text = self._read_transcript_text(transcript_path)
-            if transcript_path.suffix.lower() == ".srt":
+            if transcript_path.suffix.lower() in {".srt", ".vtt"}:
                 rows = self._parse_srt_rows(transcript_text)
             else:
                 rows = self._parse_transcript_rows(transcript_text)

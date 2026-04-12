@@ -185,3 +185,39 @@ def test_load_srt_transcript_file_populates_results_table(tmp_path: Path, monkey
     assert fake_table.get_children() == ("row-0", "row-1")
     assert fake_table.item("row-0", "values") == ("00:00:05", "SPEAKER_00", "Hello there")
     assert fake_table.item("row-1", "values") == ("00:00:09", "IMPORTED", "General Kenobi")
+
+
+def test_load_vtt_transcript_file_populates_results_table(tmp_path: Path, monkeypatch) -> None:
+    transcript_path = tmp_path / "meeting.vtt"
+    transcript_path.write_text(
+        "WEBVTT\n\n"
+        "00:00:05.100 --> 00:00:08.400\n"
+        "[SPEAKER_00] Hello there\n\n"
+        "00:00:09.000 --> 00:00:11.000\n"
+        "General Kenobi\n",
+        encoding="utf-8",
+    )
+
+    fake_log = MagicMock()
+    fake_table = _FakeTable()
+
+    gui = object.__new__(TranscriptionGUI)
+    gui._file_table = fake_table
+    gui._file_seg_count = 0
+    gui._file_segments = []
+    gui._last_transcript_path = None
+    gui._file_progress = {}
+    gui._file_seg_counter_label = MagicMock()
+    gui._file_status_label = MagicMock()
+    gui._clear_llm_output = MagicMock()
+    gui._refresh_file_workflow = MagicMock()
+    gui._tr = lambda key, **kwargs: key if not kwargs else f"{key}:{kwargs}"
+
+    monkeypatch.setattr(gui_main, "log", fake_log)
+    monkeypatch.setattr(gui_main.filedialog, "askopenfilename", lambda **kwargs: str(transcript_path))
+
+    TranscriptionGUI._load_transcript_file(gui)
+
+    assert fake_table.get_children() == ("row-0", "row-1")
+    assert fake_table.item("row-0", "values") == ("00:00:05", "SPEAKER_00", "Hello there")
+    assert fake_table.item("row-1", "values") == ("00:00:09", "IMPORTED", "General Kenobi")
