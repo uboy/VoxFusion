@@ -2,6 +2,7 @@
 
 import click
 
+from voxfusion.asr_catalog import GIGAAM_REVISIONS as _GIGAAM_REVISIONS
 from voxfusion.cli.formatting import echo_key_value, echo_success, echo_warning
 from voxfusion.config.loader import load_config
 
@@ -58,15 +59,8 @@ def models_download(
 
     if asr_model:
         click.echo(f"Downloading ASR model: {asr_model}")
-        gigaam_ids = {
-            "gigaam": "e2e_rnnt",  # shorthand → best variant
-            "gigaam-v3-ctc": "ctc",
-            "gigaam-v3-rnnt": "rnnt",
-            "gigaam-v3-e2e-ctc": "e2e_ctc",
-            "gigaam-v3-e2e-rnnt": "e2e_rnnt",
-        }
-        if asr_model in gigaam_ids:
-            revision = gigaam_ids[asr_model]
+        if asr_model in _GIGAAM_REVISIONS:
+            revision = _GIGAAM_REVISIONS[asr_model]
             try:
                 from transformers import AutoModel
             except ImportError as exc:

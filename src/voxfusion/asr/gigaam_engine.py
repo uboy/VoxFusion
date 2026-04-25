@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
+from voxfusion.asr_catalog import GIGAAM_REVISIONS as _GIGAAM_REVISIONS
 from voxfusion.config.models import ASRConfig
 from voxfusion.exceptions import ModelLoadError, TranscriptionError
 from voxfusion.logging import get_logger
@@ -38,15 +39,6 @@ from voxfusion.runtime_torchscript import (
 log = get_logger(__name__)
 
 DEFAULT_GIGAAM_MODEL_REF = "ai-sage/GigaAM-v3"
-
-# Maps catalog model-id → HuggingFace branch (revision) for ai-sage/GigaAM-v3.
-# The repo exposes one branch per model variant; the default branch is e2e_ctc.
-_GIGAAM_REVISIONS: dict[str, str] = {
-    "gigaam-v3-ctc": "ctc",
-    "gigaam-v3-rnnt": "rnnt",
-    "gigaam-v3-e2e-ctc": "e2e_ctc",
-    "gigaam-v3-e2e-rnnt": "e2e_rnnt",
-}
 
 # Minimum free GPU VRAM (MB) required to run GigaAM on CUDA.
 # Below this threshold the engine automatically falls back to CPU.

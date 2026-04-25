@@ -406,6 +406,17 @@ def get_quality_preset(label_or_key: str) -> dict[str, object]:
     return dict(QUALITY_PRESETS.get(key, QUALITY_PRESETS["balanced"]))
 
 
+# Maps catalog model-id (and the bare "gigaam" shorthand) → HuggingFace branch
+# for the ai-sage/GigaAM-v3 repository.  The "gigaam" key is a convenience
+# alias that resolves to the best available variant (e2e_rnnt).
+GIGAAM_REVISIONS: dict[str, str] = {
+    "gigaam": "e2e_rnnt",  # shorthand → best variant
+    "gigaam-v3-ctc": "ctc",
+    "gigaam-v3-rnnt": "rnnt",
+    "gigaam-v3-e2e-ctc": "e2e_ctc",
+    "gigaam-v3-e2e-rnnt": "e2e_rnnt",
+}
+
 _MODEL_BY_ID = {model.id: model for model in ASR_MODEL_CATALOG}
 
 
