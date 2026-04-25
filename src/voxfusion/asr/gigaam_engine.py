@@ -38,7 +38,19 @@ from voxfusion.runtime_torchscript import (
 log = get_logger(__name__)
 
 DEFAULT_GIGAAM_MODEL_REF = "ai-sage/GigaAM-v3"
-# The HF repo has only one branch (main) — no revision parameter needed.
+
+# Maps catalog model-id → HuggingFace branch (revision) for ai-sage/GigaAM-v3.
+# The repo exposes one branch per model variant; the default branch is e2e_ctc.
+_GIGAAM_REVISIONS: dict[str, str] = {
+    "gigaam-v3-ctc": "ctc",
+    "gigaam-v3-rnnt": "rnnt",
+    "gigaam-v3-e2e-ctc": "e2e_ctc",
+    "gigaam-v3-e2e-rnnt": "e2e_rnnt",
+}
+
+# Minimum free GPU VRAM (MB) required to run GigaAM on CUDA.
+# Below this threshold the engine automatically falls back to CPU.
+_MIN_CUDA_FREE_MB = 3000
 
 # GigaAM raises ValueError for audio longer than 25 s; chunk at 24 s to be safe.
 _SAMPLE_RATE = 16000
@@ -47,6 +59,32 @@ _OVERLAP_DURATION_S = 1
 _CHUNK_SAMPLES = _CHUNK_DURATION_S * _SAMPLE_RATE
 _OVERLAP_SAMPLES = _OVERLAP_DURATION_S * _SAMPLE_RATE
 _MIN_TRANSCRIBE_SAMPLES = 320
+
+
+def _resolve_gigaam_device(requested: str) -> str:
+    """Return the device to use for GigaAM inference.
+
+    When *requested* is ``'auto'`` or ``'cuda'``, probes free CUDA VRAM.
+    Falls back to ``'cpu'`` and logs a warning when VRAM is insufficient.
+    """
+    if requested == "cpu":
+        return "cpu"
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return "cpu"
+        free_bytes, total_bytes = torch.cuda.mem_get_info()
+        free_mb = free_bytes // (1024 * 1024)
+        if free_mb >= _MIN_CUDA_FREE_MB:
+            return "cuda"
+        log.warning(
+            "gigaam.cuda_memory_low_fallback_cpu",
+            free_mb=free_mb,
+            required_mb=_MIN_CUDA_FREE_MB,
+        )
+        return "cpu"
+    except Exception:
+        return "cpu"
 
 
 def _prepare_huggingface_runtime_env() -> None:
@@ -186,16 +224,31 @@ class GigaAMCTCEngine:
             kwargs: dict = {"trust_remote_code": True, "token": token}
             if local_only:
                 kwargs["local_files_only"] = True
+            # Select the correct branch for this model variant.
+            revision = _GIGAAM_REVISIONS.get(self._config.model_size)
+            if revision and not local_only:
+                kwargs["revision"] = revision
+                log.info("gigaam.revision_selected", revision=revision)
             try:
                 import torch  # type: ignore[import-not-found]
             except ImportError:
                 torch = None
+
+            if torch is not None:
+                kwargs["torch_dtype"] = torch.float32
 
             if torch is not None and _should_use_torchscript_source_fallback(torch):
                 with _temporary_torchscript_source_fallback(torch):
                     self._model = AutoModel.from_pretrained(model_ref, **kwargs)
             else:
                 self._model = AutoModel.from_pretrained(model_ref, **kwargs)
+
+            # GigaAM-v3 checkpoint is stored in float16; cast to float32 so that CPU
+            # inference doesn't raise "Input type (float) and bias type (c10::Half)".
+            if torch is not None and self._model is not None:
+                device = _resolve_gigaam_device(self._config.device)
+                self._model.float().to(device)
+                log.info("gigaam.device_selected", device=device)
         except Exception as exc:
             err = str(exc).lower()
             if "401" in err or "unauthorized" in err or "authentication" in err:

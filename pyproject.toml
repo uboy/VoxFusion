@@ -44,7 +44,9 @@ httpx = ">=0.24"
 tqdm = ">=4.66"
 typing-extensions = ">=4.13"
 # GigaAM / HuggingFace model backends
-transformers = ">=4.55"
+# transformers 5.x changed model loading to meta-device init which breaks GigaAM's
+# torchaudio.transforms.MelSpectrogram construction; pin to 4.x until upstream fixes it.
+transformers = ">=4.48,<5.0"
 torch = ">=2.4"
 # Parakeet (NeMo) backend (optional — adds ~2 GB)
 nemo_toolkit = {version = ">=2.0", extras = ["asr"], optional = true}

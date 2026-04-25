@@ -55,20 +55,45 @@ def _read_input_list(list_path: Path) -> list[Path]:
     return items
 
 
+def _expand_path(path: Path) -> list[Path]:
+    """Expand a single path: return media files inside directories, or the file itself."""
+    if path.is_file():
+        return [path]
+    if path.is_dir():
+        from voxfusion.media.extractor import NEEDS_EXTRACTION_EXTENSIONS
+        WAV_FLAC = {".wav", ".flac", ".aiff", ".aif"}
+        supported = NEEDS_EXTRACTION_EXTENSIONS | WAV_FLAC
+        found = sorted(p for p in path.iterdir() if p.is_file() and p.suffix.lower() in supported)
+        if not found:
+            raise click.ClickException(
+                f"No supported audio/video files found in directory: {path}"
+            )
+        return found
+    return [path]
+
+
 def _collect_input_files(
     audio_files: tuple[Path, ...],
     input_list: Path | None,
 ) -> list[Path]:
-    """Merge CLI positional inputs with an optional text-file playlist."""
-    files = list(audio_files)
+    """Merge CLI positional inputs with an optional text-file playlist.
+
+    Positional arguments may be files or directories; directories are expanded
+    to all supported audio/video files they contain (non-recursive).
+    """
+    raw: list[Path] = list(audio_files)
     if input_list is not None:
-        files.extend(_read_input_list(input_list))
-    if not files:
+        raw.extend(_read_input_list(input_list))
+    if not raw:
         raise click.ClickException(
-            "Provide at least one input file or use --input-list with a text file."
+            "Provide at least one input file or directory, or use --input-list."
         )
 
-    missing = [str(path) for path in files if not path.exists() or not path.is_file()]
+    files: list[Path] = []
+    for p in raw:
+        files.extend(_expand_path(p))
+
+    missing = [str(p) for p in files if not p.exists()]
     if missing:
         raise click.ClickException(f"Input file not found: {missing[0]}")
     return files
@@ -224,7 +249,7 @@ def _transcribe_batch(
 @click.argument(
     "audio_files",
     nargs=-1,
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    type=click.Path(exists=True, dir_okay=True, path_type=Path),
 )
 @click.option(
     "--input-list",

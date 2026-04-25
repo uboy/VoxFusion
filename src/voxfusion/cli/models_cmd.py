@@ -49,21 +49,34 @@ def models_download(
 
     if asr_model:
         click.echo(f"Downloading ASR model: {asr_model}")
-        if asr_model in ("gigaam-v3-e2e-ctc", "gigaam"):
+        _GIGAAM_IDS = {
+            "gigaam": "e2e_rnnt",  # shorthand → best variant
+            "gigaam-v3-ctc": "ctc",
+            "gigaam-v3-rnnt": "rnnt",
+            "gigaam-v3-e2e-ctc": "e2e_ctc",
+            "gigaam-v3-e2e-rnnt": "e2e_rnnt",
+        }
+        if asr_model in _GIGAAM_IDS:
+            revision = _GIGAAM_IDS[asr_model]
             try:
                 from transformers import AutoModel
             except ImportError:
                 raise click.ClickException(
                     "GigaAM requires the 'transformers' and 'torch' packages.\n"
-                    "Install with: pip install transformers torch"
+                    "Install with: pip install 'transformers>=4.48,<5.0' torch"
                 )
             try:
                 import os
                 token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
-                click.echo("  Downloading ai-sage/GigaAM-v3 from HuggingFace...")
+                click.echo(f"  Downloading ai-sage/GigaAM-v3 (revision={revision}) from HuggingFace...")
                 click.echo("  This may take several minutes (~1.5 GB)...")
-                AutoModel.from_pretrained("ai-sage/GigaAM-v3", trust_remote_code=True, token=token)
-                echo_success("  GigaAM v3 model ready.")
+                AutoModel.from_pretrained(
+                    "ai-sage/GigaAM-v3",
+                    revision=revision,
+                    trust_remote_code=True,
+                    token=token,
+                )
+                echo_success(f"  GigaAM v3 ({revision}) model ready.")
             except Exception as exc:
                 raise click.ClickException(f"Failed to download GigaAM model: {exc}") from exc
         elif asr_model == "breeze-asr":

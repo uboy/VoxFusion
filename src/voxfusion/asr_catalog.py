@@ -199,16 +199,95 @@ ASR_MODEL_CATALOG: tuple[ASRModelInfo, ...] = (
         supported_languages=_WHISPER_LANGUAGE_CODES,
         supports_translation=True,
     ),
+    # GigaAM v3 — Russian-optimised, trained on 700k h, 4k h ASR fine-tuning.
+    # All variants load from ai-sage/GigaAM-v3 with a different `revision` branch.
+    # WER on open Russian benchmarks (lower is better):
+    #   e2e_rnnt ~2.6 %  e2e_ctc ~3.0 %  rnnt ~2.6 %  ctc ~3.0 %
     ASRModelInfo(
-        id="gigaam-v3-e2e-ctc",
-        name="GigaAM v3",
+        id="gigaam-v3-e2e-rnnt",
+        name="GigaAM v3 E2E (best)",
         engine="gigaam",
-        description="Russian-focused model with quality-first draft+finalize live mode and best Russian file transcription.",
-        accuracy_score=0.85,
-        speed_score=0.75,
+        description=(
+            "Best Russian ASR: end-to-end RNN-T with automatic punctuation and "
+            "text normalisation. ~2.6 % WER, 70:30 win vs Whisper-large-v3."
+        ),
+        accuracy_score=0.95,
+        speed_score=0.60,
         supported_languages=("ru",),
         supports_translation=False,
-        supports_live_capture=True,
+        supports_live_capture=False,
+        recommended=True,
+        requires_packages=(
+            "transformers",
+            "torch",
+            "torchaudio",
+            "sentencepiece",
+            "omegaconf",
+            "hydra",
+            "pyannote.audio",
+        ),
+    ),
+    ASRModelInfo(
+        id="gigaam-v3-e2e-ctc",
+        name="GigaAM v3 E2E CTC",
+        engine="gigaam",
+        description=(
+            "End-to-end CTC with automatic punctuation and text normalisation. "
+            "~3.0 % WER. Slightly faster inference than the RNN-T variant."
+        ),
+        accuracy_score=0.92,
+        speed_score=0.70,
+        supported_languages=("ru",),
+        supports_translation=False,
+        supports_live_capture=False,
+        recommended=False,
+        requires_packages=(
+            "transformers",
+            "torch",
+            "torchaudio",
+            "sentencepiece",
+            "omegaconf",
+            "hydra",
+            "pyannote.audio",
+        ),
+    ),
+    ASRModelInfo(
+        id="gigaam-v3-rnnt",
+        name="GigaAM v3 RNN-T",
+        engine="gigaam",
+        description=(
+            "RNN-T decoder, no punctuation/normalisation. ~2.6 % WER. "
+            "Good choice when downstream post-processing handles punctuation."
+        ),
+        accuracy_score=0.90,
+        speed_score=0.65,
+        supported_languages=("ru",),
+        supports_translation=False,
+        supports_live_capture=False,
+        recommended=False,
+        requires_packages=(
+            "transformers",
+            "torch",
+            "torchaudio",
+            "sentencepiece",
+            "omegaconf",
+            "hydra",
+            "pyannote.audio",
+        ),
+    ),
+    ASRModelInfo(
+        id="gigaam-v3-ctc",
+        name="GigaAM v3 CTC",
+        engine="gigaam",
+        description=(
+            "CTC decoder, no punctuation/normalisation. ~3.0 % WER. "
+            "Fastest GigaAM variant; suitable for bulk/high-throughput transcription."
+        ),
+        accuracy_score=0.87,
+        speed_score=0.80,
+        supported_languages=("ru",),
+        supports_translation=False,
+        supports_live_capture=False,
         recommended=False,
         requires_packages=(
             "transformers",
