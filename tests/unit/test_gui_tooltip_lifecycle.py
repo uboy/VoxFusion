@@ -10,7 +10,7 @@ class _FakeTopLevel:
     def __init__(self) -> None:
         self.bindings: dict[str, object] = {}
 
-    def bind(self, event: str, callback, add: str | None = None) -> None:  # noqa: ANN001
+    def bind(self, event: str, callback, add: str | None = None) -> None:
         self.bindings[event] = callback
 
 
@@ -22,13 +22,13 @@ class _FakeWidget:
         self._top = _FakeTopLevel()
         self._counter = 0
 
-    def bind(self, event: str, callback, add: str | None = None) -> None:  # noqa: ANN001
+    def bind(self, event: str, callback, add: str | None = None) -> None:
         self.bindings[event] = callback
 
     def winfo_toplevel(self) -> _FakeTopLevel:
         return self._top
 
-    def after(self, delay: int, callback):  # noqa: ANN001, ANN201
+    def after(self, delay: int, callback):
         self._counter += 1
         handle = f"after-{self._counter}"
         self.after_calls.append((delay, callback))
@@ -48,7 +48,7 @@ class _FakeWidget:
 
 
 class _FakePopup:
-    def __init__(self, _widget) -> None:  # noqa: ANN001
+    def __init__(self, _widget) -> None:
         self.destroyed = False
 
     def wm_overrideredirect(self, _value: bool) -> None:
@@ -92,12 +92,11 @@ def test_tooltip_show_replaces_previous_active_tip(monkeypatch) -> None:
     first = ToolTip(first_widget, "first")
     second = ToolTip(second_widget, "second")
 
-    first._show()  # noqa: SLF001
+    first._show()
     assert ToolTip._active_tip is first
     assert first_widget.after_calls[-1][0] == ToolTip.AUTO_HIDE_MS
 
-    second._show()  # noqa: SLF001
+    second._show()
 
     assert ToolTip._active_tip is second
-    assert first._tip_window is None  # noqa: SLF001
-
+    assert first._tip_window is None

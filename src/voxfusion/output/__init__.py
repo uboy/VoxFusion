@@ -23,9 +23,7 @@ def get_formatter(format_name: str) -> JSONFormatter | SRTFormatter | VTTFormatt
     cls = FORMATTERS.get(format_name)
     if cls is None:
         valid = ", ".join(sorted(FORMATTERS))
-        raise ConfigurationError(
-            f"Unknown output format {format_name!r}. Valid formats: {valid}"
-        )
+        raise ConfigurationError(f"Unknown output format {format_name!r}. Valid formats: {valid}")
     return cls()
 
 

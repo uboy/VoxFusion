@@ -70,9 +70,7 @@ class LibreTranslateEngine:
                 body = json.loads(resp.read().decode("utf-8"))
                 translated = body.get("translatedText", "")
                 if not translated:
-                    raise TranslationError(
-                        f"LibreTranslate returned empty response: {body}"
-                    )
+                    raise TranslationError(f"LibreTranslate returned empty response: {body}")
                 return translated
         except urllib.error.HTTPError as exc:
             error_body = ""
@@ -80,13 +78,9 @@ class LibreTranslateEngine:
                 error_body = exc.read().decode("utf-8")
             except Exception:
                 pass
-            raise TranslationAPIError(
-                f"LibreTranslate HTTP {exc.code}: {error_body}"
-            ) from exc
+            raise TranslationAPIError(f"LibreTranslate HTTP {exc.code}: {error_body}") from exc
         except urllib.error.URLError as exc:
-            raise TranslationAPIError(
-                f"LibreTranslate connection error: {exc.reason}"
-            ) from exc
+            raise TranslationAPIError(f"LibreTranslate connection error: {exc.reason}") from exc
 
     def _detect_sync(self, text: str) -> str:
         """Detect language of text via LibreTranslate API."""
@@ -155,10 +149,7 @@ class LibreTranslateEngine:
         target_language: str,
     ) -> list[str]:
         """Translate multiple texts via LibreTranslate."""
-        return [
-            await self.translate(t, source_language, target_language)
-            for t in texts
-        ]
+        return [await self.translate(t, source_language, target_language) for t in texts]
 
     async def get_languages(self) -> list[dict[str, str]]:
         """Fetch supported languages from the server."""

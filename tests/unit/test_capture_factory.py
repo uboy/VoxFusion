@@ -2,10 +2,7 @@
 
 import sys
 
-import pytest
-
 from voxfusion.capture.factory import create_file_source, detect_platform
-from voxfusion.exceptions import UnsupportedPlatformError
 
 
 class TestDetectPlatform:
@@ -24,8 +21,8 @@ class TestDetectPlatform:
 
 class TestCreateFileSource:
     def test_creates_file_source(self, tmp_path) -> None:
-        import soundfile as sf
         import numpy as np
+        import soundfile as sf
 
         wav = tmp_path / "test.wav"
         sf.write(str(wav), np.zeros(16000, dtype="float32"), 16000)
@@ -33,8 +30,9 @@ class TestCreateFileSource:
         assert source.device_name == "file:test.wav"
 
     def test_respects_config(self, tmp_path) -> None:
-        import soundfile as sf
         import numpy as np
+        import soundfile as sf
+
         from voxfusion.config.models import CaptureConfig
 
         wav = tmp_path / "test.wav"

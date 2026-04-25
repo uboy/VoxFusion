@@ -63,14 +63,16 @@ class PermissionChecker:
         try:
             import subprocess
 
-            result = subprocess.run(
+            subprocess.run(
                 [
-                    "osascript", "-e",
+                    "osascript",
+                    "-e",
                     'tell application "System Events" to '
-                    'get the properties of the first login item',
+                    "get the properties of the first login item",
                 ],
                 capture_output=True,
                 timeout=5,
+                check=False,
             )
             # A more reliable check uses the AVFoundation framework,
             # but that requires PyObjC.  Fall through to a simple
@@ -143,6 +145,7 @@ class PermissionChecker:
                 ["pactl", "info"],
                 capture_output=True,
                 timeout=5,
+                check=False,
             )
             if result.returncode == 0:
                 log.debug("permissions.linux_pulseaudio_available")
@@ -173,9 +176,7 @@ class PermissionChecker:
             log.warning("permissions.no_input_devices")
             return False
         except Exception as exc:
-            raise DeviceAccessDeniedError(
-                f"Cannot access audio devices: {exc}"
-            ) from exc
+            raise DeviceAccessDeniedError(f"Cannot access audio devices: {exc}") from exc
 
 
 def check_permissions() -> dict[str, bool]:

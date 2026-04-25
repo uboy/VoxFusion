@@ -55,7 +55,13 @@ def test_start_capture_logs_requested_devices(monkeypatch) -> None:
 
     monkeypatch.setattr(gui_main, "log", fake_log)
     monkeypatch.setattr(gui_main, "CaptureWorker", _FakeWorker)
-    monkeypatch.setattr(gui_main, "get_model_info", lambda _name: type("ModelInfo", (), {"id": "small", "name": "Small", "supports_live_capture": True})())
+    monkeypatch.setattr(
+        gui_main,
+        "get_model_info",
+        lambda _name: type(
+            "ModelInfo", (), {"id": "small", "name": "Small", "supports_live_capture": True}
+        )(),
+    )
 
     TranscriptionGUI._start_capture(gui)
 

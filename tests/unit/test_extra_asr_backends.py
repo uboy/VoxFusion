@@ -9,8 +9,8 @@ import types
 import numpy as np
 import pytest
 
-from voxfusion.asr.factory import create_asr_engine
 from voxfusion.asr.breeze_engine import BreezeASREngine
+from voxfusion.asr.factory import create_asr_engine
 from voxfusion.asr.parakeet_engine import ParakeetASREngine
 from voxfusion.config.models import ASRConfig
 from voxfusion.exceptions import ModelLoadError
@@ -32,7 +32,9 @@ def test_factory_routes_parakeet_engine() -> None:
 
 
 @pytest.mark.asyncio
-async def test_breeze_engine_transcribes_with_fake_transformers(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_breeze_engine_transcribes_with_fake_transformers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fake_transformers = types.ModuleType("transformers")
     fake_torch = types.ModuleType("torch")
     fake_torch.float32 = "float32"
@@ -111,7 +113,9 @@ async def test_parakeet_engine_transcribes_with_fake_nemo(monkeypatch: pytest.Mo
     monkeypatch.setitem(sys.modules, "nemo.collections.asr", fake_asr)
     monkeypatch.setitem(sys.modules, "nemo.collections.asr.models", fake_models)
 
-    engine = ParakeetASREngine(ASRConfig(model_size="parakeet-tdt-0.6b-v3", model_path="C:/models/parakeet.nemo"))
+    engine = ParakeetASREngine(
+        ASRConfig(model_size="parakeet-tdt-0.6b-v3", model_path="C:/models/parakeet.nemo")
+    )
     chunk = AudioChunk(
         samples=np.ones(16000, dtype=np.float32),
         sample_rate=16000,
@@ -128,10 +132,12 @@ async def test_parakeet_engine_transcribes_with_fake_nemo(monkeypatch: pytest.Mo
     engine.close()
 
 
-def test_parakeet_engine_reports_missing_dependency_cleanly(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_parakeet_engine_reports_missing_dependency_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     real_import = builtins.__import__
 
-    def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+    def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):  # noqa: A002
         if name.startswith("nemo.collections.asr.models"):
             raise ImportError("missing nemo")
         return real_import(name, globals, locals, fromlist, level)
@@ -146,7 +152,7 @@ def test_parakeet_engine_reports_missing_dependency_cleanly(monkeypatch: pytest.
 def test_breeze_engine_reports_missing_dependency_cleanly(monkeypatch: pytest.MonkeyPatch) -> None:
     real_import = builtins.__import__
 
-    def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+    def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):  # noqa: A002
         if name == "torch" or name.startswith("transformers"):
             raise ImportError("missing transformers or torch")
         return real_import(name, globals, locals, fromlist, level)

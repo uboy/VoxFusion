@@ -27,16 +27,18 @@ _SUPPRESSED_LOG_MESSAGE_FRAGMENTS = (
     "Couldn't find ffmpeg or avconv - defaulting to ffmpeg, but may not work",
 )
 
-_NORMAL_MODE_KEY_EVENTS = frozenset({
-    "diarization.selection",
-    "batch.diarization_path_selected",
-    "batch.diarization_turns_started",
-    "batch.window_transcription_start",
-    "chunked_diarizer.start",
-    "orchestrator.transcribe_file",
-    "orchestrator.result_written",
-    "streaming.completed",
-})
+_NORMAL_MODE_KEY_EVENTS = frozenset(
+    {
+        "diarization.selection",
+        "batch.diarization_path_selected",
+        "batch.diarization_turns_started",
+        "batch.window_transcription_start",
+        "chunked_diarizer.start",
+        "orchestrator.transcribe_file",
+        "orchestrator.result_written",
+        "streaming.completed",
+    }
+)
 
 _NORMAL_MODE_KEY_PREFIXES = (
     "asr.",

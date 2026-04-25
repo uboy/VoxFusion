@@ -77,8 +77,13 @@ def test_capture_worker_routes_gigaam_segments_and_final_replacement(monkeypatch
             data_dir=str(Path.cwd()),
         ),
     )
-    monkeypatch.setattr("voxfusion.gui.runtime.get_stage_progress", lambda *_args, **_kwargs: SimpleNamespace(update=lambda *_a, **_k: None))
-    monkeypatch.setattr("voxfusion.live_gigaam.session.LiveGigaAMSessionController", _FakeController)
+    monkeypatch.setattr(
+        "voxfusion.gui.runtime.get_stage_progress",
+        lambda *_args, **_kwargs: SimpleNamespace(update=lambda *_a, **_k: None),
+    )
+    monkeypatch.setattr(
+        "voxfusion.live_gigaam.session.LiveGigaAMSessionController", _FakeController
+    )
 
     worker = CaptureWorker(
         options=CaptureOptions(
@@ -136,7 +141,9 @@ def test_capture_worker_uses_capture_started_timestamp_anchor(monkeypatch) -> No
         "voxfusion.gui.runtime.get_stage_progress",
         lambda *_args, **_kwargs: SimpleNamespace(update=lambda *_a, **_k: None),
     )
-    monkeypatch.setattr("voxfusion.live_gigaam.session.LiveGigaAMSessionController", _FakeController)
+    monkeypatch.setattr(
+        "voxfusion.live_gigaam.session.LiveGigaAMSessionController", _FakeController
+    )
 
     worker = CaptureWorker(
         options=CaptureOptions(

@@ -37,10 +37,10 @@ def test_count_sync_supports_legacy_use_auth_token(monkeypatch) -> None:
             def __init__(self, arr: np.ndarray) -> None:
                 self._array = arr
 
-            def float(self) -> "_Tensor":
+            def float(self) -> _Tensor:
                 return self
 
-            def unsqueeze(self, _dim: int) -> "_Tensor":
+            def unsqueeze(self, _dim: int) -> _Tensor:
                 return self
 
         return _Tensor(array)

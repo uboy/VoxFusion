@@ -66,7 +66,7 @@ async def _exercise_system_loopback_capture(
         chunk = await wait_for_non_silent_chunk_fn(source, duration_ms=250, attempts=20)
         await playback_task
         samples = np.asarray(chunk.samples, dtype=np.float32).reshape(-1)
-        return float(np.sqrt(np.mean(samples ** 2)))
+        return float(np.sqrt(np.mean(samples**2)))
     finally:
         with suppress(Exception):
             await source.stop()

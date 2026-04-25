@@ -36,7 +36,9 @@ class _FakeGigaAMEngine:
         word_timestamps: bool = False,
     ) -> list[TranscriptionSegment]:
         del language, initial_prompt, word_timestamps
-        self.transcribe_calls.append((audio.timestamp_start, audio.timestamp_end, audio.num_samples))
+        self.transcribe_calls.append(
+            (audio.timestamp_start, audio.timestamp_end, audio.num_samples)
+        )
         return [
             TranscriptionSegment(
                 text=f"{audio.timestamp_start:.1f}-{audio.timestamp_end:.1f}",
@@ -284,7 +286,9 @@ async def test_batch_pipeline_emits_progress_for_long_diarization_first_path(
 
     await pipeline.process_file(audio_file)
 
-    progress_messages = [event.message for event in events if event.event_type == EventType.PROGRESS]
+    progress_messages = [
+        event.message for event in events if event.event_type == EventType.PROGRESS
+    ]
     assert any("Running speaker diarization" in message for message in progress_messages)
     assert any("Transcribing speaker windows" in message for message in progress_messages)
     assert any("ETA ~" in message for message in progress_messages)
@@ -298,7 +302,9 @@ async def test_batch_pipeline_reports_unknown_eta_after_initial_estimate_is_exce
     audio_file = _write_wav(tmp_path / "progress_unknown_eta.wav")
     events = []
     monkeypatch.setattr("voxfusion.pipeline.batch._DIARIZATION_HEARTBEAT_S", 0.01)
-    monkeypatch.setattr("voxfusion.pipeline.batch._estimate_initial_diarization_total", lambda _duration: 0.01)
+    monkeypatch.setattr(
+        "voxfusion.pipeline.batch._estimate_initial_diarization_total", lambda _duration: 0.01
+    )
     pipeline = BatchPipeline(
         asr_engine=_FakeGigaAMEngine(),
         diarizer=_SlowTurnDiarizer(),
@@ -313,8 +319,13 @@ async def test_batch_pipeline_reports_unknown_eta_after_initial_estimate_is_exce
 
     await pipeline.process_file(audio_file)
 
-    progress_messages = [event.message for event in events if event.event_type == EventType.PROGRESS]
-    assert any("Running speaker diarization" in message and "ETA ~unknown" in message for message in progress_messages)
+    progress_messages = [
+        event.message for event in events if event.event_type == EventType.PROGRESS
+    ]
+    assert any(
+        "Running speaker diarization" in message and "ETA ~unknown" in message
+        for message in progress_messages
+    )
 
 
 @pytest.mark.asyncio

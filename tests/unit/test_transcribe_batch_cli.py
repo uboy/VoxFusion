@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import ClassVar
 
 from click.testing import CliRunner
 
@@ -12,8 +13,8 @@ from voxfusion.cli.transcribe_cmd import transcribe
 
 
 class _BatchFakeOrchestrator:
-    transcribed: list[Path] = []
-    written: list[Path] = []
+    transcribed: ClassVar[list[Path]] = []
+    written: ClassVar[list[Path]] = []
 
     def __init__(self, config, on_event=None) -> None:
         del config, on_event

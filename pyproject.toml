@@ -144,6 +144,20 @@ select = [
 ignore = [
     "PLR0913",  # too many arguments
     "PLR2004",  # magic value comparison
+    # --- Intentional patterns in this codebase ---
+    "PLC0415",  # import not at top-level: used deliberately for lazy/optional heavy deps
+    "E402",     # module-level import not at top: same reason (platform guards, runtime shims)
+    "PLR0912",  # too many branches: complex pipeline control flow
+    "PLR0911",  # too many return statements: same
+    "PLR0915",  # too many statements: large functions in GUI/pipeline layers
+    "PLW0108",  # unnecessary lambda: sometimes needed for typing in callbacks
+    "RUF046",   # unnecessary cast: false positives with structural typing
+    # --- Russian/Unicode strings in user-facing messages ---
+    "RUF001",   # ambiguous Cyrillic chars: intentional Russian user-facing strings
+    "RUF002",   # ambiguous chars in docstrings: same
+    "RUF003",   # ambiguous chars in comments: same
+    # --- Line length: long strings/URLs in docstrings/comments are acceptable ---
+    "E501",
 ]
 
 [tool.ruff.lint.isort]

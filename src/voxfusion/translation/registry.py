@@ -40,8 +40,7 @@ def get_backend(config: TranslationConfig) -> Any:
     if factory is None:
         available = ", ".join(sorted(_REGISTRY)) or "(none)"
         raise ConfigurationError(
-            f"Unknown translation backend {config.backend!r}. "
-            f"Available: {available}"
+            f"Unknown translation backend {config.backend!r}. Available: {available}"
         )
     return factory(config)
 
@@ -68,28 +67,32 @@ def get_translation_engine(backend_name: str, config: TranslationConfig) -> Tran
     if factory is None:
         available = ", ".join(sorted(_REGISTRY)) or "(none)"
         raise ConfigurationError(
-            f"Unknown translation backend {backend_name!r}. "
-            f"Available: {available}"
+            f"Unknown translation backend {backend_name!r}. Available: {available}"
         )
     return factory(config)
 
 
 def _register_defaults() -> None:
     """Register built-in backends (lazy imports)."""
+
     def _argos_factory(config: TranslationConfig) -> Any:
         from voxfusion.translation.argos_engine import ArgosTranslationEngine
+
         return ArgosTranslationEngine(config)
 
     def _nllb_factory(config: TranslationConfig) -> Any:
         from voxfusion.translation.nllb_engine import NLLBTranslationEngine
+
         return NLLBTranslationEngine(config)
 
     def _deepl_factory(config: TranslationConfig) -> Any:
         from voxfusion.translation.deepl_engine import DeepLTranslationEngine
+
         return DeepLTranslationEngine(config)
 
     def _libretranslate_factory(config: TranslationConfig) -> Any:
         from voxfusion.translation.libretranslate import LibreTranslateEngine
+
         return LibreTranslateEngine(config)
 
     register_backend("argos", _argos_factory)

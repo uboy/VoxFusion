@@ -23,6 +23,7 @@ def _has_cuda() -> bool:
     """Return True if a CUDA-capable GPU is accessible via CTranslate2."""
     try:
         import ctranslate2
+
         types = ctranslate2.get_supported_compute_types("cuda")
         return bool(types)
     except Exception:
@@ -33,6 +34,7 @@ def _has_openvino() -> bool:
     """Return True if optimum-intel with OpenVINO backend is importable."""
     try:
         from optimum.intel.openvino import OVModelForSpeechSeq2Seq  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -76,6 +78,7 @@ def create_asr_engine(
     # ── 1. CUDA (NVIDIA) ────────────────────────────────────────────────────
     if _has_cuda():
         from voxfusion.asr.faster_whisper import FasterWhisperEngine
+
         cuda_cfg = ASRConfig(**{**cfg.model_dump(), "device": "cuda", "compute_type": "float16"})
         log.info("asr_factory.selected", backend="cuda")
         return FasterWhisperEngine(cuda_cfg), "cuda"
@@ -83,10 +86,12 @@ def create_asr_engine(
     # ── 2. OpenVINO (Intel) ─────────────────────────────────────────────────
     if prefer_openvino and _has_openvino():
         from voxfusion.asr.openvino_engine import OpenVINOWhisperEngine
+
         log.info("asr_factory.selected", backend="openvino")
         return OpenVINOWhisperEngine(cfg), "openvino"
 
     # ── 3. CPU (baseline) ───────────────────────────────────────────────────
     from voxfusion.asr.faster_whisper import FasterWhisperEngine
+
     log.info("asr_factory.selected", backend="cpu")
     return FasterWhisperEngine(cfg), "cpu"

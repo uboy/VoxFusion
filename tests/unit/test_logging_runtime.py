@@ -2,8 +2,7 @@
 
 import os
 
-from voxfusion.gui.runtime import TextRedirector
-from voxfusion.gui.runtime import _configure_gui_noise_controls
+from voxfusion.gui.runtime import TextRedirector, _configure_gui_noise_controls
 from voxfusion.logging import _should_suppress_log_message
 
 
@@ -46,7 +45,7 @@ def test_text_redirector_suppresses_known_gui_noise_lines() -> None:
 
     redirector = TextRedirector(_FakeWidget())
 
-    clean = redirector._sanitize(  # noqa: SLF001
+    clean = redirector._sanitize(
         "useful line\n"
         "[NeMo W] Megatron num_microbatches_calculator not found, using Apex version.\n"
         "still useful\n"
@@ -62,7 +61,7 @@ def test_text_redirector_suppresses_hf_retry_and_cluster_noise_lines() -> None:
 
     redirector = TextRedirector(_FakeWidget())
 
-    clean = redirector._sanitize(  # noqa: SLF001
+    clean = redirector._sanitize(
         "useful line\n"
         "'(MaxRetryError(...))' thrown while requesting HEAD https://huggingface.co/pyannote/speaker-diarization-3.1/resolve/main/config.yaml\n"
         "INFO | Retrying in 1s [Retry 1/5].\n"

@@ -139,6 +139,7 @@ async def test_audio_recorder_writes_mp3(tmp_path: Path) -> None:
 
     if shutil.which("ffmpeg") is None:
         import pytest
+
         pytest.skip("ffmpeg not found in PATH")
 
     recorder = AudioRecorder(chunk_duration_ms=250)
@@ -174,11 +175,13 @@ async def test_audio_recorder_writes_opus(tmp_path: Path) -> None:
     except Exception as exc:
         # Opus requires libsndfile >= 1.1.0; skip gracefully on older installs
         import pytest
+
         pytest.skip(f"Opus not supported by installed libsndfile: {exc}")
 
 
 def test_recording_options_default_format() -> None:
     from pathlib import Path
+
     from voxfusion.gui.runtime import RecordingOptions
 
     opts = RecordingOptions(
@@ -270,7 +273,9 @@ def test_record_command_invokes_recorder(monkeypatch, tmp_path: Path) -> None:
         return object()
 
     monkeypatch.setattr("voxfusion.cli.record_cmd.AudioRecorder", StubRecorder)
-    monkeypatch.setattr("voxfusion.cli.record_cmd.create_recording_source", fake_create_recording_source)
+    monkeypatch.setattr(
+        "voxfusion.cli.record_cmd.create_recording_source", fake_create_recording_source
+    )
 
     result = runner.invoke(
         record,
@@ -317,6 +322,8 @@ def test_create_recording_source_uses_shared_windows_factory(monkeypatch) -> Non
     assert created["source_type"] == "system"
     assert created["microphone_device_id"] is None
     assert created["system_device_id"] == "pa:27"
+
+
 """Unit tests for shared Windows audio device handling."""
 
 from voxfusion.capture.windows_audio import parse_windows_device_id
@@ -333,7 +340,9 @@ def test_parse_windows_device_id_treats_plain_int_as_default_backend() -> None:
     assert parse_windows_device_id("9", default_backend="pa") == ("pa", 9)
 
 
-def test_create_windows_capture_source_for_system_forwards_explicit_loopback_device(monkeypatch) -> None:
+def test_create_windows_capture_source_for_system_forwards_explicit_loopback_device(
+    monkeypatch,
+) -> None:
     from voxfusion.config.models import CaptureConfig
 
     seen: dict[str, object] = {}

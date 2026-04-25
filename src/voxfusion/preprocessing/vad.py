@@ -43,8 +43,7 @@ class SileroVAD:
             import torch
         except ImportError as exc:
             raise RuntimeError(
-                "torch is required for Silero VAD. "
-                "Install with: pip install torch"
+                "torch is required for Silero VAD. Install with: pip install torch"
             ) from exc
 
         log.info("vad.loading_silero_model")

@@ -6,9 +6,10 @@ a complete ``TranscriptionResult``.
 """
 
 import asyncio
+import itertools
 import time
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -116,7 +117,8 @@ def _select_alignment_turns(
             "turns": len(turn_result.turns),
             "exclusive_turns": (
                 len(turn_result.exclusive_turns)
-                if turn_result.exclusive_turns is not None else None
+                if turn_result.exclusive_turns is not None
+                else None
             ),
             "alignment_turns": len(selected),
             "used_exclusive": bool(turn_result.exclusive_turns),
@@ -139,12 +141,13 @@ def _normalize_turns(turns: list[SpeakerTurn]) -> list[SpeakerTurn]:
 
     boundaries = sorted({point for turn in ordered for point in (turn.start_time, turn.end_time)})
     flattened: list[SpeakerTurn] = []
-    for start, end in zip(boundaries, boundaries[1:], strict=False):
+    for start, end in itertools.pairwise(boundaries):
         if end <= start:
             continue
         midpoint = start + ((end - start) / 2.0)
         active = [
-            turn for turn in ordered
+            turn
+            for turn in ordered
             if turn.start_time <= midpoint < turn.end_time
             or (midpoint == turn.end_time and end == turn.end_time)
         ]
@@ -242,11 +245,13 @@ class BatchPipeline:
             stage=str(stage) if stage is not None else None,
             message=message,
         )
-        self._emit(PipelineEvent(
-            event_type=EventType.WARNING,
-            stage=stage,
-            message=message,
-        ))
+        self._emit(
+            PipelineEvent(
+                event_type=EventType.WARNING,
+                stage=stage,
+                message=message,
+            )
+        )
 
     def _progress(
         self,
@@ -256,13 +261,15 @@ class BatchPipeline:
         progress: float,
         **data: object,
     ) -> None:
-        self._emit(PipelineEvent(
-            event_type=EventType.PROGRESS,
-            stage=stage,
-            message=message,
-            progress=progress,
-            data={k: v for k, v in data.items() if v is not None},
-        ))
+        self._emit(
+            PipelineEvent(
+                event_type=EventType.PROGRESS,
+                stage=stage,
+                message=message,
+                progress=progress,
+                data={k: v for k, v in data.items() if v is not None},
+            )
+        )
 
     def _diarization_path_decision(self) -> tuple[bool, str]:
         if self._config.asr.engine != "gigaam":
@@ -364,10 +371,7 @@ class BatchPipeline:
         if total_windows:
             self._progress(
                 stage=PipelineStage.ASR,
-                message=(
-                    f"Transcribing speaker windows 0/{total_windows} "
-                    f"({_format_eta(None)})"
-                ),
+                message=(f"Transcribing speaker windows 0/{total_windows} ({_format_eta(None)})"),
                 progress=_ASR_PROGRESS_WINDOW_START,
                 phase="speaker_window_transcription",
                 completed_windows=0,
@@ -421,11 +425,11 @@ class BatchPipeline:
                 estimated_remaining = avg_window_s * (total_windows - completed_count)
             window_progress = _ASR_PROGRESS_WINDOW_START + (
                 (_ASR_PROGRESS_WINDOW_END - _ASR_PROGRESS_WINDOW_START)
-                * completed_count / max(1, total_windows)
+                * completed_count
+                / max(1, total_windows)
             )
             if (
-                completed_count == 1
-                or completed_count == total_windows
+                completed_count in (1, total_windows)
                 or completed_count % _WINDOW_PROGRESS_LOG_INTERVAL == 0
             ):
                 log.info(
@@ -436,8 +440,7 @@ class BatchPipeline:
                     start_s=round(turn.start_time, 2),
                     end_s=round(turn.end_time, 2),
                     eta_s=(
-                        round(estimated_remaining, 1)
-                        if estimated_remaining is not None else None
+                        round(estimated_remaining, 1) if estimated_remaining is not None else None
                     ),
                 )
             self._progress(
@@ -454,9 +457,7 @@ class BatchPipeline:
                 speaker_id=turn.speaker_id,
                 window_start_s=round(turn.start_time, 2),
                 window_end_s=round(turn.end_time, 2),
-                eta_s=(
-                    round(estimated_remaining, 1) if estimated_remaining is not None else None
-                ),
+                eta_s=(round(estimated_remaining, 1) if estimated_remaining is not None else None),
             )
             return result
 
@@ -480,10 +481,12 @@ class BatchPipeline:
             PipelineError: If any stage fails fatally.
         """
         t_start = time.monotonic()
-        self._emit(PipelineEvent(
-            event_type=EventType.PIPELINE_STARTED,
-            message=f"Processing {file_path.name}",
-        ))
+        self._emit(
+            PipelineEvent(
+                event_type=EventType.PIPELINE_STARTED,
+                message=f"Processing {file_path.name}",
+            )
+        )
         for warning in self._startup_warnings:
             self._warn(warning, stage=PipelineStage.DIARIZATION)
 
@@ -492,22 +495,26 @@ class BatchPipeline:
         source_path = file_path
 
         if needs_extraction(file_path):
-            self._emit(PipelineEvent(
-                event_type=EventType.STAGE_STARTED,
-                stage=PipelineStage.CAPTURE,
-                message=f"Extracting audio from {file_path.suffix.lstrip('.').upper()} file...",
-            ))
+            self._emit(
+                PipelineEvent(
+                    event_type=EventType.STAGE_STARTED,
+                    stage=PipelineStage.CAPTURE,
+                    message=f"Extracting audio from {file_path.suffix.lstrip('.').upper()} file...",
+                )
+            )
             try:
                 tmp_audio = await extract_audio_async(file_path)
                 source_path = tmp_audio
             except AudioCaptureError as exc:
                 raise PipelineError(str(exc)) from exc
         else:
-            self._emit(PipelineEvent(
-                event_type=EventType.STAGE_STARTED,
-                stage=PipelineStage.CAPTURE,
-                message="Reading audio file",
-            ))
+            self._emit(
+                PipelineEvent(
+                    event_type=EventType.STAGE_STARTED,
+                    stage=PipelineStage.CAPTURE,
+                    message="Reading audio file",
+                )
+            )
 
         try:
             source = FileAudioSource(source_path)
@@ -531,19 +538,23 @@ class BatchPipeline:
         if not chunks:
             raise PipelineError(f"No audio data read from {file_path}")
 
-        self._emit(PipelineEvent(
-            event_type=EventType.STAGE_COMPLETED,
-            stage=PipelineStage.CAPTURE,
-            message=f"Read {len(chunks)} chunks",
-            data={"chunks": len(chunks)},
-        ))
+        self._emit(
+            PipelineEvent(
+                event_type=EventType.STAGE_COMPLETED,
+                stage=PipelineStage.CAPTURE,
+                message=f"Read {len(chunks)} chunks",
+                data={"chunks": len(chunks)},
+            )
+        )
 
         # -- Stage 2: Preprocessing --
-        self._emit(PipelineEvent(
-            event_type=EventType.STAGE_STARTED,
-            stage=PipelineStage.PREPROCESSING,
-            message="Preprocessing audio",
-        ))
+        self._emit(
+            PipelineEvent(
+                event_type=EventType.STAGE_STARTED,
+                stage=PipelineStage.PREPROCESSING,
+                message="Preprocessing audio",
+            )
+        )
 
         processed_chunks = [self._preprocessor.process(c) for c in chunks]
 
@@ -551,7 +562,9 @@ class BatchPipeline:
         if raw_samples.ndim == 2:
             raw_samples = raw_samples.mean(axis=1).astype(np.float32)
         elif raw_samples.ndim > 2:
-            raw_samples = raw_samples.reshape(raw_samples.shape[0], -1).mean(axis=1).astype(np.float32)
+            raw_samples = (
+                raw_samples.reshape(raw_samples.shape[0], -1).mean(axis=1).astype(np.float32)
+            )
         raw_samples = np.ascontiguousarray(raw_samples, dtype=np.float32)
         raw_sample_rate = chunks[0].sample_rate
         raw_full_audio = AudioChunk(
@@ -571,7 +584,9 @@ class BatchPipeline:
         if all_samples.ndim == 2:
             all_samples = all_samples.mean(axis=1).astype(np.float32)
         elif all_samples.ndim > 2:
-            all_samples = all_samples.reshape(all_samples.shape[0], -1).mean(axis=1).astype(np.float32)
+            all_samples = (
+                all_samples.reshape(all_samples.shape[0], -1).mean(axis=1).astype(np.float32)
+            )
         all_samples = np.ascontiguousarray(all_samples, dtype=np.float32)
         sr = processed_chunks[0].sample_rate
         full_audio = AudioChunk(
@@ -584,19 +599,23 @@ class BatchPipeline:
             dtype="float32",
         )
 
-        self._emit(PipelineEvent(
-            event_type=EventType.STAGE_COMPLETED,
-            stage=PipelineStage.PREPROCESSING,
-            message="Preprocessing complete",
-            data={"duration_s": round(full_audio.duration, 2)},
-        ))
+        self._emit(
+            PipelineEvent(
+                event_type=EventType.STAGE_COMPLETED,
+                stage=PipelineStage.PREPROCESSING,
+                message="Preprocessing complete",
+                data={"duration_s": round(full_audio.duration, 2)},
+            )
+        )
 
         # -- Stage 3: ASR --
-        self._emit(PipelineEvent(
-            event_type=EventType.STAGE_STARTED,
-            stage=PipelineStage.ASR,
-            message="Transcribing audio",
-        ))
+        self._emit(
+            PipelineEvent(
+                event_type=EventType.STAGE_STARTED,
+                stage=PipelineStage.ASR,
+                message="Transcribing audio",
+            )
+        )
 
         diarized: list[DiarizedSegment] | None = None
         diarization_first, path_reason = self._diarization_path_decision()
@@ -620,19 +639,23 @@ class BatchPipeline:
         else:
             segments = [item.segment for item in diarized]
 
-        self._emit(PipelineEvent(
-            event_type=EventType.STAGE_COMPLETED,
-            stage=PipelineStage.ASR,
-            message=f"Transcribed {len(segments)} segments",
-            data={"asr_segments": len(segments)},
-        ))
+        self._emit(
+            PipelineEvent(
+                event_type=EventType.STAGE_COMPLETED,
+                stage=PipelineStage.ASR,
+                message=f"Transcribed {len(segments)} segments",
+                data={"asr_segments": len(segments)},
+            )
+        )
 
         # -- Stage 4: Diarization --
-        self._emit(PipelineEvent(
-            event_type=EventType.STAGE_STARTED,
-            stage=PipelineStage.DIARIZATION,
-            message="Diarizing segments",
-        ))
+        self._emit(
+            PipelineEvent(
+                event_type=EventType.STAGE_STARTED,
+                stage=PipelineStage.DIARIZATION,
+                message="Diarizing segments",
+            )
+        )
 
         diarization_message = ""
         if diarized is None:
@@ -641,12 +664,14 @@ class BatchPipeline:
         else:
             diarization_message = f"Diarized {len(diarized)} segments from speaker windows"
 
-        self._emit(PipelineEvent(
-            event_type=EventType.STAGE_COMPLETED,
-            stage=PipelineStage.DIARIZATION,
-            message=diarization_message,
-            data={"diarized_segments": len(diarized)},
-        ))
+        self._emit(
+            PipelineEvent(
+                event_type=EventType.STAGE_COMPLETED,
+                stage=PipelineStage.DIARIZATION,
+                message=diarization_message,
+                data={"diarized_segments": len(diarized)},
+            )
+        )
 
         # -- Wrap into TranslatedSegment (no translation for MVP) --
         translated = [
@@ -675,22 +700,24 @@ class BatchPipeline:
                 "requested_diarization_strategy": self._requested_diarization_strategy,
                 "resolved_diarization_strategy": self._resolved_diarization_strategy,
             },
-            created_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
         )
 
-        self._emit(PipelineEvent(
-            event_type=EventType.PIPELINE_COMPLETED,
-            message=(
-                f"Done in {elapsed:.1f}s — {len(diarized)} diarized / "
-                f"{len(segments)} ASR segments"
-            ),
-            progress=1.0,
-            data={
-                "processing_time_s": round(elapsed, 3),
-                "asr_segments": len(segments),
-                "diarized_segments": len(diarized),
-            },
-        ))
+        self._emit(
+            PipelineEvent(
+                event_type=EventType.PIPELINE_COMPLETED,
+                message=(
+                    f"Done in {elapsed:.1f}s — {len(diarized)} diarized / "
+                    f"{len(segments)} ASR segments"
+                ),
+                progress=1.0,
+                data={
+                    "processing_time_s": round(elapsed, 3),
+                    "asr_segments": len(segments),
+                    "diarized_segments": len(diarized),
+                },
+            )
+        )
 
         log.info(
             "batch.completed",

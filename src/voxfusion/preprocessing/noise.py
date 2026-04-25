@@ -51,8 +51,7 @@ class NoiseReducer:
             import noisereduce as nr
         except ImportError as exc:
             raise RuntimeError(
-                "noisereduce is not installed. "
-                "Install with: pip install noisereduce"
+                "noisereduce is not installed. Install with: pip install noisereduce"
             ) from exc
 
         reduced = nr.reduce_noise(

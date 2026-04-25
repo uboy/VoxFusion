@@ -28,8 +28,8 @@ DEFAULT_BASE_URL = "http://localhost:3000"
 DEFAULT_MODEL = "qwen2.5:32b"
 _COMPLETIONS_PATH = "/api/chat/completions"
 _MODEL_PATHS = ("/api/models", "/api/tags")
-_TIMEOUT_CONNECT = 10.0   # seconds to establish connection
-_TIMEOUT_READ = 300.0     # seconds to wait for first token / full response
+_TIMEOUT_CONNECT = 10.0  # seconds to establish connection
+_TIMEOUT_READ = 300.0  # seconds to wait for first token / full response
 _TIMEOUT_READY_CHECK = 15.0
 _MODEL_FETCH_RETRY_STATUSES = frozenset({429, 502, 503, 504})
 _MODEL_FETCH_MAX_ATTEMPTS = 3
@@ -70,19 +70,21 @@ class LLMModelDescriptor:
     context_tokens: int | None = None
 
 
-_MODEL_CONTEXT_KEYS = frozenset({
-    "context_length",
-    "context_window",
-    "context_size",
-    "context_tokens",
-    "context_length_tokens",
-    "max_context_length",
-    "max_input_tokens",
-    "max_sequence_length",
-    "num_ctx",
-    "n_ctx",
-    "ctx_size",
-})
+_MODEL_CONTEXT_KEYS = frozenset(
+    {
+        "context_length",
+        "context_window",
+        "context_size",
+        "context_tokens",
+        "context_length_tokens",
+        "max_context_length",
+        "max_input_tokens",
+        "max_sequence_length",
+        "num_ctx",
+        "n_ctx",
+        "ctx_size",
+    }
+)
 _MODEL_CONTEXT_CONTAINER_KEYS = (
     "details",
     "info",
@@ -322,7 +324,10 @@ async def fetch_models(
     api_key: str = "",
 ) -> list[str]:
     """Fetch available model identifiers from Open WebUI."""
-    return [descriptor.id for descriptor in await fetch_model_catalog(base_url=base_url, api_key=api_key)]
+    return [
+        descriptor.id
+        for descriptor in await fetch_model_catalog(base_url=base_url, api_key=api_key)
+    ]
 
 
 async def stream_completion(
@@ -418,9 +423,7 @@ async def stream_completion(
                         message_count=message_count,
                         input_chars=input_chars,
                     )
-                    raise LLMError(
-                        f"HTTP {response.status_code}: {_body_preview(body)}"
-                    )
+                    raise LLMError(f"HTTP {response.status_code}: {_body_preview(body)}")
 
                 async for line in response.aiter_lines():
                     if not line.startswith("data: "):

@@ -13,7 +13,9 @@ def config_group() -> None:
 
 @config_group.command("show")
 @click.option(
-    "--format", "-f", "fmt",
+    "--format",
+    "-f",
+    "fmt",
     type=click.Choice(["yaml", "json"]),
     default="yaml",
     help="Output format.",

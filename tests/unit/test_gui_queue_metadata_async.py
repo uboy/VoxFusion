@@ -32,7 +32,9 @@ class _FakeTreeview:
         self._items[iid] = values
         self._order.append(iid)
 
-    def item(self, iid: str, values: tuple[object, ...] | None = None) -> dict[str, tuple[object, ...]]:
+    def item(
+        self, iid: str, values: tuple[object, ...] | None = None
+    ) -> dict[str, tuple[object, ...]]:
         if values is not None:
             self._items[iid] = values
         return {"values": self._items[iid]}
@@ -61,20 +63,20 @@ class _FakeTreeview:
 
 
 class _FakeRoot:
-    def after(self, _delay: int, callback, *args) -> None:  # noqa: ANN001
+    def after(self, _delay: int, callback, *args) -> None:
         callback(*args)
 
 
 class _FakeFuture:
-    def __init__(self, fn) -> None:  # noqa: ANN001
+    def __init__(self, fn) -> None:
         self._fn = fn
         self._callback = None
         self._result = None
 
-    def add_done_callback(self, callback) -> None:  # noqa: ANN001
+    def add_done_callback(self, callback) -> None:
         self._callback = callback
 
-    def result(self):  # noqa: ANN201
+    def result(self):
         return self._result
 
     def resolve(self) -> None:
@@ -87,7 +89,7 @@ class _FakeExecutor:
     def __init__(self) -> None:
         self.futures: list[_FakeFuture] = []
 
-    def submit(self, fn):  # noqa: ANN001, ANN201
+    def submit(self, fn):
         future = _FakeFuture(fn)
         self.futures.append(future)
         return future
@@ -163,4 +165,3 @@ def test_apply_file_queue_metadata_ignores_stale_generation(tmp_path: Path) -> N
         "—",
         "",
     )
-

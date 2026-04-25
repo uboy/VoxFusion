@@ -1,7 +1,6 @@
 """Unit tests for Open WebUI client helpers."""
 
-from voxfusion.llm.client import _extract_model_ids
-from voxfusion.llm.client import extract_model_catalog
+from voxfusion.llm.client import _extract_model_ids, extract_model_catalog
 
 
 def test_extract_model_ids_from_data_payload() -> None:

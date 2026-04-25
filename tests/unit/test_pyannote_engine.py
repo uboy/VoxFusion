@@ -44,9 +44,7 @@ def test_pipeline_auth_kwargs_falls_back_to_use_auth_token() -> None:
     def from_pretrained(model: str, use_auth_token: str) -> object:
         return object()
 
-    assert _pipeline_auth_kwargs(from_pretrained, "hf_test") == {
-        "use_auth_token": "hf_test"
-    }
+    assert _pipeline_auth_kwargs(from_pretrained, "hf_test") == {"use_auth_token": "hf_test"}
 
 
 def test_load_pipeline_uses_modern_token_kwarg(monkeypatch) -> None:

@@ -5,10 +5,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from voxfusion.live_gigaam.types import LiveGigaAMResult
 from voxfusion.models.diarization import DiarizedSegment
 from voxfusion.models.transcription import TranscriptionSegment
 from voxfusion.models.translation import TranslatedSegment
-from voxfusion.live_gigaam.types import LiveGigaAMResult
 
 _WORD_RE = re.compile(r"\S+")
 _NORMALIZE_RE = re.compile(r"[^\w]+", flags=re.UNICODE)

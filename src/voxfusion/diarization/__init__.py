@@ -10,12 +10,12 @@ from voxfusion.diarization.types import DiarizationTurnResult
 
 __all__ = [
     "ChannelDiarizer",
-    "create_diarizer",
+    "DiarizationEngine",
     "DiarizationTurnResult",
     "DiarizerSelection",
-    "DiarizationEngine",
     "HybridDiarizer",
     "NoneDiarizer",
     "SpeakerTurn",
     "align_segments",
+    "create_diarizer",
 ]

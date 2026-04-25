@@ -9,8 +9,8 @@ from datetime import datetime
 
 import click
 
-from voxfusion.cli.formatting import echo_error, echo_warning
 from voxfusion.asr_catalog import get_model_info
+from voxfusion.cli.formatting import echo_error, echo_warning
 from voxfusion.config.loader import load_config
 from voxfusion.logging import configure_logging, get_logger
 from voxfusion.output import get_formatter
@@ -29,7 +29,7 @@ def _event_printer(event: PipelineEvent) -> None:
                 click.echo(f"  [{event.stage}] {event.message}", err=True)
             case EventType.PIPELINE_COMPLETED:
                 click.echo(f"  {event.message}", err=True)
-    except (OSError, IOError):
+    except OSError:
         # Ignore console output errors (Windows handle issues)
         pass
 
@@ -37,7 +37,7 @@ def _event_printer(event: PipelineEvent) -> None:
 def _print_status(message: str, *, err: bool = False) -> None:
     try:
         click.echo(message, err=err)
-    except (OSError, IOError):
+    except OSError:
         print(message)
 
 
@@ -50,36 +50,42 @@ async def _schedule_duration_stop(stop_event: threading.Event, duration_s: float
 
 @click.command("capture")
 @click.option(
-    "--source", "-s",
+    "--source",
+    "-s",
     type=click.Choice(["microphone", "system", "both"]),
     default="microphone",
     help="Audio source to capture.",
 )
 @click.option(
-    "--output-format", "-f",
+    "--output-format",
+    "-f",
     type=click.Choice(["json", "srt", "vtt", "txt"]),
     default="txt",
     help="Output format for live transcription.",
 )
 @click.option(
-    "--language", "-l",
+    "--language",
+    "-l",
     default=None,
     help="Source language code (e.g. 'en'). Auto-detected if omitted.",
 )
 @click.option(
-    "--device", "-d",
+    "--device",
+    "-d",
     type=str,
     default=None,
     help="Audio device id (from 'voxfusion devices').",
 )
 @click.option(
-    "--model", "-m",
+    "--model",
+    "-m",
     type=str,
     default=None,
     help="ASR model (tiny, base, small). Default: tiny for speed.",
 )
 @click.option(
-    "--duration", "-t",
+    "--duration",
+    "-t",
     type=float,
     default=None,
     help="Maximum capture duration in seconds. Unlimited if omitted.",
@@ -160,7 +166,7 @@ def capture(
             click.echo(f"Platform: {platform}", err=True)
             click.echo(f"Source: {source}", err=True)
             click.echo(f"Format: {output_format}", err=True)
-        except (OSError, IOError):
+        except OSError:
             # Fallback to stdout if stderr fails
             print(f"Platform: {platform}")
             print(f"Source: {source}")
@@ -183,7 +189,7 @@ def capture(
 
         try:
             print(f"Сохранение в: {save_file}")
-        except (OSError, IOError):
+        except OSError:
             pass
 
     all_segments = []  # Store all segments for saving
@@ -195,7 +201,7 @@ def capture(
             try:
                 line = formatter.format_segment(seg, 0)
                 click.echo(line)
-            except (OSError, IOError):
+            except OSError:
                 # Fallback to simple print if click.echo fails
                 try:
                     print(line, flush=True)
@@ -304,7 +310,7 @@ def capture(
             except Exception as exc:
                 try:
                     echo_warning(f"Translation unavailable: {exc}")
-                except (OSError, IOError):
+                except OSError:
                     print(f"WARNING: Translation unavailable: {exc}")
 
         pipeline = StreamingPipeline(
@@ -374,6 +380,7 @@ def capture(
     if save_file and segments_to_save:
         try:
             from voxfusion.models.result import TranscriptionResult
+
             result = TranscriptionResult(
                 segments=segments_to_save,
                 source_info={"source": source, "live": True, "engine": config.asr.engine},

@@ -41,7 +41,7 @@ def install_torchscript_source_fallback(torch_module: object) -> None:
                 raise
             return obj
 
-    setattr(_safe_script, "_voxfusion_safe_wrapper", True)
+    _safe_script._voxfusion_safe_wrapper = True
     jit.script = _safe_script  # type: ignore[assignment]
 
 
@@ -50,7 +50,11 @@ def temporary_torchscript_source_fallback(torch_module: object):
     """Apply the fallback only for the current block and then restore TorchScript."""
     jit = getattr(torch_module, "jit", None)
     original_script = getattr(jit, "script", None)
-    if jit is None or original_script is None or not should_use_torchscript_source_fallback(torch_module):
+    if (
+        jit is None
+        or original_script is None
+        or not should_use_torchscript_source_fallback(torch_module)
+    ):
         yield
         return
     install_torchscript_source_fallback(torch_module)

@@ -24,8 +24,7 @@ def format_table(headers: list[str], rows: list[list[str]], padding: int = 2) ->
     lines = [header_line, divider]
     for row in rows:
         line = sep.join(
-            (row[i] if i < len(row) else "").ljust(col_widths[i])
-            for i in range(len(headers))
+            (row[i] if i < len(row) else "").ljust(col_widths[i]) for i in range(len(headers))
         )
         lines.append(line)
 

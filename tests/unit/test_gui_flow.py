@@ -6,12 +6,12 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from voxfusion.gui.main import (
+    DeviceOption,
+    TranscriptionGUI,
     _build_file_workflow_status,
     _default_transcript_path,
     _load_gui_settings,
     _save_gui_settings,
-    DeviceOption,
-    TranscriptionGUI,
 )
 from voxfusion.gui.runtime import derive_capture_source
 
@@ -105,10 +105,10 @@ def test_parse_optional_positive_int_accepts_blank_and_positive_values() -> None
 
 def test_file_transcribe_clears_table_on_start(tmp_path: Path) -> None:
     """_start_file_transcribe must reset stale segment data before starting the worker."""
-    import voxfusion.gui.main as _gui_mod
 
     # Resolve the real module (not the `main` function exported by __init__)
     import sys
+
     real_module = sys.modules["voxfusion.gui.main"]
 
     audio_file = tmp_path / "recording.wav"
@@ -201,7 +201,9 @@ def test_download_file_model_cancels_when_existing_model_redownload_declined(mon
     gui._tr = lambda key, **kwargs: key if not kwargs else f"{key}:{kwargs}"
 
     monkeypatch.setattr(gui_main.messagebox, "askyesno", lambda *args, **kwargs: False)
-    monkeypatch.setattr(TranscriptionGUI, "_is_model_cached_locally", classmethod(lambda cls, info: True))
+    monkeypatch.setattr(
+        TranscriptionGUI, "_is_model_cached_locally", classmethod(lambda cls, info: True)
+    )
 
     TranscriptionGUI._download_file_model(gui)
 

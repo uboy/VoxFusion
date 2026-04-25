@@ -40,5 +40,5 @@ def patch_subprocess_popen_no_window(*, force: bool = False) -> None:
 
         original_init(self, *args, **kwargs)  # type: ignore[misc]
 
-    setattr(_patched, "_voxfusion_no_window", True)
+    _patched._voxfusion_no_window = True
     subprocess.Popen.__init__ = _patched  # type: ignore[method-assign]

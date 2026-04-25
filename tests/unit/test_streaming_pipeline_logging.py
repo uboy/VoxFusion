@@ -53,7 +53,9 @@ class _FakeASR:
 class _FakeDiarizer:
     async def diarize(self, segments, chunk):
         del chunk
-        return [DiarizedSegment(segment=segments[0], speaker_id="SPEAKER_00", speaker_source="channel")]
+        return [
+            DiarizedSegment(segment=segments[0], speaker_id="SPEAKER_00", speaker_source="channel")
+        ]
 
 
 async def _run_pipeline(fake_log: MagicMock) -> list[object]:

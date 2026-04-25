@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 import tempfile
 from collections.abc import Callable
@@ -55,10 +54,17 @@ def _encode_mp3(wav_path: Path, output_path: Path, *, ffmpeg: str) -> None:
     Uses VBR quality 4 (~128 kbps), which is transparent for speech.
     """
     cmd: list[str] = [
-        ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
-        "-i", str(wav_path),
-        "-acodec", "libmp3lame",
-        "-q:a", "4",
+        ffmpeg,
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(wav_path),
+        "-acodec",
+        "libmp3lame",
+        "-q:a",
+        "4",
         str(output_path),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, check=False)
@@ -110,7 +116,7 @@ class AudioRecorder:
         output_path: Path,
         *,
         duration_s: float | None = None,
-        format: str = "wav",
+        format: str = "wav",  # noqa: A002 — public API parameter, matches soundfile convention
     ) -> RecordingStats:
         """Capture audio from *source* and write it to *output_path*."""
         chunks: list[AudioChunk] = []
@@ -188,6 +194,7 @@ class AudioRecorder:
             tmp_wav = Path(tmp_name)
             try:
                 import os
+
                 os.close(tmp_fd)
                 sf.write(str(tmp_wav), mixed, sample_rate, subtype="PCM_16")
                 log.info("recording.mp3_encode_start", ffmpeg=ffmpeg, temp_wav=str(tmp_wav))

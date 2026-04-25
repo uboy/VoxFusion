@@ -12,12 +12,8 @@ import zipfile
 from collections.abc import Callable
 from pathlib import Path
 
-_WINDOWS_FFMPEG_SHARED_URL = (
-    "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full-shared.7z"
-)
-_WINDOWS_FFMPEG_ESSENTIALS_URL = (
-    "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-)
+_WINDOWS_FFMPEG_SHARED_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full-shared.7z"
+_WINDOWS_FFMPEG_ESSENTIALS_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 _WINDOWS_DLL_DIRECTORY_HANDLES: dict[str, object] = {}
 
 
@@ -147,7 +143,11 @@ def _extract_windows_ffmpeg_zip(zip_path: Path, target_dir: Path) -> Path:
     with zipfile.ZipFile(zip_path) as archive:
         members = {name.lower(): name for name in archive.namelist()}
         for lowered, member in members.items():
-            if not lowered.endswith(".dll") and not lowered.endswith("/bin/ffmpeg.exe") and not lowered.endswith("/bin/ffprobe.exe"):
+            if (
+                not lowered.endswith(".dll")
+                and not lowered.endswith("/bin/ffmpeg.exe")
+                and not lowered.endswith("/bin/ffprobe.exe")
+            ):
                 continue
             output_path = target_dir / Path(member).name
             with archive.open(member) as src, output_path.open("wb") as dst:

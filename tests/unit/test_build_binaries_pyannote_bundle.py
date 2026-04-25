@@ -9,7 +9,9 @@ from pathlib import Path
 
 def _load_build_module():
     script_path = Path(__file__).resolve().parents[2] / "scripts" / "build_binaries.py"
-    spec = importlib.util.spec_from_file_location("voxfusion_build_binaries_pyannote_test", script_path)
+    spec = importlib.util.spec_from_file_location(
+        "voxfusion_build_binaries_pyannote_test", script_path
+    )
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     sys.modules[spec.name] = module
@@ -87,7 +89,9 @@ def test_find_ffmpeg_binary_returns_absolute_path(tmp_path: Path, monkeypatch) -
     ffmpeg_path.parent.mkdir(parents=True, exist_ok=True)
     ffmpeg_path.write_bytes(b"ffmpeg")
 
-    monkeypatch.setattr(module.shutil, "which", lambda _name: str(ffmpeg_path.relative_to(tmp_path)))
+    monkeypatch.setattr(
+        module.shutil, "which", lambda _name: str(ffmpeg_path.relative_to(tmp_path))
+    )
     monkeypatch.chdir(tmp_path)
 
     found = module._find_ffmpeg_binary()
@@ -98,11 +102,11 @@ def test_find_ffmpeg_binary_returns_absolute_path(tmp_path: Path, monkeypatch) -
 def test_default_data_entries_include_gui_locales(monkeypatch) -> None:
     module = _load_build_module()
 
-    monkeypatch.setattr(module, '_customtkinter_data_entries', lambda: [])
-    monkeypatch.setattr(module, '_pyannote_data_entries', lambda: [])
-    monkeypatch.setattr(module, '_ffmpeg_data_entries', lambda: [])
+    monkeypatch.setattr(module, "_customtkinter_data_entries", lambda: [])
+    monkeypatch.setattr(module, "_pyannote_data_entries", lambda: [])
+    monkeypatch.setattr(module, "_ffmpeg_data_entries", lambda: [])
 
     entries = module._default_data_entries()
 
-    expected = module.PROJECT_ROOT / 'src' / 'voxfusion' / 'gui' / 'locales'
+    expected = module.PROJECT_ROOT / "src" / "voxfusion" / "gui" / "locales"
     assert f"{expected}{module.os.pathsep}voxfusion/gui/locales" in entries

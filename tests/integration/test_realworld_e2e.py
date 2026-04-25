@@ -89,6 +89,7 @@ def test_wav(tmp_path_factory) -> Path:
 # 1. RECORDING  — end-to-end pipeline without real hardware
 # ---------------------------------------------------------------------------
 
+
 class _FakeSource:
     """Emits a finite list of AudioChunks with sequential timestamps, then stops."""
 
@@ -99,7 +100,8 @@ class _FakeSource:
         t = 0.0
         for c in chunks:
             dur = len(c.samples) / c.sample_rate
-            from voxfusion.models.audio import AudioChunk as _AC
+            from voxfusion.models.audio import AudioChunk as _AC  # noqa: N814
+
             restamped.append(
                 _AC(
                     samples=c.samples,
@@ -185,7 +187,7 @@ async def test_recording_pipeline_pause_resume(tmp_path: Path) -> None:
     chunk_samples = int(SR * 0.5)
     t = np.linspace(0, 0.5, chunk_samples, endpoint=False, dtype=np.float32)
     active_samples = (0.3 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
-    paused_samples = (0.9 * np.ones(chunk_samples, dtype=np.float32))
+    paused_samples = 0.9 * np.ones(chunk_samples, dtype=np.float32)
 
     recorder = AudioRecorder(chunk_duration_ms=500)
 
@@ -194,18 +196,20 @@ async def test_recording_pipeline_pause_resume(tmp_path: Path) -> None:
             if not self._active:
                 return
             # Yield pre-stamped chunks: timestamps are 0→0.5, 0.5→1.0, 1.0→1.5
-            yield self._chunks[0]               # active  (0.0–0.5)
+            yield self._chunks[0]  # active  (0.0–0.5)
             recorder.request_pause()
-            yield self._chunks[1]               # paused  (0.5–1.0) — recorder drops it
+            yield self._chunks[1]  # paused  (0.5–1.0) — recorder drops it
             recorder.request_resume()
-            yield self._chunks[2]               # resumed (1.0–1.5) → adjusted to 0.5–1.0
+            yield self._chunks[2]  # resumed (1.0–1.5) → adjusted to 0.5–1.0
 
     output = tmp_path / "pause_test.wav"
-    source = _PauseSource([
-        _audio_chunk(active_samples),
-        _audio_chunk(paused_samples),
-        _audio_chunk(active_samples),
-    ])
+    source = _PauseSource(
+        [
+            _audio_chunk(active_samples),
+            _audio_chunk(paused_samples),
+            _audio_chunk(active_samples),
+        ]
+    )
     stats = await recorder.record(source, output)
 
     assert output.exists()
@@ -235,6 +239,7 @@ async def test_recording_pipeline_writes_ogg(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # 2. WHISPER — always available (models in HF cache)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.integration
 @pytest.mark.slow
@@ -319,9 +324,12 @@ async def test_whisper_large_v3_full_batch_pipeline(test_wav: Path) -> None:
 
 _GIGAAM_CACHED = _hf_cache("models--ai-sage--GigaAM-v3")
 _GIGAAM_PKGS = (
-    _pkg("transformers") and _pkg("torch")
-    and _pkg("torchaudio") and _pkg("sentencepiece")
-    and _pkg("omegaconf") and _pkg("hydra")
+    _pkg("transformers")
+    and _pkg("torch")
+    and _pkg("torchaudio")
+    and _pkg("sentencepiece")
+    and _pkg("omegaconf")
+    and _pkg("hydra")
 )
 
 
@@ -332,13 +340,12 @@ _GIGAAM_PKGS = (
 def test_gigaam_v3_download() -> None:
     """Download ai-sage/GigaAM-v3 from HuggingFace (idempotent — uses cache)."""
     import os
+
     from transformers import AutoModel
 
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
     # AutoModel.from_pretrained caches the model; subsequent calls are instant
-    model = AutoModel.from_pretrained(
-        "ai-sage/GigaAM-v3", trust_remote_code=True, token=token
-    )
+    model = AutoModel.from_pretrained("ai-sage/GigaAM-v3", trust_remote_code=True, token=token)
     assert model is not None, "Model object should not be None after download"
 
 
@@ -347,7 +354,7 @@ def test_gigaam_v3_download() -> None:
 @pytest.mark.skipif(
     not (_GIGAAM_PKGS and _GIGAAM_CACHED),
     reason="GigaAM v3 not cached — run test_gigaam_v3_download first, or: "
-           "huggingface-cli download ai-sage/GigaAM-v3",
+    "huggingface-cli download ai-sage/GigaAM-v3",
 )
 @pytest.mark.asyncio
 async def test_gigaam_v3_transcribes_wav(test_wav: Path) -> None:
@@ -412,6 +419,7 @@ def test_gigaam_v3_streaming_raises_transcription_error(test_wav: Path) -> None:
 
     engine = GigaAMCTCEngine(ASRConfig(model_size="gigaam-v3-e2e-ctc"))
     try:
+
         async def _drain():
             async for _ in engine.transcribe_stream(
                 _empty_async_iter(),
@@ -451,7 +459,7 @@ def test_breeze_asr_download() -> None:
 @pytest.mark.skipif(
     not (_BREEZE_PKGS and _BREEZE_CACHED),
     reason="Breeze ASR not cached — run test_breeze_asr_download first, or: "
-           "huggingface-cli download MediaTek-Research/Breeze-ASR-25",
+    "huggingface-cli download MediaTek-Research/Breeze-ASR-25",
 )
 @pytest.mark.asyncio
 async def test_breeze_asr_transcribes_wav(test_wav: Path) -> None:
@@ -511,7 +519,10 @@ _PARAKEET_PKGS = _pkg("nemo")
 @pytest.mark.integration
 @pytest.mark.download
 @pytest.mark.slow
-@pytest.mark.skipif(not _PARAKEET_PKGS, reason='nemo_toolkit not installed — pip install "nemo_toolkit[asr]" torchaudio')
+@pytest.mark.skipif(
+    not _PARAKEET_PKGS,
+    reason='nemo_toolkit not installed — pip install "nemo_toolkit[asr]" torchaudio',
+)
 def test_parakeet_v3_download() -> None:
     """Download nvidia/parakeet-tdt-0.6b-v3 via NeMo (idempotent — uses .nemo cache)."""
     from nemo.collections.asr.models import ASRModel
@@ -522,7 +533,10 @@ def test_parakeet_v3_download() -> None:
 
 @pytest.mark.integration
 @pytest.mark.slow
-@pytest.mark.skipif(not _PARAKEET_PKGS, reason='nemo_toolkit not installed — pip install "nemo_toolkit[asr]" torchaudio')
+@pytest.mark.skipif(
+    not _PARAKEET_PKGS,
+    reason='nemo_toolkit not installed — pip install "nemo_toolkit[asr]" torchaudio',
+)
 @pytest.mark.asyncio
 async def test_parakeet_v3_transcribes_wav(test_wav: Path) -> None:
     """Parakeet v3 transcribes a WAV file without crashing."""
@@ -543,7 +557,7 @@ async def test_parakeet_v3_transcribes_wav(test_wav: Path) -> None:
 
 @pytest.mark.integration
 @pytest.mark.slow
-@pytest.mark.skipif(not _PARAKEET_PKGS, reason='nemo_toolkit not installed')
+@pytest.mark.skipif(not _PARAKEET_PKGS, reason="nemo_toolkit not installed")
 @pytest.mark.asyncio
 async def test_parakeet_v3_full_batch_pipeline(test_wav: Path) -> None:
     """Full BatchPipeline with Parakeet v3 — end-to-end without crashes."""
@@ -572,8 +586,10 @@ async def test_parakeet_v3_full_batch_pipeline(test_wav: Path) -> None:
 # 6. GUI download button — verify the _download_file_model method works
 # ---------------------------------------------------------------------------
 
+
 def _skip_if_no_display() -> None:
     import tkinter as tk
+
     try:
         r = tk.Tk()
         r.destroy()
@@ -587,6 +603,7 @@ def test_gui_download_button_triggers_whisper_download_without_crash() -> None:
     """The GUI ↓ Download button completes for a cached Whisper model without crashing."""
     _skip_if_no_display()
     import tkinter as tk
+
     from voxfusion.gui.main import CaptureOptions, TranscriptionGUI
 
     root = tk.Tk()
@@ -634,6 +651,7 @@ def test_gui_download_button_triggers_gigaam_download() -> None:
     """The GUI ↓ Download button downloads GigaAM v3 without crashing the UI thread."""
     _skip_if_no_display()
     import tkinter as tk
+
     from voxfusion.gui.main import CaptureOptions, TranscriptionGUI
 
     root = tk.Tk()
@@ -679,6 +697,7 @@ def test_gui_download_button_triggers_gigaam_download() -> None:
 # 7. FileTranscribeWorker — real file transcription via GUI worker
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 @pytest.mark.slow
 def test_file_transcribe_worker_whisper_small(test_wav: Path) -> None:
@@ -687,7 +706,9 @@ def test_file_transcribe_worker_whisper_small(test_wav: Path) -> None:
 
     errors: list[str] = []
     segments_received: list = []
-    finished = threading.Event() if False else __import__("threading").Event()
+    import threading as _threading
+
+    finished = _threading.Event()
 
     worker = FileTranscribeWorker(
         file_path=test_wav,
@@ -714,8 +735,9 @@ def test_file_transcribe_worker_whisper_small(test_wav: Path) -> None:
 )
 def test_file_transcribe_worker_gigaam(test_wav: Path) -> None:
     """FileTranscribeWorker processes a WAV file with GigaAM v3 end-to-end."""
-    from voxfusion.gui.runtime import FileTranscribeWorker
     import threading
+
+    from voxfusion.gui.runtime import FileTranscribeWorker
 
     errors: list[str] = []
     finished = threading.Event()
@@ -741,14 +763,15 @@ def test_file_transcribe_worker_gigaam(test_wav: Path) -> None:
 # 8. Record-then-transcribe — full user workflow simulation
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 @pytest.mark.slow
 @pytest.mark.asyncio
 async def test_record_then_transcribe_whisper_small(tmp_path: Path) -> None:
     """Simulate the full workflow: record → save WAV → transcribe with Whisper small."""
-    from voxfusion.recording.recorder import AudioRecorder
     from voxfusion.asr.faster_whisper import FasterWhisperEngine
     from voxfusion.config.models import ASRConfig
+    from voxfusion.recording.recorder import AudioRecorder
 
     # Step 1: Record
     chunk_samples = int(SR * 0.5)
@@ -785,9 +808,9 @@ async def test_record_then_transcribe_whisper_small(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_record_then_transcribe_gigaam(tmp_path: Path) -> None:
     """Simulate the full workflow: record → save WAV → transcribe with GigaAM v3."""
-    from voxfusion.recording.recorder import AudioRecorder
     from voxfusion.asr.gigaam_engine import GigaAMCTCEngine
     from voxfusion.config.models import ASRConfig
+    from voxfusion.recording.recorder import AudioRecorder
 
     # Step 1: Record
     chunk_samples = int(SR * 0.5)

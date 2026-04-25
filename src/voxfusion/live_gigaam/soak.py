@@ -9,9 +9,9 @@ import json
 import threading
 import time
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Sequence
 
 import numpy as np
 import soundfile as sf
@@ -267,7 +267,7 @@ class ReplayAudioSource:
 class InstrumentedDispatcher:
     """Wrapper that records dispatcher load/latency metrics."""
 
-    def __init__(self, inner: LiveASRDispatcher | "FakeDispatcher") -> None:
+    def __init__(self, inner: LiveASRDispatcher | FakeDispatcher) -> None:
         self._inner = inner
         self.metrics = DispatcherMetrics()
 
@@ -289,7 +289,9 @@ class InstrumentedDispatcher:
 
     async def transcribe(self, job: LiveGigaAMJob) -> LiveGigaAMResult:
         self.metrics.started_jobs += 1
-        self.metrics.pending_high_water = max(self.metrics.pending_high_water, self.pending_jobs + 1)
+        self.metrics.pending_high_water = max(
+            self.metrics.pending_high_water, self.pending_jobs + 1
+        )
         started_at = time.perf_counter()
         try:
             result = await self._inner.transcribe(job)
@@ -507,7 +509,9 @@ async def run_soak_harness(args: argparse.Namespace) -> SoakSummary:
         dispatcher_failures=instrumented.metrics.failed_jobs,
         dispatcher_pending_high_water=instrumented.metrics.pending_high_water,
         latency_ms=summarize_latencies_ms(instrumented.metrics.latencies_ms),
-        worker_usage={str(key): value for key, value in sorted(instrumented.metrics.worker_usage.items())},
+        worker_usage={
+            str(key): value for key, value in sorted(instrumented.metrics.worker_usage.items())
+        },
         status_tail=statuses[-8:],
         data_dir=str(data_dir),
         wav_path=str(wav_path),

@@ -9,8 +9,6 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import suppress
 
-import numpy as np
-
 from voxfusion.capture.base import AudioCaptureSource
 from voxfusion.logging import get_logger
 from voxfusion.models.audio import AudioChunk
@@ -91,6 +89,7 @@ class AudioMixer:
                 )
         if not active:
             from voxfusion.exceptions import AudioCaptureError
+
             raise AudioCaptureError("All audio sources failed to start.")
         self._sources = active
         self._active = True

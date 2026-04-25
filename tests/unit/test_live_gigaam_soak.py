@@ -5,7 +5,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from voxfusion.live_gigaam.soak import build_utterance_corpus, normalize_sources, summarize_latencies_ms
+from voxfusion.live_gigaam.soak import (
+    build_utterance_corpus,
+    normalize_sources,
+    summarize_latencies_ms,
+)
 
 
 def test_normalize_sources_expands_both_and_deduplicates() -> None:

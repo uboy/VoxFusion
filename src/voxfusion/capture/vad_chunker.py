@@ -4,7 +4,6 @@ Wraps any AudioCaptureSource and yields variable-length chunks at
 speech boundaries rather than fixed intervals.
 """
 
-import asyncio
 from collections.abc import AsyncIterator
 
 import numpy as np
@@ -94,7 +93,7 @@ class VadChunker:
             pieces.append(samples)
             acc_frames += len(samples)
 
-            rms = float(np.sqrt(np.mean(samples ** 2))) if samples.size > 0 else 0.0
+            rms = float(np.sqrt(np.mean(samples**2))) if samples.size > 0 else 0.0
             if rms < self._silence_threshold:
                 silence_frames += len(samples)
             else:

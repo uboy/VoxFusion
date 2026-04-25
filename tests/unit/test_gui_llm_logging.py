@@ -63,7 +63,9 @@ def test_start_llm_summarize_logs_request(monkeypatch) -> None:
     gui._schedule_llm_error = MagicMock()
     gui._schedule_llm_finished = MagicMock()
     gui.root = type("Root", (), {"after": staticmethod(lambda _delay, fn, *args: fn(*args))})()
-    gui._get_file_transcript_text = lambda: "[00:00:01] [SPEAKER_00] Hello\n[00:00:03] [SPEAKER_01] World"
+    gui._get_file_transcript_text = lambda: (
+        "[00:00:01] [SPEAKER_00] Hello\n[00:00:03] [SPEAKER_01] World"
+    )
     gui._tr = lambda key, **kwargs: key if not kwargs else f"{key}:{kwargs}"
     gui._llm_last_error_message = None
 
@@ -191,7 +193,6 @@ def test_on_llm_models_loaded_uses_cached_models_on_failure(monkeypatch) -> None
         selected_model="qwen2.5-7b",
         error="HTTP 503",
     )
-
 
 
 def test_show_llm_error_logs_error(monkeypatch) -> None:

@@ -116,8 +116,7 @@ def test_live_gigaam_system_loopback_finalizes_non_empty_transcript(
     )
 
     capture_started = any(
-        "GigaAM workers ready" in status or "Live GigaAM started" in status
-        for status in statuses
+        "GigaAM workers ready" in status or "Live GigaAM started" in status for status in statuses
     )
     assert capture_started is True
     assert result

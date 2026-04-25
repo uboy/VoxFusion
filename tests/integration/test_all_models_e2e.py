@@ -82,6 +82,7 @@ def _make_chunk(duration_s: float = 1.0, sr: int = 16000):
 # Whisper large-v3  (faster-whisper, always available)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_whisper_large_v3_engine_transcribes() -> None:
@@ -94,7 +95,11 @@ async def test_whisper_large_v3_engine_transcribes() -> None:
     engine = FasterWhisperEngine(cfg)
     try:
         # Loading the model downloads it on first run (~1.5 GB) — skip via env var
-        skip_download = os.environ.get("VOXFUSION_SKIP_LARGE_DOWNLOAD", "").lower() in ("1", "true", "yes")
+        skip_download = os.environ.get("VOXFUSION_SKIP_LARGE_DOWNLOAD", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
         if skip_download:
             pytest.skip("VOXFUSION_SKIP_LARGE_DOWNLOAD set — skipping large-v3 download")
 
@@ -138,9 +143,12 @@ async def test_whisper_small_engine_transcribes() -> None:
 # ---------------------------------------------------------------------------
 
 _GIGAAM_AVAILABLE = (
-    _pkg("transformers") and _pkg("torch")
-    and _pkg("torchaudio") and _pkg("sentencepiece")
-    and _pkg("omegaconf") and _pkg("hydra")
+    _pkg("transformers")
+    and _pkg("torch")
+    and _pkg("torchaudio")
+    and _pkg("sentencepiece")
+    and _pkg("omegaconf")
+    and _pkg("hydra")
     and _hf_model_cached(_HF_GIGAAM_DIR)
 )
 _GIGAAM_SKIP = (
@@ -256,8 +264,10 @@ async def test_parakeet_v3_engine_transcribes() -> None:
 # GUI smoke — each model selectable in the file transcription tab
 # ---------------------------------------------------------------------------
 
+
 def _skip_if_no_display() -> None:
     import tkinter as tk
+
     try:
         root = tk.Tk()
         root.destroy()
@@ -266,26 +276,30 @@ def _skip_if_no_display() -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("model_id", [
-    "small",
-    "large-v3",
-    pytest.param(
-        "gigaam-v3-e2e-ctc",
-        marks=pytest.mark.skipif(not _pkg("transformers"), reason="transformers not installed"),
-    ),
-    pytest.param(
-        "breeze-asr",
-        marks=pytest.mark.skipif(not _pkg("transformers"), reason="transformers not installed"),
-    ),
-    pytest.param(
-        "parakeet-tdt-0.6b-v3",
-        marks=pytest.mark.skipif(not _pkg("nemo"), reason="nemo not installed"),
-    ),
-])
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        "small",
+        "large-v3",
+        pytest.param(
+            "gigaam-v3-e2e-ctc",
+            marks=pytest.mark.skipif(not _pkg("transformers"), reason="transformers not installed"),
+        ),
+        pytest.param(
+            "breeze-asr",
+            marks=pytest.mark.skipif(not _pkg("transformers"), reason="transformers not installed"),
+        ),
+        pytest.param(
+            "parakeet-tdt-0.6b-v3",
+            marks=pytest.mark.skipif(not _pkg("nemo"), reason="nemo not installed"),
+        ),
+    ],
+)
 def test_gui_can_select_model_in_file_tab(model_id: str) -> None:
     """The GUI builds without error and the file-tab model combo accepts each model."""
     _skip_if_no_display()
     import tkinter as tk
+
     from voxfusion.gui.main import CaptureOptions, TranscriptionGUI
 
     root = tk.Tk()
@@ -316,8 +330,9 @@ def test_gui_file_tab_defaults_to_gigaam_when_available() -> None:
     """On first launch the file-transcription tab should default to GigaAM v3."""
     _skip_if_no_display()
     import tkinter as tk
-    from voxfusion.gui.main import CaptureOptions, TranscriptionGUI
+
     from voxfusion.asr_catalog import get_available_model_catalog
+    from voxfusion.gui.main import CaptureOptions, TranscriptionGUI
 
     available = {m.id for m in get_available_model_catalog()}
     if "gigaam-v3-e2e-ctc" not in available:

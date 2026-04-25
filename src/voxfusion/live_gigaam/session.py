@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import shutil
 import threading
+from collections.abc import Callable
 from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from voxfusion.capture.mixer import AudioMixer
 from voxfusion.capture.vad_chunker import VadChunker
@@ -190,9 +191,7 @@ class LiveGigaAMSessionController:
                         f"Deferred {self._deferred_draft_jobs} draft utterances during overload."
                     )
                 else:
-                    self._on_status(
-                        f"Live GigaAM finalized: {len(finalized_segments)} segments."
-                    )
+                    self._on_status(f"Live GigaAM finalized: {len(finalized_segments)} segments.")
             log.info(
                 "live_gigaam.capture_completed",
                 utterances=len(self._utterances),

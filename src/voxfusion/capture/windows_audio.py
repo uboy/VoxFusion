@@ -46,10 +46,7 @@ def list_windows_microphone_devices() -> list[WindowsAudioDevice]:
 
     try:
         hostapis = list(sd.query_hostapis())
-        hostapi_names = {
-            i: str(api.get("name", f"HostAPI {i}"))
-            for i, api in enumerate(hostapis)
-        }
+        hostapi_names = {i: str(api.get("name", f"HostAPI {i}")) for i, api in enumerate(hostapis)}
         devices = list(sd.query_devices())
         default_input = int(sd.default.device[0]) if sd.default.device[0] is not None else -1
     except Exception:
@@ -134,10 +131,7 @@ def _list_sounddevice_wasapi_loopback_devices() -> list[WindowsAudioDevice]:
 
     try:
         hostapis = list(sd.query_hostapis())
-        hostapi_names = {
-            i: str(api.get("name", f"HostAPI {i}"))
-            for i, api in enumerate(hostapis)
-        }
+        hostapi_names = {i: str(api.get("name", f"HostAPI {i}")) for i, api in enumerate(hostapis)}
         devices = list(sd.query_devices())
         default_output = int(sd.default.device[1]) if sd.default.device[1] is not None else -1
     except Exception:

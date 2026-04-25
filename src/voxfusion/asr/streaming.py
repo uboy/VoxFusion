@@ -5,7 +5,6 @@ window, and deduplicates the resulting segments to produce a continuous
 transcript without gaps or repeated text.
 """
 
-import asyncio
 from collections.abc import AsyncIterator
 
 import numpy as np

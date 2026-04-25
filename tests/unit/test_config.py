@@ -4,6 +4,7 @@ import json
 import os
 
 import pytest
+from pydantic import ValidationError
 
 from voxfusion.config.loader import (
     _deep_merge,
@@ -14,7 +15,6 @@ from voxfusion.config.loader import (
 from voxfusion.config.models import (
     ASRConfig,
     CaptureConfig,
-    DiarizationConfig,
     DiarizationMLConfig,
     LiveGigaAMConfig,
     OutputConfig,
@@ -74,11 +74,11 @@ class TestPipelineConfig:
         assert cfg.queue_hard_limit_jobs == 16
 
     def test_vad_parameters_validation(self) -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             VADParameters(threshold=2.0)  # must be <= 1.0
 
     def test_diarization_ml_rejects_inverted_speaker_hints(self) -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             DiarizationMLConfig(min_speakers=4, max_speakers=2)
 
 

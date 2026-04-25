@@ -10,8 +10,7 @@ from voxfusion.config.loader import load_config
 from voxfusion.gui.helpers import find_ffmpeg
 from voxfusion.logging import configure_logging, get_logger
 from voxfusion.media.extractor import NEEDS_EXTRACTION_EXTENSIONS
-from voxfusion.output import FORMATTERS
-from voxfusion.output import get_formatter
+from voxfusion.output import FORMATTERS, get_formatter
 from voxfusion.pipeline.events import EventType, PipelineEvent
 from voxfusion.pipeline.orchestrator import PipelineOrchestrator
 
@@ -36,7 +35,7 @@ def _event_printer(event: PipelineEvent) -> None:
                 click.echo(f"  FAILED: {event.message}", err=True)
             case EventType.WARNING:
                 click.echo(f"  WARNING: {event.message}", err=True)
-    except (OSError, IOError):
+    except OSError:
         # Ignore console output errors
         pass
 
@@ -61,13 +60,12 @@ def _expand_path(path: Path) -> list[Path]:
         return [path]
     if path.is_dir():
         from voxfusion.media.extractor import NEEDS_EXTRACTION_EXTENSIONS
-        WAV_FLAC = {".wav", ".flac", ".aiff", ".aif"}
-        supported = NEEDS_EXTRACTION_EXTENSIONS | WAV_FLAC
+
+        wav_flac = {".wav", ".flac", ".aiff", ".aif"}
+        supported = NEEDS_EXTRACTION_EXTENSIONS | wav_flac
         found = sorted(p for p in path.iterdir() if p.is_file() and p.suffix.lower() in supported)
         if not found:
-            raise click.ClickException(
-                f"No supported audio/video files found in directory: {path}"
-            )
+            raise click.ClickException(f"No supported audio/video files found in directory: {path}")
         return found
     return [path]
 
@@ -139,7 +137,7 @@ def _transcribe_single_file(
             click.echo(f"Transcribing: {audio_file}", err=True)
             click.echo(f"  Model: {orchestrator._asr.model_name}", err=True)
             click.echo(f"  Format: {fmt}", err=True)
-        except (OSError, IOError):
+        except OSError:
             pass
 
     try:
@@ -147,7 +145,7 @@ def _transcribe_single_file(
     except KeyboardInterrupt:
         try:
             click.echo("\nInterrupted.", err=True)
-        except (OSError, IOError):
+        except OSError:
             print("\nInterrupted.")
         sys.exit(130)
     except Exception as exc:
@@ -159,14 +157,14 @@ def _transcribe_single_file(
         if not quiet:
             try:
                 click.echo(f"Written to: {output}", err=True)
-            except (OSError, IOError):
+            except OSError:
                 pass
         return
 
     formatted = orchestrator.format_result(result, fmt=fmt)
     try:
         click.echo(formatted)
-    except (OSError, IOError):
+    except OSError:
         print(formatted, flush=True)
 
 
@@ -186,7 +184,7 @@ def _transcribe_batch(
     if not quiet:
         try:
             click.echo(f"Batch transcribing {len(files)} files...", err=True)
-        except (OSError, IOError):
+        except OSError:
             pass
 
     for index, audio_file in enumerate(files, start=1):
@@ -201,7 +199,7 @@ def _transcribe_batch(
                     click.echo(f"[{index}/{len(files)}] {audio_file}", err=True)
                     click.echo(f"  Model: {orchestrator._asr.model_name}", err=True)
                     click.echo(f"  Format: {fmt}", err=True)
-                except (OSError, IOError):
+                except OSError:
                     pass
 
             result = asyncio.run(orchestrator.transcribe_file(audio_file))
@@ -211,12 +209,12 @@ def _transcribe_batch(
             if not quiet:
                 try:
                     click.echo(f"  Written to: {target}", err=True)
-                except (OSError, IOError):
+                except OSError:
                     pass
         except KeyboardInterrupt:
             try:
                 click.echo("\nInterrupted.", err=True)
-            except (OSError, IOError):
+            except OSError:
                 print("\nInterrupted.")
             sys.exit(130)
         except Exception as exc:
@@ -225,7 +223,7 @@ def _transcribe_batch(
             if not quiet:
                 try:
                     click.echo(f"  FAILED: {audio_file.name}: {exc}", err=True)
-                except (OSError, IOError):
+                except OSError:
                     pass
         finally:
             orchestrator.close()
@@ -236,7 +234,7 @@ def _transcribe_batch(
                 f"Batch finished: {successes} succeeded, {failures} failed.",
                 err=True,
             )
-        except (OSError, IOError):
+        except OSError:
             pass
 
     if failures:
@@ -258,7 +256,8 @@ def _transcribe_batch(
     help="Text file with one audio/video path per line for batch transcription.",
 )
 @click.option(
-    "--output", "-o",
+    "--output",
+    "-o",
     type=click.Path(dir_okay=False, path_type=Path),
     default=None,
     help="Output file path. Defaults to stdout.",
@@ -270,23 +269,27 @@ def _transcribe_batch(
     help="Directory for per-file outputs in batch mode. Defaults next to each source.",
 )
 @click.option(
-    "--output-format", "-f",
+    "--output-format",
+    "-f",
     type=click.Choice(VALID_FORMATS),
     default=None,
     help="Output format (json, srt, vtt, txt). Defaults to config value.",
 )
 @click.option(
-    "--language", "-l",
+    "--language",
+    "-l",
     default=None,
     help="Source language code (e.g. 'en'). Auto-detected if omitted.",
 )
 @click.option(
-    "--model", "-m",
+    "--model",
+    "-m",
     default=None,
     help="ASR model size (tiny, base, small, medium, large-v3).",
 )
 @click.option(
-    "--word-timestamps", "-w",
+    "--word-timestamps",
+    "-w",
     is_flag=True,
     default=False,
     help="Include word-level timestamps in output.",
@@ -332,7 +335,7 @@ def transcribe(
     """
     verbose = ctx.obj.get("verbose", False)
     quiet = ctx.obj.get("quiet", False)
-    config_path = ctx.obj.get("config_path")
+    ctx.obj.get("config_path")
 
     log_level = "DEBUG" if verbose else ("ERROR" if quiet else "INFO")
     configure_logging(log_level, log_mode="debug" if verbose else "normal")
@@ -340,11 +343,7 @@ def transcribe(
     files = _collect_input_files(audio_files, input_list)
     is_batch = len(files) > 1
 
-    if (
-        min_speakers is not None
-        and max_speakers is not None
-        and min_speakers > max_speakers
-    ):
+    if min_speakers is not None and max_speakers is not None and min_speakers > max_speakers:
         raise click.ClickException("--min-speakers must be <= --max-speakers")
 
     # Build config with CLI overrides

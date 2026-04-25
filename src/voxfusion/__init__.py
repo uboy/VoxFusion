@@ -11,8 +11,6 @@ from voxfusion.pipeline.orchestrator import PipelineOrchestrator
 from voxfusion.version import __version__, __version_info__
 
 __all__ = [
-    "__version__",
-    "__version_info__",
     "AudioChunk",
     "AudioDeviceInfo",
     "DiarizedSegment",
@@ -22,5 +20,7 @@ __all__ = [
     "TranscriptionSegment",
     "TranslatedSegment",
     "WordTiming",
+    "__version__",
+    "__version_info__",
     "load_config",
 ]

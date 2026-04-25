@@ -57,14 +57,15 @@ class BreezeASREngine:
         try:
             import torch
             from transformers import (
-                AutoProcessor,
                 AutoModelForSpeechSeq2Seq,
+                AutoProcessor,
                 pipeline,
             )
+
             try:
-                from transformers import WhisperProcessor as _ProcessorCls
+                from transformers import WhisperProcessor as _processor_cls  # noqa: N813
             except ImportError:
-                _ProcessorCls = AutoProcessor
+                _processor_cls = AutoProcessor
         except ImportError as exc:
             raise ModelLoadError(
                 "Breeze backend requires transformers and torch. "
@@ -72,7 +73,7 @@ class BreezeASREngine:
             ) from exc
 
         try:
-            processor = _ProcessorCls.from_pretrained(model_ref, local_files_only=local_only)
+            processor = _processor_cls.from_pretrained(model_ref, local_files_only=local_only)
             model = AutoModelForSpeechSeq2Seq.from_pretrained(
                 model_ref,
                 local_files_only=local_only,
@@ -80,7 +81,7 @@ class BreezeASREngine:
             self._processor = processor
             self._model = model
             if not (
-                callable(getattr(processor, "__call__", None))
+                callable(processor)
                 and hasattr(processor, "batch_decode")
                 and hasattr(model, "generate")
             ):
@@ -132,7 +133,7 @@ class BreezeASREngine:
         if processor is None or model is None:
             return ""
         if not (
-            callable(getattr(processor, "__call__", None))
+            callable(processor)
             and hasattr(processor, "batch_decode")
             and hasattr(model, "generate")
         ):
@@ -164,7 +165,9 @@ class BreezeASREngine:
         texts = processor.batch_decode(generated_ids, skip_special_tokens=True)  # type: ignore[operator]
         return str(texts[0] if texts else "").strip()
 
-    def _transcribe_sync(self, audio: np.ndarray, *, language: str | None = None) -> list[TranscriptionSegment]:
+    def _transcribe_sync(
+        self, audio: np.ndarray, *, language: str | None = None
+    ) -> list[TranscriptionSegment]:
         try:
             activate_ffmpeg_runtime()
             text = self._decode_direct(audio, language=language)

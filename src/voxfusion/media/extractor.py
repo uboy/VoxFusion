@@ -21,20 +21,43 @@ log = get_logger(__name__)
 
 # Extensions that soundfile cannot reliably open (video containers or
 # compressed-audio formats that require a separate decoder).
-_VIDEO_EXTENSIONS: frozenset[str] = frozenset({
-    ".mp4", ".m4v", ".mkv", ".avi", ".mov", ".webm",
-    ".flv", ".ts", ".m2ts", ".mts", ".wmv", ".3gp",
-    ".ogv", ".mpg", ".mpeg", ".vob", ".divx",
-})
-
-_COMPRESSED_AUDIO_EXTENSIONS: frozenset[str] = frozenset({
-    ".mp3", ".m4a", ".aac", ".opus", ".wma",
-    ".ac3", ".dts", ".amr", ".mka",
-})
-
-NEEDS_EXTRACTION_EXTENSIONS: frozenset[str] = (
-    _VIDEO_EXTENSIONS | _COMPRESSED_AUDIO_EXTENSIONS
+_VIDEO_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        ".mp4",
+        ".m4v",
+        ".mkv",
+        ".avi",
+        ".mov",
+        ".webm",
+        ".flv",
+        ".ts",
+        ".m2ts",
+        ".mts",
+        ".wmv",
+        ".3gp",
+        ".ogv",
+        ".mpg",
+        ".mpeg",
+        ".vob",
+        ".divx",
+    }
 )
+
+_COMPRESSED_AUDIO_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        ".mp3",
+        ".m4a",
+        ".aac",
+        ".opus",
+        ".wma",
+        ".ac3",
+        ".dts",
+        ".amr",
+        ".mka",
+    }
+)
+
+NEEDS_EXTRACTION_EXTENSIONS: frozenset[str] = _VIDEO_EXTENSIONS | _COMPRESSED_AUDIO_EXTENSIONS
 
 
 def needs_extraction(path: Path) -> bool:
@@ -81,12 +104,17 @@ def extract_audio(
         resolved_ffmpeg,
         "-y",
         "-hide_banner",
-        "-loglevel", "error",
-        "-i", str(source_path),
-        "-vn",                         # no video
-        "-acodec", "pcm_s16le",        # 16-bit PCM
-        "-ar", str(sample_rate),
-        "-ac", str(channels),
+        "-loglevel",
+        "error",
+        "-i",
+        str(source_path),
+        "-vn",  # no video
+        "-acodec",
+        "pcm_s16le",  # 16-bit PCM
+        "-ar",
+        str(sample_rate),
+        "-ac",
+        str(channels),
         str(tmp_path),
     ]
 
@@ -124,8 +152,7 @@ def extract_audio(
         tmp_path.unlink(missing_ok=True)
         stderr = result.stderr.strip()
         raise AudioCaptureError(
-            f"FFmpeg failed (exit {result.returncode}) processing "
-            f"{source_path.name}: {stderr}"
+            f"FFmpeg failed (exit {result.returncode}) processing {source_path.name}: {stderr}"
         )
 
     log.info(

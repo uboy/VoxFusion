@@ -57,7 +57,9 @@ def test_llm_worker_uses_chunked_path_when_context_is_estimated_too_large(monkey
         model="qwen2.5-7b",
         reason="estimated_context",
         transcript_chars=len("Very long transcript"),
-        estimated_input_tokens=worker._estimate_messages_tokens(gui_runtime.build_messages("summarize", "Very long transcript")),
+        estimated_input_tokens=worker._estimate_messages_tokens(
+            gui_runtime.build_messages("summarize", "Very long transcript")
+        ),
         context_tokens=worker._context_limit_tokens(),
         chunk_count=2,
     )
@@ -102,7 +104,6 @@ def test_llm_worker_retries_with_chunking_after_context_error(monkeypatch) -> No
         reason="context_error",
         error="HTTP 400: This model's maximum context length is 2048 tokens. Please reduce the length of the input prompt.",
     )
-
 
 
 def test_llm_worker_prefers_explicit_context_limit() -> None:

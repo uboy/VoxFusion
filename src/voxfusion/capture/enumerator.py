@@ -5,8 +5,6 @@ Loopback detection is platform-dependent and may require additional
 drivers (e.g. WASAPI loopback on Windows, PulseAudio monitor on Linux).
 """
 
-import sys
-
 from voxfusion.logging import get_logger
 from voxfusion.models.audio import AudioDeviceInfo
 
@@ -68,8 +66,7 @@ class SoundDeviceEnumerator:
         return [
             self._to_device_info(i, d)
             for i, d in enumerate(self._query_devices())
-            if d.get("max_output_channels", 0) > 0
-            and d.get("max_input_channels", 0) == 0
+            if d.get("max_output_channels", 0) > 0 and d.get("max_input_channels", 0) == 0
         ]
 
     def get_default_input_device(self) -> AudioDeviceInfo | None:

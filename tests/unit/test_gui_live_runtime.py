@@ -78,28 +78,39 @@ def test_capture_worker_logs_waiting_for_segments(monkeypatch) -> None:
 
     async def _fake_sleep(_delay: float) -> None:
         worker._stop_event.set()
-        return None
 
     monkeypatch.setattr(gui_runtime, "log", fake_log)
+    monkeypatch.setattr(gui_runtime.sys, "platform", "win32")
     monkeypatch.setattr(gui_runtime, "_configure_gui_noise_controls", lambda: None)
-    monkeypatch.setattr(gui_runtime, "load_config", lambda _overrides: SimpleNamespace(
-        asr=SimpleNamespace(model_size="tiny", language="ru", engine="faster-whisper"),
-        diarization=SimpleNamespace(),
-        capture=SimpleNamespace(lossy_mode=True, chunk_duration_ms=5000),
-        translation=SimpleNamespace(target_language="en"),
-    ))
+    monkeypatch.setattr(
+        gui_runtime,
+        "load_config",
+        lambda _overrides: SimpleNamespace(
+            asr=SimpleNamespace(model_size="tiny", language="ru", engine="faster-whisper"),
+            diarization=SimpleNamespace(),
+            capture=SimpleNamespace(lossy_mode=True, chunk_duration_ms=5000),
+            translation=SimpleNamespace(target_language="en"),
+        ),
+    )
     monkeypatch.setattr(gui_runtime, "PreProcessingPipeline", lambda _steps: object())
     monkeypatch.setattr(gui_runtime, "Resampler", lambda _rate: object())
     monkeypatch.setattr(gui_runtime, "Normalizer", lambda: object())
     monkeypatch.setattr(gui_runtime, "ChannelDiarizer", lambda _cfg: object())
     monkeypatch.setattr(gui_runtime, "StreamingPipeline", _FakePipeline)
     monkeypatch.setattr(gui_runtime, "derive_capture_source", lambda _mic, _sys: "microphone")
-    monkeypatch.setattr(gui_runtime, "get_stage_progress", lambda _name, total=None: _FakeProgress())
+    monkeypatch.setattr(
+        gui_runtime, "get_stage_progress", lambda _name, total=None: _FakeProgress()
+    )
     monkeypatch.setattr(gui_runtime, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(gui_runtime.asyncio, "sleep", _fake_sleep)
     monkeypatch.setattr("voxfusion.asr.factory.create_asr_engine", lambda _cfg: (_FakeASR(), "cpu"))
-    monkeypatch.setattr("voxfusion.capture.windows_factory.create_windows_capture_source", lambda *args, **kwargs: _FakeAudioSource())
-    monkeypatch.setattr("voxfusion.capture.vad_chunker.VadChunker", lambda source, max_duration_ms=5000: source)
+    monkeypatch.setattr(
+        "voxfusion.capture.windows_factory.create_windows_capture_source",
+        lambda *args, **kwargs: _FakeAudioSource(),
+    )
+    monkeypatch.setattr(
+        "voxfusion.capture.vad_chunker.VadChunker", lambda source, max_duration_ms=5000: source
+    )
 
     asyncio.run(worker._run_async())
 

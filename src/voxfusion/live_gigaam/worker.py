@@ -9,8 +9,8 @@ import numpy as np
 
 from voxfusion.asr.gigaam_engine import GigaAMCTCEngine
 from voxfusion.config.models import ASRConfig
-from voxfusion.logging import get_logger
 from voxfusion.live_gigaam.types import LiveGigaAMJob, LiveGigaAMResult
+from voxfusion.logging import get_logger
 
 log = get_logger(__name__)
 
@@ -35,7 +35,7 @@ def _configure_worker_threads(thread_limit: int) -> None:
 
 def init_worker(worker_id: int, asr_payload: dict[str, Any], thread_limit: int) -> None:
     """Initializer for one persistent GigaAM worker process."""
-    global _WORKER_ENGINE, _WORKER_ID
+    global _WORKER_ENGINE, _WORKER_ID  # noqa: PLW0603 — required for multiprocessing worker state
     _WORKER_ID = worker_id
     _configure_worker_threads(thread_limit)
     config = ASRConfig(**asr_payload)

@@ -32,23 +32,25 @@ log = get_logger(__name__)
 
 # Map VoxFusion model-size names to HuggingFace repo IDs
 _HF_MODEL_MAP: dict[str, str] = {
-    "tiny":     "openai/whisper-tiny",
-    "base":     "openai/whisper-base",
-    "small":    "openai/whisper-small",
-    "medium":   "openai/whisper-medium",
+    "tiny": "openai/whisper-tiny",
+    "base": "openai/whisper-base",
+    "small": "openai/whisper-small",
+    "medium": "openai/whisper-medium",
     "large-v2": "openai/whisper-large-v2",
     "large-v3": "openai/whisper-large-v3",
 }
 
-_HALLUCINATION_PATTERNS: frozenset[str] = frozenset({
-    "продолжение следует",
-    "субтитр",
-    "thank you for watching",
-    "subscribe",
-    "like and subscribe",
-    "www.",
-    "http",
-})
+_HALLUCINATION_PATTERNS: frozenset[str] = frozenset(
+    {
+        "продолжение следует",
+        "субтитр",
+        "thank you for watching",
+        "subscribe",
+        "like and subscribe",
+        "www.",
+        "http",
+    }
+)
 
 
 def _is_hallucination(text: str) -> bool:
@@ -62,6 +64,7 @@ def is_openvino_available() -> bool:
     """Return True if optimum-intel with OpenVINO backend is importable."""
     try:
         from optimum.intel.openvino import OVModelForSpeechSeq2Seq  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -71,6 +74,7 @@ def _detect_ov_device() -> str:
     """Return 'GPU' if Intel GPU is available for OpenVINO, else 'CPU'."""
     try:
         from openvino import Core
+
         devices = Core().available_devices
         log.info("openvino.available_devices", devices=devices)
         if "GPU" in devices:
@@ -111,8 +115,7 @@ class OpenVINOWhisperEngine:
             from transformers import pipeline as hf_pipeline
         except ImportError as exc:
             raise ModelLoadError(
-                "optimum-intel is not installed. "
-                "Run: pip install optimum-intel[openvino]"
+                "optimum-intel is not installed. Run: pip install optimum-intel[openvino]"
             ) from exc
 
         hf_name = _HF_MODEL_MAP.get(self._config.model_size)
@@ -146,6 +149,7 @@ class OpenVINOWhisperEngine:
                 )
                 # Remove broken cache and retry via export path
                 import shutil
+
                 shutil.rmtree(cache_dir, ignore_errors=True)
                 return self.load_model()
         else:
@@ -279,7 +283,7 @@ class OpenVINOWhisperEngine:
         if samples.size == 0:
             return []
 
-        rms = float(np.sqrt(np.mean(samples ** 2)))
+        rms = float(np.sqrt(np.mean(samples**2)))
         if rms < 1e-5:
             log.debug("openvino.skip_silence", source=audio.source, rms=rms)
             return []

@@ -5,8 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from voxfusion.gui.main import _FileQueueItem
-from voxfusion.gui.main import TranscriptionGUI
+from voxfusion.gui.main import TranscriptionGUI, _FileQueueItem
 
 
 class _FakeVar:
@@ -30,7 +29,9 @@ class _FakeTreeview:
         self._items[iid] = values
         self._order.append(iid)
 
-    def item(self, iid: str, values: tuple[object, ...] | None = None) -> dict[str, tuple[object, ...]]:
+    def item(
+        self, iid: str, values: tuple[object, ...] | None = None
+    ) -> dict[str, tuple[object, ...]]:
         if values is not None:
             self._items[iid] = values
         return {"values": self._items[iid]}

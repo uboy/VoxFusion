@@ -9,7 +9,9 @@ from voxfusion.version import __version__
 
 @click.group()
 @click.version_option(version=__version__, prog_name="voxfusion")
-@click.option("--debug", "--verbose", "-v", "verbose", is_flag=True, help="Enable debug logs from all stages.")
+@click.option(
+    "--debug", "--verbose", "-v", "verbose", is_flag=True, help="Enable debug logs from all stages."
+)
 @click.option("--quiet", "-q", is_flag=True, hidden=True, help="Legacy errors-only mode.")
 @click.option("--config", type=click.Path(exists=True), help="Path to config file.")
 @click.pass_context
@@ -22,13 +24,13 @@ def cli(ctx: click.Context, verbose: bool, quiet: bool, config: str | None) -> N
 
 
 # Register subcommands
-from voxfusion.cli.capture_cmd import capture  # noqa: E402
-from voxfusion.cli.config_cmd import config_group  # noqa: E402
-from voxfusion.cli.devices_cmd import devices  # noqa: E402
-from voxfusion.cli.models_cmd import models_group  # noqa: E402
-from voxfusion.cli.record_cmd import record  # noqa: E402
-from voxfusion.cli.summarize_cmd import summarize  # noqa: E402
-from voxfusion.cli.transcribe_cmd import transcribe  # noqa: E402
+from voxfusion.cli.capture_cmd import capture
+from voxfusion.cli.config_cmd import config_group
+from voxfusion.cli.devices_cmd import devices
+from voxfusion.cli.models_cmd import models_group
+from voxfusion.cli.record_cmd import record
+from voxfusion.cli.summarize_cmd import summarize
+from voxfusion.cli.transcribe_cmd import transcribe
 
 cli.add_command(capture)
 cli.add_command(record)

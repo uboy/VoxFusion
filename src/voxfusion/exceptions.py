@@ -27,7 +27,7 @@ class DeviceDisconnectedError(AudioCaptureError):
     """Audio device was disconnected during capture."""
 
 
-class AudioCaptureTimeout(AudioCaptureError):
+class AudioCaptureTimeout(AudioCaptureError):  # noqa: N818 — Timeout suffix is conventional
     """No audio data received within the timeout period."""
 
 
@@ -68,7 +68,7 @@ class TranslationError(VoxFusionError):
     """Base for translation failures."""
 
 
-class UnsupportedLanguagePair(TranslationError):
+class UnsupportedLanguagePair(TranslationError):  # noqa: N818 — public API name, kept for compatibility
     """The requested language pair is not supported by the backend."""
 
 

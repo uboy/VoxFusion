@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint & type-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install core + dev deps
+        run: |
+          pip install --upgrade pip
+          pip install \
+            faster-whisper ctranslate2 numpy scipy pydantic pydantic-settings \
+            click sounddevice soundfile structlog pyyaml httpx tqdm \
+            typing-extensions "transformers>=4.48,<5.0" torch \
+            ruff mypy \
+            types-PyYAML
+
+      - name: Install package (editable)
+        run: pip install -e .
+
+      - name: Ruff lint
+        run: ruff check src/ tests/
+
+      - name: Ruff format check
+        run: ruff format --check src/ tests/
+
+      - name: Mypy
+        run: mypy src/
+
+  test:
+    name: Unit tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install runtime dependencies
+        run: |
+          pip install --upgrade pip
+          pip install \
+            faster-whisper ctranslate2 numpy scipy pydantic pydantic-settings \
+            click sounddevice soundfile structlog pyyaml httpx tqdm \
+            typing-extensions "transformers>=4.48,<5.0" torch \
+            cryptography
+
+      - name: Install package (editable)
+        run: pip install -e .
+
+      - name: Install test dependencies
+        run: pip install pytest pytest-asyncio pytest-cov
+
+      - name: Run unit tests
+        run: |
+          pytest tests/unit/ \
+            -q --tb=short \
+            --cov=voxfusion --cov-report=term-missing \
+            --cov-fail-under=70

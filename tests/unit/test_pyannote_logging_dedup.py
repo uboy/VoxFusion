@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import voxfusion.diarization.factory as diarization_factory
-from voxfusion.config.models import DiarizationConfig
-from voxfusion.config.models import DiarizationMLConfig
+from voxfusion.config.models import DiarizationConfig, DiarizationMLConfig
 from voxfusion.diarization.chunked import ChunkedDiarizer
 from voxfusion.diarization.factory import create_diarizer
 
@@ -35,7 +34,9 @@ def test_chunked_factory_suppresses_duplicate_pyannote_pipeline_logs(monkeypatch
     assert inner.emit_pipeline_logs is False
 
 
-def test_file_mode_factory_prefers_full_file_pyannote_even_when_chunked_enabled(monkeypatch) -> None:
+def test_file_mode_factory_prefers_full_file_pyannote_even_when_chunked_enabled(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(diarization_factory.importlib.util, "find_spec", lambda _name: object())
     monkeypatch.setattr(diarization_factory, "PyAnnoteDiarizer", _FakePyAnnoteDiarizer)
 

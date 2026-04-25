@@ -19,16 +19,70 @@ log = get_logger(__name__)
 
 # DeepL uses uppercase ISO 639-1 codes, with regional variants
 _DEEPL_SUPPORTED_SOURCES = {
-    "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr",
-    "hu", "id", "it", "ja", "ko", "lt", "lv", "nb", "nl", "pl",
-    "pt", "ro", "ru", "sk", "sl", "sv", "tr", "uk", "zh",
+    "bg",
+    "cs",
+    "da",
+    "de",
+    "el",
+    "en",
+    "es",
+    "et",
+    "fi",
+    "fr",
+    "hu",
+    "id",
+    "it",
+    "ja",
+    "ko",
+    "lt",
+    "lv",
+    "nb",
+    "nl",
+    "pl",
+    "pt",
+    "ro",
+    "ru",
+    "sk",
+    "sl",
+    "sv",
+    "tr",
+    "uk",
+    "zh",
 }
 
 _DEEPL_SUPPORTED_TARGETS = {
-    "bg", "cs", "da", "de", "el", "en-gb", "en-us", "es", "et",
-    "fi", "fr", "hu", "id", "it", "ja", "ko", "lt", "lv", "nb",
-    "nl", "pl", "pt-br", "pt-pt", "ro", "ru", "sk", "sl", "sv",
-    "tr", "uk", "zh-hans", "zh-hant",
+    "bg",
+    "cs",
+    "da",
+    "de",
+    "el",
+    "en-gb",
+    "en-us",
+    "es",
+    "et",
+    "fi",
+    "fr",
+    "hu",
+    "id",
+    "it",
+    "ja",
+    "ko",
+    "lt",
+    "lv",
+    "nb",
+    "nl",
+    "pl",
+    "pt-br",
+    "pt-pt",
+    "ro",
+    "ru",
+    "sk",
+    "sl",
+    "sv",
+    "tr",
+    "uk",
+    "zh-hans",
+    "zh-hant",
 }
 
 
@@ -59,8 +113,7 @@ class DeepLTranslationEngine:
             import deepl
         except ImportError as exc:
             raise TranslationError(
-                "deepl package is not installed. "
-                "Install with: pip install deepl"
+                "deepl package is not installed. Install with: pip install deepl"
             ) from exc
 
         key = self._api_key
@@ -103,9 +156,7 @@ class DeepLTranslationEngine:
             )
             return str(result)
         except deepl.DeepLException as exc:
-            raise TranslationAPIError(
-                f"DeepL API error: {exc}"
-            ) from exc
+            raise TranslationAPIError(f"DeepL API error: {exc}") from exc
 
     async def translate(
         self,
@@ -140,7 +191,4 @@ class DeepLTranslationEngine:
         DeepL supports batch translation natively, but we use
         sequential calls with caching for consistency.
         """
-        return [
-            await self.translate(t, source_language, target_language)
-            for t in texts
-        ]
+        return [await self.translate(t, source_language, target_language) for t in texts]

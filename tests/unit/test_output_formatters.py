@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from voxfusion.models.result import TranscriptionResult
-from voxfusion.output import get_formatter, FORMATTERS
+from voxfusion.output import FORMATTERS, get_formatter
 from voxfusion.output.json_formatter import JSONFormatter
 from voxfusion.output.srt_formatter import SRTFormatter
 from voxfusion.output.txt_formatter import TXTFormatter
@@ -41,18 +41,14 @@ class TestFormatterRegistry:
 
 
 class TestJSONFormatter:
-    def test_format_returns_valid_json(
-        self, transcription_result: TranscriptionResult
-    ) -> None:
+    def test_format_returns_valid_json(self, transcription_result: TranscriptionResult) -> None:
         f = JSONFormatter()
         output = f.format(transcription_result)
         data = json.loads(output)
         assert "segments" in data
         assert "voxfusion_version" in data
 
-    def test_format_segment_count(
-        self, multi_segment_result: TranscriptionResult
-    ) -> None:
+    def test_format_segment_count(self, multi_segment_result: TranscriptionResult) -> None:
         f = JSONFormatter()
         output = f.format(multi_segment_result)
         data = json.loads(output)
@@ -114,16 +110,12 @@ class TestVTTFormatter:
 
 
 class TestTXTFormatter:
-    def test_format_contains_text(
-        self, transcription_result: TranscriptionResult
-    ) -> None:
+    def test_format_contains_text(self, transcription_result: TranscriptionResult) -> None:
         f = TXTFormatter()
         output = f.format(transcription_result)
         assert "Hello world" in output
 
-    def test_format_contains_speaker(
-        self, transcription_result: TranscriptionResult
-    ) -> None:
+    def test_format_contains_speaker(self, transcription_result: TranscriptionResult) -> None:
         f = TXTFormatter()
         output = f.format(transcription_result)
         assert "SPEAKER_00" in output

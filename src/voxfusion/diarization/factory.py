@@ -34,7 +34,10 @@ def _resolve_hf_token(config: DiarizationConfig) -> tuple[str | None, str | None
         return config.ml.hf_auth_token, "config"
 
     env_candidates = (
-        ("VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN", "env:VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN"),
+        (
+            "VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN",
+            "env:VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN",
+        ),
         ("HF_TOKEN", "env:HF_TOKEN"),
         ("HUGGING_FACE_HUB_TOKEN", "env:HUGGING_FACE_HUB_TOKEN"),
     )

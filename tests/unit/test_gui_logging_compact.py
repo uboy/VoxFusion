@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import os
 
-from voxfusion.gui.runtime import TextRedirector
-from voxfusion.gui.runtime import _configure_gui_noise_controls
-from voxfusion.logging import _compact_console_renderer
-from voxfusion.logging import _should_suppress_log_message
+from voxfusion.gui.runtime import TextRedirector, _configure_gui_noise_controls
+from voxfusion.logging import _compact_console_renderer, _should_suppress_log_message
 
 
 def test_compact_console_renderer_uses_short_gui_format() -> None:
@@ -48,10 +46,6 @@ def test_text_redirector_suppresses_font_manager_line() -> None:
 
     redirector = TextRedirector(_FakeWidget())
 
-    clean = redirector._sanitize(  # noqa: SLF001
-        "useful line\n"
-        "generated new fontManager\n"
-        "still useful\n"
-    )
+    clean = redirector._sanitize("useful line\ngenerated new fontManager\nstill useful\n")
 
     assert clean == "useful line\nstill useful\n"

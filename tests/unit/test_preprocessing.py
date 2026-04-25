@@ -1,7 +1,6 @@
 """Unit tests for voxfusion.preprocessing modules."""
 
 import numpy as np
-import pytest
 
 from voxfusion.models.audio import AudioChunk
 from voxfusion.preprocessing.normalize import Normalizer

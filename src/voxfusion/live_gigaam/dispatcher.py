@@ -7,7 +7,6 @@ import multiprocessing
 import os
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
-from functools import partial
 
 from voxfusion.config.models import ASRConfig, LiveGigaAMConfig
 from voxfusion.live_gigaam.types import LiveGigaAMJob, LiveGigaAMResult
@@ -134,7 +133,11 @@ class LiveASRDispatcher:
     def _choose_worker(self) -> _WorkerSlot:
         return min(
             self._workers,
-            key=lambda worker: (worker.in_flight, worker.completed + worker.failed, worker.worker_id),
+            key=lambda worker: (
+                worker.in_flight,
+                worker.completed + worker.failed,
+                worker.worker_id,
+            ),
         )
 
     def _resolve_threads_per_worker(self, worker_count: int) -> int:

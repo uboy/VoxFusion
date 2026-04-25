@@ -40,9 +40,11 @@ def test_detect_speakers_logs_completion(tmp_path: Path, monkeypatch) -> None:
     media_path.write_bytes(b"container")
 
     fake_log = MagicMock()
+
     async def _estimate_speaker_count(_audio, hf_token):
         del hf_token
         return 3
+
     fake_counter_module = SimpleNamespace(
         estimate_speaker_count=_estimate_speaker_count,
     )
@@ -89,9 +91,11 @@ def test_detect_speakers_logs_failure(tmp_path: Path, monkeypatch) -> None:
     media_path.write_bytes(b"broken")
 
     fake_log = MagicMock()
+
     async def _estimate_speaker_count(_audio, hf_token):
         del hf_token
         return 2
+
     fake_counter_module = SimpleNamespace(
         estimate_speaker_count=_estimate_speaker_count,
     )

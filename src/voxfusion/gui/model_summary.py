@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 import tkinter as tk
+from collections.abc import Callable
 from tkinter import ttk
 
 from voxfusion.asr_catalog import ASRModelInfo, get_model_info
@@ -89,7 +89,5 @@ class ModelSummaryCard(ttk.LabelFrame):
             )
         )
         self._speed_label.configure(
-            text=self._translate("model_summary.speed").format(
-                score=int(model.speed_score * 100)
-            )
+            text=self._translate("model_summary.speed").format(score=int(model.speed_score * 100))
         )

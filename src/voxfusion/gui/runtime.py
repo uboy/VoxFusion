@@ -24,8 +24,7 @@ from voxfusion.diarization.channel import ChannelDiarizer
 from voxfusion.gui.progress import close_all_progress, get_stage_progress
 from voxfusion.llm.client import LLMError, complete, stream_completion
 from voxfusion.llm.prompts import build_chunk_messages, build_merge_messages, build_messages
-from voxfusion.logging import _should_suppress_log_message
-from voxfusion.logging import get_logger
+from voxfusion.logging import _should_suppress_log_message, get_logger
 from voxfusion.models.translation import TranslatedSegment
 from voxfusion.pipeline.streaming import StreamingPipeline
 from voxfusion.preprocessing.normalize import Normalizer
@@ -65,6 +64,7 @@ _LLM_CONTEXT_ERROR_MARKERS = (
     "prompt contains at least",
     "context length",
 )
+
 
 def _configure_gui_noise_controls() -> None:
     """Suppress safe third-party noise and set runtime env defaults for the GUI."""
@@ -142,7 +142,8 @@ class TextRedirector:
         text = self._buffer + text
         self._buffer = ""
         kept_lines = [
-            line for line in text.splitlines(keepends=True)
+            line
+            for line in text.splitlines(keepends=True)
             if not _should_suppress_log_message(line)
         ]
         return "".join(kept_lines)
@@ -242,20 +243,21 @@ class FileTranscribeWorker:
             self._on_finished()
 
     async def _run_async(self) -> None:
+        from voxfusion.asr_catalog import get_quality_preset
         from voxfusion.pipeline.events import EventType, PipelineStage
         from voxfusion.pipeline.orchestrator import PipelineOrchestrator
-
-        from voxfusion.asr_catalog import get_quality_preset
 
         _configure_gui_noise_controls()
 
         # Start with quality preset (compute_type, beam_size, best_of, vad_*),
         # then override model-level settings that always take priority.
         asr_overrides: dict[str, Any] = get_quality_preset(self._quality)
-        asr_overrides.update({
-            "model_size": self._model,
-            "cpu_threads": os.cpu_count() or 4,
-        })
+        asr_overrides.update(
+            {
+                "model_size": self._model,
+                "cpu_threads": os.cpu_count() or 4,
+            }
+        )
         if self._language:
             asr_overrides["language"] = self._language
         overrides: dict[str, Any] = {
@@ -401,7 +403,9 @@ class LLMWorker:
         clean = str(text or "")
         if not clean:
             return 0
-        return max(1, (len(clean) + _LLM_ESTIMATED_CHARS_PER_TOKEN - 1) // _LLM_ESTIMATED_CHARS_PER_TOKEN)
+        return max(
+            1, (len(clean) + _LLM_ESTIMATED_CHARS_PER_TOKEN - 1) // _LLM_ESTIMATED_CHARS_PER_TOKEN
+        )
 
     @classmethod
     def _estimate_messages_tokens(cls, messages: list[dict[str, str]]) -> int:
@@ -449,7 +453,7 @@ class LLMWorker:
                     pieces.append(current)
                     current = ""
                 for start in range(0, len(word), max_chars):
-                    pieces.append(word[start:start + max_chars])
+                    pieces.append(word[start : start + max_chars])
                 continue
             candidate = f"{current} {word}".strip()
             if current and len(candidate) > max_chars:
@@ -472,7 +476,9 @@ class LLMWorker:
         separator_tokens = self._estimate_text_tokens(separator)
         for block in expanded:
             block_tokens = self._estimate_text_tokens(block)
-            projected = block_tokens if not current else current_tokens + separator_tokens + block_tokens
+            projected = (
+                block_tokens if not current else current_tokens + separator_tokens + block_tokens
+            )
             if current and projected > max_tokens:
                 packed.append(separator.join(current))
                 current = [block]
@@ -553,12 +559,14 @@ class LLMWorker:
                 chunk_count=len(chunks),
                 custom_user=self._custom_user_prompt,
             )
-            chunk_output = (await complete(
-                chunk_messages,
-                base_url=self._base_url,
-                model=self._model,
-                api_key=self._api_key,
-            )).strip()
+            chunk_output = (
+                await complete(
+                    chunk_messages,
+                    base_url=self._base_url,
+                    model=self._model,
+                    api_key=self._api_key,
+                )
+            ).strip()
             log.info(
                 "llm.chunking.chunk_done",
                 model=self._model,
@@ -593,12 +601,14 @@ class LLMWorker:
                     batch_text,
                     custom_user=self._custom_user_prompt,
                 )
-                merged_output = (await complete(
-                    merge_messages,
-                    base_url=self._base_url,
-                    model=self._model,
-                    api_key=self._api_key,
-                )).strip()
+                merged_output = (
+                    await complete(
+                        merge_messages,
+                        base_url=self._base_url,
+                        model=self._model,
+                        api_key=self._api_key,
+                    )
+                ).strip()
                 log.info(
                     "llm.chunking.merge_batch_done",
                     model=self._model,
@@ -715,7 +725,9 @@ class RecordingWorker:
                 "sources": (
                     ["microphone", "system"]
                     if self._options.microphone_device_id and self._options.system_device_id
-                    else ["system"] if self._options.system_device_id else ["microphone"]
+                    else ["system"]
+                    if self._options.system_device_id
+                    else ["microphone"]
                 ),
             }
         }
@@ -862,13 +874,11 @@ class CaptureWorker:
             )
         elif asr_backend == "cpu" and model_label == "medium":
             self._on_status(
-                f"Loading: {model_label}  [{backend_info}]  "
-                "Delays possible — 'small' is faster"
+                f"Loading: {model_label}  [{backend_info}]  Delays possible — 'small' is faster"
             )
         elif asr_backend == "openvino":
             self._on_status(
-                f"Loading: {model_label}  [{backend_info}]  "
-                "(first run: model conversion ~5 min)"
+                f"Loading: {model_label}  [{backend_info}]  (first run: model conversion ~5 min)"
             )
         else:
             self._on_status(f"Loading: {model_label}  [{backend_info}]")
@@ -951,7 +961,9 @@ class CaptureWorker:
         await audio_source.start()
         capture_start_time = datetime.now()
 
-        active_source_count, active_sources, surviving_mode = _describe_active_live_sources(audio_source)
+        active_source_count, active_sources, surviving_mode = _describe_active_live_sources(
+            audio_source
+        )
         log.info(
             "gui.live_capture_started",
             requested_source=source,
@@ -1001,10 +1013,13 @@ class CaptureWorker:
 
     async def _run_live_gigaam_async(self, config: PipelineConfig) -> None:
         from voxfusion.live_gigaam.session import LiveGigaAMSessionController
+
         segment_progress = get_stage_progress("segments")
         capture_start_time: datetime | None = None
 
-        def _rows_for_segments(segments: list[TranslatedSegment]) -> list[tuple[str, str, str, str | None]]:
+        def _rows_for_segments(
+            segments: list[TranslatedSegment],
+        ) -> list[tuple[str, str, str, str | None]]:
             rows: list[tuple[str, str, str, str | None]] = []
             anchor = capture_start_time or datetime.now()
             for segment in segments:

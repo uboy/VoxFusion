@@ -54,17 +54,13 @@ class JSONFormatter:
             "created_at": result.created_at,
             "source": result.source_info,
             "processing": result.processing_info,
-            "segments": [
-                _segment_to_dict(seg, i) for i, seg in enumerate(result.segments)
-            ],
+            "segments": [_segment_to_dict(seg, i) for i, seg in enumerate(result.segments)],
         }
         return json.dumps(doc, indent=2, ensure_ascii=False, default=str)
 
     def format_segment(self, segment: TranslatedSegment, index: int) -> str:
         """Serialize a single segment to a JSON string."""
-        return json.dumps(
-            _segment_to_dict(segment, index), ensure_ascii=False, default=str
-        )
+        return json.dumps(_segment_to_dict(segment, index), ensure_ascii=False, default=str)
 
     def write(self, result: TranscriptionResult, path: Path) -> None:
         """Write formatted JSON to *path*."""

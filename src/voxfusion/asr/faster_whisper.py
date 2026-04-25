@@ -22,19 +22,21 @@ from voxfusion.models.transcription import TranscriptionSegment, WordTiming
 
 log = get_logger(__name__)
 
-_HALLUCINATION_PATTERNS: frozenset[str] = frozenset({
-    "продолжение следует",
-    "субтитр",
-    "редактор субтитров",
-    "переведено",
-    "над субтитрами работал",
-    "перевод субтитров",
-    "thank you for watching",
-    "subscribe",
-    "like and subscribe",
-    "www.",
-    "http",
-})
+_HALLUCINATION_PATTERNS: frozenset[str] = frozenset(
+    {
+        "продолжение следует",
+        "субтитр",
+        "редактор субтитров",
+        "переведено",
+        "над субтитрами работал",
+        "перевод субтитров",
+        "thank you for watching",
+        "subscribe",
+        "like and subscribe",
+        "www.",
+        "http",
+    }
+)
 
 
 def _is_hallucination(text: str) -> bool:
@@ -83,16 +85,105 @@ class FasterWhisperEngine:
     @property
     def supported_languages(self) -> list[str]:
         return [
-            "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo",
-            "br", "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es",
-            "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "ha", "haw",
-            "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja",
-            "jw", "ka", "kk", "km", "kn", "ko", "la", "lb", "ln", "lo",
-            "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt",
-            "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt",
-            "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn", "so", "sq",
-            "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl",
-            "tr", "tt", "uk", "ur", "uz", "vi", "yi", "yo", "zh",
+            "af",
+            "am",
+            "ar",
+            "as",
+            "az",
+            "ba",
+            "be",
+            "bg",
+            "bn",
+            "bo",
+            "br",
+            "bs",
+            "ca",
+            "cs",
+            "cy",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "et",
+            "eu",
+            "fa",
+            "fi",
+            "fo",
+            "fr",
+            "gl",
+            "gu",
+            "ha",
+            "haw",
+            "he",
+            "hi",
+            "hr",
+            "ht",
+            "hu",
+            "hy",
+            "id",
+            "is",
+            "it",
+            "ja",
+            "jw",
+            "ka",
+            "kk",
+            "km",
+            "kn",
+            "ko",
+            "la",
+            "lb",
+            "ln",
+            "lo",
+            "lt",
+            "lv",
+            "mg",
+            "mi",
+            "mk",
+            "ml",
+            "mn",
+            "mr",
+            "ms",
+            "mt",
+            "my",
+            "ne",
+            "nl",
+            "nn",
+            "no",
+            "oc",
+            "pa",
+            "pl",
+            "ps",
+            "pt",
+            "ro",
+            "ru",
+            "sa",
+            "sd",
+            "si",
+            "sk",
+            "sl",
+            "sn",
+            "so",
+            "sq",
+            "sr",
+            "su",
+            "sv",
+            "sw",
+            "ta",
+            "te",
+            "tg",
+            "th",
+            "tk",
+            "tl",
+            "tr",
+            "tt",
+            "uk",
+            "ur",
+            "uz",
+            "vi",
+            "yi",
+            "yo",
+            "zh",
         ]
 
     def load_model(self) -> None:
@@ -104,8 +195,7 @@ class FasterWhisperEngine:
             from faster_whisper import WhisperModel
         except ImportError as exc:
             raise ModelLoadError(
-                "faster-whisper is not installed. "
-                "Install with: pip install faster-whisper"
+                "faster-whisper is not installed. Install with: pip install faster-whisper"
             ) from exc
 
         device, compute_type = _resolve_device(self._config.device)
@@ -228,10 +318,7 @@ class FasterWhisperEngine:
                 )
             )
 
-        results = [
-            seg for seg in results
-            if seg.no_speech_prob < self._config.no_speech_threshold
-        ]
+        results = [seg for seg in results if seg.no_speech_prob < self._config.no_speech_threshold]
         results = [seg for seg in results if not _is_hallucination(seg.text)]
 
         if results:
@@ -284,7 +371,7 @@ class FasterWhisperEngine:
         if samples.size == 0:
             return []
 
-        rms = float(np.sqrt(np.mean(samples ** 2)))
+        rms = float(np.sqrt(np.mean(samples**2)))
         peak = float(np.max(np.abs(samples)))
         log.debug(
             "asr.audio_level",

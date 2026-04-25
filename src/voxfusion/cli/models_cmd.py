@@ -30,12 +30,21 @@ def models_list() -> None:
 
 
 @models_group.command("download")
-@click.option("--asr", "asr_model", default=None,
-              help="ASR model size to download (e.g. small, medium, large-v3).")
-@click.option("--diarization", "diar_model", default=None,
-              help="Diarization model to download (e.g. pyannote).")
-@click.option("--translation", "trans_model", default=None,
-              help="Translation model (e.g. 'argos fr-en').")
+@click.option(
+    "--asr",
+    "asr_model",
+    default=None,
+    help="ASR model size to download (e.g. small, medium, large-v3).",
+)
+@click.option(
+    "--diarization",
+    "diar_model",
+    default=None,
+    help="Diarization model to download (e.g. pyannote).",
+)
+@click.option(
+    "--translation", "trans_model", default=None, help="Translation model (e.g. 'argos fr-en')."
+)
 def models_download(
     asr_model: str | None,
     diar_model: str | None,
@@ -49,26 +58,29 @@ def models_download(
 
     if asr_model:
         click.echo(f"Downloading ASR model: {asr_model}")
-        _GIGAAM_IDS = {
+        gigaam_ids = {
             "gigaam": "e2e_rnnt",  # shorthand → best variant
             "gigaam-v3-ctc": "ctc",
             "gigaam-v3-rnnt": "rnnt",
             "gigaam-v3-e2e-ctc": "e2e_ctc",
             "gigaam-v3-e2e-rnnt": "e2e_rnnt",
         }
-        if asr_model in _GIGAAM_IDS:
-            revision = _GIGAAM_IDS[asr_model]
+        if asr_model in gigaam_ids:
+            revision = gigaam_ids[asr_model]
             try:
                 from transformers import AutoModel
-            except ImportError:
+            except ImportError as exc:
                 raise click.ClickException(
                     "GigaAM requires the 'transformers' and 'torch' packages.\n"
                     "Install with: pip install 'transformers>=4.48,<5.0' torch"
-                )
+                ) from exc
             try:
                 import os
+
                 token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
-                click.echo(f"  Downloading ai-sage/GigaAM-v3 (revision={revision}) from HuggingFace...")
+                click.echo(
+                    f"  Downloading ai-sage/GigaAM-v3 (revision={revision}) from HuggingFace..."
+                )
                 click.echo("  This may take several minutes (~1.5 GB)...")
                 AutoModel.from_pretrained(
                     "ai-sage/GigaAM-v3",
@@ -82,10 +94,10 @@ def models_download(
         elif asr_model == "breeze-asr":
             try:
                 from huggingface_hub import snapshot_download
-            except ImportError:
+            except ImportError as exc:
                 raise click.ClickException(
                     "huggingface_hub is required. Install with: pip install huggingface_hub"
-                )
+                ) from exc
             try:
                 ref = "MediaTek-Research/Breeze-ASR-25"
                 click.echo(f"  Downloading {ref} from HuggingFace...")
@@ -106,11 +118,11 @@ def models_download(
         elif asr_model == "parakeet-tdt-0.6b-v3":
             try:
                 from nemo.collections.asr.models import ASRModel
-            except ImportError:
+            except ImportError as exc:
                 raise click.ClickException(
                     "Parakeet requires the NeMo ASR toolkit.\n"
                     'Install with: pip install "nemo_toolkit[asr]" torchaudio'
-                )
+                ) from exc
             try:
                 click.echo("  Downloading nvidia/parakeet-tdt-0.6b-v3 via NeMo...")
                 ASRModel.from_pretrained(model_name="nvidia/parakeet-tdt-0.6b-v3")
@@ -121,11 +133,11 @@ def models_download(
             try:
                 from faster_whisper import WhisperModel
 
-                click.echo(f"  Loading model (this may download it)...")
+                click.echo("  Loading model (this may download it)...")
                 WhisperModel(asr_model, device="cpu", compute_type="int8")
                 echo_success(f"  ASR model '{asr_model}' ready.")
-            except ImportError:
-                raise click.ClickException("faster-whisper is not installed.")
+            except ImportError as exc:
+                raise click.ClickException("faster-whisper is not installed.") from exc
             except Exception as exc:
                 raise click.ClickException(f"Failed to download ASR model: {exc}") from exc
 

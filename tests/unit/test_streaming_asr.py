@@ -1,8 +1,5 @@
 """Tests for streaming ASR wrapper and overlap deduplication."""
 
-import numpy as np
-import pytest
-
 from voxfusion.asr.dedup import OverlapDeduplicator
 from voxfusion.models.transcription import TranscriptionSegment
 

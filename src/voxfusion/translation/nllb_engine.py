@@ -59,8 +59,7 @@ def _to_nllb_code(lang: str) -> str:
         if "_" in lang and len(lang) == 8:
             return lang
         raise UnsupportedLanguagePair(
-            f"Language {lang!r} not in NLLB language map. "
-            f"Available: {sorted(_NLLB_LANG_MAP)}"
+            f"Language {lang!r} not in NLLB language map. Available: {sorted(_NLLB_LANG_MAP)}"
         )
     return code
 
@@ -107,9 +106,7 @@ class NLLBTranslationEngine:
                 device="auto",
             )
         except Exception as exc:
-            raise TranslationError(
-                f"Failed to load NLLB model: {exc}"
-            ) from exc
+            raise TranslationError(f"Failed to load NLLB model: {exc}") from exc
 
         log.info("nllb.model_loaded")
 
@@ -175,7 +172,4 @@ class NLLBTranslationEngine:
         target_language: str,
     ) -> list[str]:
         """Translate multiple texts."""
-        return [
-            await self.translate(t, source_language, target_language)
-            for t in texts
-        ]
+        return [await self.translate(t, source_language, target_language) for t in texts]

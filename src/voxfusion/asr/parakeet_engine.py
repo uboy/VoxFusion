@@ -39,7 +39,33 @@ class ParakeetASREngine:
 
     @property
     def supported_languages(self) -> list[str]:
-        return ["en", "bg", "hr", "cs", "da", "nl", "et", "fi", "fr", "de", "el", "hu", "it", "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "es", "sv", "ru", "uk"]
+        return [
+            "en",
+            "bg",
+            "hr",
+            "cs",
+            "da",
+            "nl",
+            "et",
+            "fi",
+            "fr",
+            "de",
+            "el",
+            "hu",
+            "it",
+            "lv",
+            "lt",
+            "mt",
+            "pl",
+            "pt",
+            "ro",
+            "sk",
+            "sl",
+            "es",
+            "sv",
+            "ru",
+            "uk",
+        ]
 
     def _model_ref(self) -> str:
         if self._config.model_path:
@@ -52,7 +78,9 @@ class ParakeetASREngine:
 
         model_ref = self._model_ref()
         local_path = Path(model_ref)
-        log.info("asr.loading_model", model=model_ref, engine="parakeet", local_only=local_path.exists())
+        log.info(
+            "asr.loading_model", model=model_ref, engine="parakeet", local_only=local_path.exists()
+        )
         try:
             from voxfusion.asr.gigaam_engine import _suppress_subprocess_windows
 
@@ -67,7 +95,7 @@ class ParakeetASREngine:
             raise ModelLoadError(
                 "Parakeet requires the NeMo ASR toolkit, which is not installed.\n"
                 "Install it with:\n"
-                "  pip install \"nemo_toolkit[asr]\" torchaudio\n"
+                '  pip install "nemo_toolkit[asr]" torchaudio\n'
                 "Note: this is a large download (~2 GB). "
                 "After installing, restart VoxFusion and retry."
             ) from exc
@@ -117,7 +145,7 @@ class ParakeetASREngine:
         if hasattr(result, "text"):
             return str(result.text).strip()
         if hasattr(result, "hypotheses"):
-            hypotheses = getattr(result, "hypotheses")
+            hypotheses = result.hypotheses
             if hypotheses:
                 return ParakeetASREngine._extract_text(hypotheses[0])
         return str(result).strip()
@@ -132,7 +160,9 @@ class ParakeetASREngine:
                 return val.strip().lower() or None
         return None
 
-    def _transcribe_sync(self, audio: np.ndarray, *, language: str | None = None) -> list[TranscriptionSegment]:
+    def _transcribe_sync(
+        self, audio: np.ndarray, *, language: str | None = None
+    ) -> list[TranscriptionSegment]:
         del language  # Parakeet auto-detects language; explicit selection is not supported
         model = self._ensure_model()
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:

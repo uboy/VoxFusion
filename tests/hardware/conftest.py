@@ -63,7 +63,9 @@ def hardware_speech_wav(
     del windows_hardware_only
     path = hardware_audio_config.speech_wav
     if path is None:
-        pytest.skip("Set VOXFUSION_HW_SPEECH_WAV to a local speech WAV for hardware playback tests.")
+        pytest.skip(
+            "Set VOXFUSION_HW_SPEECH_WAV to a local speech WAV for hardware playback tests."
+        )
     if not path.exists():
         pytest.skip(f"Configured VOXFUSION_HW_SPEECH_WAV does not exist: {path}")
     return path
@@ -108,7 +110,12 @@ def play_wav_blocking(
     samples, sample_rate = sf.read(str(wav_path), dtype="float32", always_2d=False)
     if start_delay_s > 0:
         time.sleep(start_delay_s)
-    sd.play(samples, samplerate=sample_rate, device=_playback_output_device_index(device_id), blocking=True)
+    sd.play(
+        samples,
+        samplerate=sample_rate,
+        device=_playback_output_device_index(device_id),
+        blocking=True,
+    )
     sd.stop()
 
 
@@ -134,7 +141,9 @@ async def wait_for_non_silent_chunk(
                     await asyncio.sleep(0.1)
                     continue
             else:  # pragma: no cover - defensive harness guard
-                raise TypeError(f"Unsupported capture source {type(source)!r}: missing read_chunk/stream")
+                raise TypeError(
+                    f"Unsupported capture source {type(source)!r}: missing read_chunk/stream"
+                )
         except Exception as exc:  # pragma: no cover - hardware-specific timing
             last_error = exc
             await asyncio.sleep(0.1)
@@ -143,11 +152,13 @@ async def wait_for_non_silent_chunk(
         if samples.size == 0:
             await asyncio.sleep(0.1)
             continue
-        last_rms = float(np.sqrt(np.mean(samples ** 2)))
+        last_rms = float(np.sqrt(np.mean(samples**2)))
         if last_rms >= rms_threshold:
             return chunk
     if last_error is not None:
-        raise AssertionError(f"Did not capture a non-silent audio chunk: {last_error}") from last_error
+        raise AssertionError(
+            f"Did not capture a non-silent audio chunk: {last_error}"
+        ) from last_error
     raise AssertionError(
         f"Did not capture a non-silent audio chunk after {attempts} attempts; last rms={last_rms:.6f}"
     )

@@ -6,10 +6,10 @@ from dataclasses import dataclass
 
 from click.testing import CliRunner
 
+from voxfusion.cli.capture_cmd import capture
 from voxfusion.models.diarization import DiarizedSegment
 from voxfusion.models.transcription import TranscriptionSegment
 from voxfusion.models.translation import TranslatedSegment
-from voxfusion.cli.capture_cmd import capture
 
 
 def _segment(text: str, *, speaker: str = "SPEAKER_LOCAL") -> TranslatedSegment:
@@ -57,9 +57,13 @@ def test_capture_routes_live_gigaam_to_session_controller(monkeypatch) -> None:
                 self.on_finalized_segments(finalized)
             return finalized
 
-    monkeypatch.setattr("voxfusion.cli.capture_cmd.detect_platform", lambda: "wasapi", raising=False)
+    monkeypatch.setattr(
+        "voxfusion.cli.capture_cmd.detect_platform", lambda: "wasapi", raising=False
+    )
     monkeypatch.setattr("voxfusion.capture.factory.detect_platform", lambda: "wasapi")
-    monkeypatch.setattr("voxfusion.live_gigaam.session.LiveGigaAMSessionController", _FakeController)
+    monkeypatch.setattr(
+        "voxfusion.live_gigaam.session.LiveGigaAMSessionController", _FakeController
+    )
 
     runner = CliRunner()
     result = runner.invoke(

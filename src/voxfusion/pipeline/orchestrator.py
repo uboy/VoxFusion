@@ -14,7 +14,6 @@ from voxfusion.logging import get_logger
 from voxfusion.models.result import TranscriptionResult
 from voxfusion.output import get_formatter
 from voxfusion.pipeline.batch import BatchPipeline, EventCallback
-from voxfusion.pipeline.events import PipelineEvent
 from voxfusion.preprocessing.normalize import Normalizer
 from voxfusion.preprocessing.pipeline import PreProcessingPipeline
 from voxfusion.preprocessing.resample import Resampler

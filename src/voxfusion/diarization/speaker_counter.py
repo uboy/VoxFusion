@@ -16,8 +16,10 @@ import numpy as np
 from voxfusion.diarization.pyannote_engine import _pipeline_auth_kwargs
 from voxfusion.logging import get_logger
 from voxfusion.models.audio import AudioChunk
-from voxfusion.runtime_torchscript import should_use_torchscript_source_fallback
-from voxfusion.runtime_torchscript import temporary_torchscript_source_fallback
+from voxfusion.runtime_torchscript import (
+    should_use_torchscript_source_fallback,
+    temporary_torchscript_source_fallback,
+)
 
 log = get_logger(__name__)
 

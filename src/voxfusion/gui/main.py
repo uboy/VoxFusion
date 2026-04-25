@@ -32,6 +32,9 @@ from voxfusion.asr_catalog import (
     list_languages_for_model,
     normalize_language_for_model,
 )
+from voxfusion.capture.windows_audio import (
+    list_windows_capture_devices,
+)
 from voxfusion.gui.helpers import (
     apply_proxy_settings,
     build_file_workflow_status,
@@ -56,7 +59,6 @@ from voxfusion.gui.i18n import (
     resolve_initial_gui_language,
 )
 from voxfusion.gui.model_summary import ModelSummaryCard
-from voxfusion.gui.tooltip import ToolTip, create_help_icon
 from voxfusion.gui.runtime import (
     CaptureOptions,
     CaptureWorker,
@@ -68,10 +70,8 @@ from voxfusion.gui.runtime import (
     TextRedirector,
     derive_capture_source,
 )
-from voxfusion.capture.windows_audio import (
-    list_windows_capture_devices,
-)
 from voxfusion.gui.theme import configure_gui_theme
+from voxfusion.gui.tooltip import ToolTip, create_help_icon
 from voxfusion.llm.client import (
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
@@ -99,7 +99,9 @@ _LLM_MODEL_CONTEXT_CACHE_KEY = "llm_model_context_cache_json"
 _LLM_CONTEXT_TOKEN_ENV = "VOXFUSION_LLM_CONTEXT_TOKENS"
 _LLM_DEFAULT_CONTEXT_TOKENS = 2048
 _LLM_MIN_CONTEXT_TOKENS = 512
-_IMPORTED_TRANSCRIPT_LINE_RE = re.compile(r"^\[(?P<time>\d{2}:\d{2}:\d{2})\]\s+\[(?P<speaker>[^\]]+)\]\s*(?P<text>.+?)\s*$")
+_IMPORTED_TRANSCRIPT_LINE_RE = re.compile(
+    r"^\[(?P<time>\d{2}:\d{2}:\d{2})\]\s+\[(?P<speaker>[^\]]+)\]\s*(?P<text>.+?)\s*$"
+)
 _IMPORTED_SRT_TIME_RANGE_RE = re.compile(
     r"^(?P<start>\d{2}:\d{2}:\d{2})(?:[,.]\d{3})?\s+-->\s+(?P<end>\d{2}:\d{2}:\d{2})(?:[,.]\d{3})?$"
 )
@@ -108,7 +110,8 @@ log = get_logger(__name__)
 
 # File dialog filter for supported media files
 _AUDIO_EXTENSIONS = " ".join(
-    f"*{ext}" for ext in sorted(
+    f"*{ext}"
+    for ext in sorted(
         {".wav", ".flac", ".ogg", ".aiff", ".au", ".w64"} | NEEDS_EXTRACTION_EXTENSIONS
     )
 )
@@ -134,6 +137,7 @@ class _FileQueueItem:
 # ---------------------------------------------------------------------------
 # Main GUI application
 # ---------------------------------------------------------------------------
+
 
 class TranscriptionGUI:
     """Main GUI application with two tabs: Live Capture and File Transcription."""
@@ -204,7 +208,7 @@ class TranscriptionGUI:
         self._file_active_queue_id: str | None = None
         self._file_batch_cancel_requested = False
         self._file_active_error_message: str | None = None
-        self._file_detect_worker_thread: "threading.Thread | None" = None
+        self._file_detect_worker_thread: threading.Thread | None = None
         self._file_seg_count = 0
         self._file_segments: list[TranslatedSegment] = []
         self._last_transcript_path: Path | None = None
@@ -298,9 +302,7 @@ class TranscriptionGUI:
         key: str,
         **kwargs: object,
     ) -> None:
-        self._register_ui_refresher(
-            lambda: tree.heading(column, text=self._tr(key, **kwargs))
-        )
+        self._register_ui_refresher(lambda: tree.heading(column, text=self._tr(key, **kwargs)))
 
     def _bind_notebook_tab(self, tab_index: int, key: str, **kwargs: object) -> None:
         self._register_ui_refresher(
@@ -421,7 +423,9 @@ class TranscriptionGUI:
                 self._tr("dialog.filetype.video_files"),
                 " ".join(
                     f"*{ext}"
-                    for ext in sorted({".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".ts"})
+                    for ext in sorted(
+                        {".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".ts"}
+                    )
                 ),
             ),
             (
@@ -654,9 +658,7 @@ class TranscriptionGUI:
         self.stop_button.pack(side=tk.LEFT, padx=(0, 4))
         self._bind_text(self.stop_button, "live.button.stop")
         self._bind_tooltip(self.stop_button, "tooltip.live.stop")
-        self.pause_button = ttk.Button(
-            btn_row, text="", command=self._toggle_recording_pause
-        )
+        self.pause_button = ttk.Button(btn_row, text="", command=self._toggle_recording_pause)
         self.pause_button.configure(state=tk.DISABLED)
         self.pause_button.pack(side=tk.LEFT, padx=(0, 4))
         self._bind_text(self.pause_button, "live.button.pause")
@@ -736,19 +738,13 @@ class TranscriptionGUI:
         self._context_menu.add_separator()
         self._context_menu.add_command(label="", command=self._select_all_rows)
         self._register_ui_refresher(
-            lambda: self._context_menu.entryconfigure(
-                0, label=self._tr("live.menu.copy_selected")
-            )
+            lambda: self._context_menu.entryconfigure(0, label=self._tr("live.menu.copy_selected"))
         )
         self._register_ui_refresher(
-            lambda: self._context_menu.entryconfigure(
-                1, label=self._tr("live.menu.copy_text_only")
-            )
+            lambda: self._context_menu.entryconfigure(1, label=self._tr("live.menu.copy_text_only"))
         )
         self._register_ui_refresher(
-            lambda: self._context_menu.entryconfigure(
-                3, label=self._tr("live.menu.select_all")
-            )
+            lambda: self._context_menu.entryconfigure(3, label=self._tr("live.menu.select_all"))
         )
 
         scroll = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.table.yview)
@@ -966,9 +962,7 @@ class TranscriptionGUI:
         self._file_diarization_help = create_help_icon(diar_opts, "")
         self._bind_tooltip(self._file_diarization_help, "tooltip.file.diarization_help")
 
-        ttk.Separator(diar_opts, orient="vertical").pack(
-            side=tk.LEFT, fill=tk.Y, padx=(8, 8)
-        )
+        ttk.Separator(diar_opts, orient="vertical").pack(side=tk.LEFT, fill=tk.Y, padx=(8, 8))
 
         self._file_speakers_label = ttk.Label(diar_opts, text="")
         self._file_speakers_label.pack(side=tk.LEFT, padx=(0, 4))
@@ -989,9 +983,7 @@ class TranscriptionGUI:
         self._file_speaker_help = create_help_icon(diar_opts, "")
         self._bind_tooltip(self._file_speaker_help, "tooltip.file.speaker_help")
 
-        ttk.Separator(diar_opts, orient="vertical").pack(
-            side=tk.LEFT, fill=tk.Y, padx=(8, 8)
-        )
+        ttk.Separator(diar_opts, orient="vertical").pack(side=tk.LEFT, fill=tk.Y, padx=(8, 8))
 
         self._file_min_lbl = ttk.Label(diar_opts, text="")
         self._file_min_lbl.pack(side=tk.LEFT, padx=(0, 4))
@@ -1025,9 +1017,7 @@ class TranscriptionGUI:
         self._bind_text(self._file_detect_btn, "file.button.detect")
         self._bind_tooltip(self._file_detect_btn, "tooltip.file.detect")
 
-        self._file_download_btn = ttk.Button(
-            opts, text="", command=self._download_file_model
-        )
+        self._file_download_btn = ttk.Button(opts, text="", command=self._download_file_model)
         self._file_download_btn.pack(side=tk.LEFT, padx=(0, 12))
         self._bind_text(self._file_download_btn, "file.button.download_model")
         self._bind_tooltip(self._file_download_btn, "tooltip.file.download_model")
@@ -1062,9 +1052,7 @@ class TranscriptionGUI:
         self._file_time_label = ttk.Label(prog_row, text="", anchor="e", width=18)
         self._file_time_label.pack(side=tk.RIGHT, padx=(0, 6))
 
-        self._file_status_label = ttk.Label(
-            prog_row, text="", anchor="w"
-        )
+        self._file_status_label = ttk.Label(prog_row, text="", anchor="w")
         self._file_status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self._bind_tooltip(self._file_status_label, "tooltip.file.status")
 
@@ -1092,9 +1080,7 @@ class TranscriptionGUI:
         file_table_frame.pack(fill=tk.BOTH, expand=True, padx=0, pady=(0, 4))
 
         file_cols = ("time", "speaker", "text")
-        self._file_table = ttk.Treeview(
-            file_table_frame, columns=file_cols, show="headings"
-        )
+        self._file_table = ttk.Treeview(file_table_frame, columns=file_cols, show="headings")
         self._bind_tree_heading(self._file_table, "time", "file.table.timestamp")
         self._bind_tree_heading(self._file_table, "speaker", "file.table.speaker")
         self._bind_tree_heading(self._file_table, "text", "file.table.text")
@@ -1104,9 +1090,10 @@ class TranscriptionGUI:
         self._file_table.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
         self._bind_tooltip(self._file_table, "tooltip.file.results_table")
         self._file_table.bind("<Control-c>", self._file_copy_selected)
-        self._file_table.bind("<Control-a>", lambda _e: self._file_table.selection_set(
-            self._file_table.get_children()
-        ))
+        self._file_table.bind(
+            "<Control-a>",
+            lambda _e: self._file_table.selection_set(self._file_table.get_children()),
+        )
 
         file_scroll = ttk.Scrollbar(
             file_table_frame, orient=tk.VERTICAL, command=self._file_table.yview
@@ -1118,7 +1105,9 @@ class TranscriptionGUI:
         file_ctrl = ttk.Frame(results_frame)
         file_ctrl.pack(fill=tk.X, padx=0, pady=(0, 4))
 
-        self._file_load_transcript_btn = ttk.Button(file_ctrl, text="", command=self._load_transcript_file)
+        self._file_load_transcript_btn = ttk.Button(
+            file_ctrl, text="", command=self._load_transcript_file
+        )
         self._file_load_transcript_btn.pack(side=tk.LEFT, padx=(0, 4))
         self._bind_text(self._file_load_transcript_btn, "file.button.load_transcript")
         self._bind_tooltip(self._file_load_transcript_btn, "tooltip.file.load_transcript")
@@ -1184,9 +1173,7 @@ class TranscriptionGUI:
             textvariable=self._llm_model_var,
             width=24,
         )
-        self._llm_model_combo.pack(
-            side=tk.LEFT, padx=(0, 10)
-        )
+        self._llm_model_combo.pack(side=tk.LEFT, padx=(0, 10))
         self._bind_tooltip(self._llm_model_combo, "tooltip.llm.model")
         self._llm_api_key_label = ttk.Label(llm_cfg, text="")
         self._llm_api_key_label.pack(side=tk.LEFT, padx=(0, 4))
@@ -1234,10 +1221,14 @@ class TranscriptionGUI:
         self._llm_context_label = ttk.Label(llm_ctx_cfg, text="")
         self._llm_context_label.pack(side=tk.LEFT, padx=(0, 4))
         self._bind_text(self._llm_context_label, "llm.label.context")
-        self._llm_context_entry = ttk.Entry(llm_ctx_cfg, textvariable=self._llm_context_var, width=8)
+        self._llm_context_entry = ttk.Entry(
+            llm_ctx_cfg, textvariable=self._llm_context_var, width=8
+        )
         self._llm_context_entry.pack(side=tk.LEFT, padx=(0, 8))
         self._bind_tooltip(self._llm_context_entry, "tooltip.llm.context")
-        self._llm_context_hint_label = ttk.Label(llm_ctx_cfg, text="", anchor="w", foreground="#666666")
+        self._llm_context_hint_label = ttk.Label(
+            llm_ctx_cfg, text="", anchor="w", foreground="#666666"
+        )
         self._llm_context_hint_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         llm_out_frame = ttk.Frame(llm_box)
@@ -1273,10 +1264,12 @@ class TranscriptionGUI:
             return
         model_info = get_model_info(self._model_var.get() or "small")
         if not model_info.supports_live_capture:
-            self._set_live_status(self._tr(
-                "live.status.file_only_model_action",
-                model_name=model_info.name,
-            ))
+            self._set_live_status(
+                self._tr(
+                    "live.status.file_only_model_action",
+                    model_name=model_info.name,
+                )
+            )
             return
 
         options = CaptureOptions(
@@ -1347,7 +1340,7 @@ class TranscriptionGUI:
         path = filedialog.asksaveasfilename(
             defaultextension=f".{ext}",
             initialfile=default_name,
-            filetypes=filetypes + [(self._tr("dialog.filetype.all_files"), "*.*")],
+            filetypes=[*filetypes, (self._tr("dialog.filetype.all_files"), "*.*")],
             title=self._tr("dialog.title.save_recorded_audio"),
         )
         if not path:
@@ -1365,10 +1358,12 @@ class TranscriptionGUI:
         self.pause_button.configure(state=tk.NORMAL)
         self.pause_button.configure(text=self._tr("live.button.pause"))
         self.record_button.configure(state=tk.NORMAL, text="00:00:00")
-        self._set_live_status(self._tr(
-            "live.status.recording_to",
-            file_name=options.output_path.name,
-        ))
+        self._set_live_status(
+            self._tr(
+                "live.status.recording_to",
+                file_name=options.output_path.name,
+            )
+        )
         self._record_worker = RecordingWorker(
             options=options,
             on_status=self._schedule_live_status,
@@ -1427,7 +1422,9 @@ class TranscriptionGUI:
         with suppress(tk.TclError, RuntimeError):
             self.root.after(0, self._set_live_status, status)
 
-    def _schedule_segment(self, time_str: str, speaker: str, text: str, translation: str | None) -> None:
+    def _schedule_segment(
+        self, time_str: str, speaker: str, text: str, translation: str | None
+    ) -> None:
         with suppress(tk.TclError, RuntimeError):
             self.root.after(0, self._add_segment, time_str, speaker, text, translation)
 
@@ -1470,7 +1467,9 @@ class TranscriptionGUI:
         source_label = (
             self._tr("live.source.mic")
             if "LOCAL" in speaker
-            else self._tr("live.source.system") if "REMOTE" in speaker else speaker
+            else self._tr("live.source.system")
+            if "REMOTE" in speaker
+            else speaker
         )
         text_lines = textwrap.wrap(text, width=70) if text else [""]
         trans_lines = textwrap.wrap(translation or "", width=57) if translation else [""]
@@ -1479,7 +1478,7 @@ class TranscriptionGUI:
             text_lines.append("")
         while len(trans_lines) < n:
             trans_lines.append("")
-        for i, (tl, tr) in enumerate(zip(text_lines, trans_lines)):
+        for i, (tl, tr) in enumerate(zip(text_lines, trans_lines, strict=False)):
             tv = time_str if i == 0 else ""
             sv = source_label if i == 0 else ""
             tags: tuple[str, ...] = () if i == 0 else ("continuation",)
@@ -1490,10 +1489,13 @@ class TranscriptionGUI:
         src_label = (
             self._tr("live.source.mic")
             if source == "microphone"
-            else self._tr("live.source.sys_short") if source == "system" else source
+            else self._tr("live.source.sys_short")
+            if source == "system"
+            else source
         )
         self.table.insert(
-            "", tk.END,
+            "",
+            tk.END,
             values=(time_str, src_label, self._tr("live.dropped.text"), ""),
             tags=("dropped",),
         )
@@ -1515,12 +1517,14 @@ class TranscriptionGUI:
                 q = stats["preprocess_q"] + stats["asr_q"]
                 in_asr = stats["in_asr"]
                 dropped = stats["dropped"]
-                self.queue_label.configure(text=self._tr(
-                    "live.summary.queue",
-                    queue=q,
-                    in_asr=in_asr,
-                    dropped=dropped,
-                ))
+                self.queue_label.configure(
+                    text=self._tr(
+                        "live.summary.queue",
+                        queue=q,
+                        in_asr=in_asr,
+                        dropped=dropped,
+                    )
+                )
         with suppress(tk.TclError, RuntimeError):
             self.root.after(500, self._poll_stats)
 
@@ -1541,9 +1545,7 @@ class TranscriptionGUI:
         selected = set(self.table.selection())
         if not selected:
             return "break"
-        lines = self._format_items(
-            item for item in self.table.get_children() if item in selected
-        )
+        lines = self._format_items(item for item in self.table.get_children() if item in selected)
         self.root.clipboard_clear()
         self.root.clipboard_append("\n".join(lines))
         return "break"
@@ -1704,10 +1706,12 @@ class TranscriptionGUI:
                 self.start_button.configure(state=tk.NORMAL)
         elif self._worker is None and self._record_worker is None:
             self.start_button.configure(state=tk.DISABLED)
-            self._set_live_status(self._tr(
-                "live.status.file_only_model",
-                model_name=live_model_info.name,
-            ))
+            self._set_live_status(
+                self._tr(
+                    "live.status.file_only_model",
+                    model_name=live_model_info.name,
+                )
+            )
 
         file_model = get_model_info(self._file_model_var.get()).id
         file_values = [language.label for language in list_languages_for_model(file_model)]
@@ -1786,11 +1790,7 @@ class TranscriptionGUI:
 
         # Detect button: enabled only when ML is possible and file is selected
         has_file = bool(self._file_path_var.get().strip())
-        detect_state = (
-            "normal"
-            if (not running and ml_relevant and has_file)
-            else "disabled"
-        )
+        detect_state = "normal" if (not running and ml_relevant and has_file) else "disabled"
         self._file_detect_btn.configure(state=detect_state)
 
     def _detect_speakers(self) -> None:
@@ -1826,6 +1826,7 @@ class TranscriptionGUI:
 
         def _run() -> None:
             import asyncio
+
             try:
                 from voxfusion.diarization.speaker_counter import estimate_speaker_count
 
@@ -1927,9 +1928,7 @@ class TranscriptionGUI:
                 self._tr("validation.error.whole_number", field_name=field_name)
             ) from exc
         if parsed < 1:
-            raise ValueError(
-                self._tr("validation.error.at_least_one", field_name=field_name)
-            )
+            raise ValueError(self._tr("validation.error.at_least_one", field_name=field_name))
         return parsed
 
     def _append_log_line(self, text: str) -> None:
@@ -1976,9 +1975,7 @@ class TranscriptionGUI:
             self._llm_model_contexts = dict(self._cached_llm_model_contexts)
 
         # Proxy settings
-        self._proxy_use_system_var.set(
-            settings.get("proxy_use_system", "true").lower() != "false"
-        )
+        self._proxy_use_system_var.set(settings.get("proxy_use_system", "true").lower() != "false")
         self._proxy_http_var.set(settings.get("proxy_http", ""))
         self._proxy_https_var.set(settings.get("proxy_https", ""))
         self._proxy_no_var.set(settings.get("proxy_no", ""))
@@ -1990,6 +1987,7 @@ class TranscriptionGUI:
         self._hf_token_var.set(token)
         if token:
             import os
+
             os.environ["HF_TOKEN"] = token
             os.environ["HUGGING_FACE_HUB_TOKEN"] = token
 
@@ -2045,12 +2043,18 @@ class TranscriptionGUI:
                 "llm_context_tokens_override": self._llm_context_var.get().strip(),
                 "llm_custom_user_prompt": self._llm_custom_user_prompt,
                 _LLM_MODELS_CACHE_KEY: json.dumps(self._cached_llm_models, ensure_ascii=False),
-                _LLM_MODEL_CONTEXT_CACHE_KEY: json.dumps(self._cached_llm_model_contexts, ensure_ascii=False),
+                _LLM_MODEL_CONTEXT_CACHE_KEY: json.dumps(
+                    self._cached_llm_model_contexts, ensure_ascii=False
+                ),
                 "gui_language": self._ui_language_code,
                 "gui_language_explicit": "true" if self._ui_language_explicit else "false",
                 "gui_log_mode": self._current_log_mode(),
-                "last_recorded_file": str(self._last_recorded_file) if self._last_recorded_file else "",
-                "last_transcript_path": str(self._last_transcript_path) if self._last_transcript_path else "",
+                "last_recorded_file": str(self._last_recorded_file)
+                if self._last_recorded_file
+                else "",
+                "last_transcript_path": str(self._last_transcript_path)
+                if self._last_transcript_path
+                else "",
                 # Proxy
                 "proxy_use_system": "true" if self._proxy_use_system_var.get() else "false",
                 "proxy_http": self._proxy_http_var.get().strip(),
@@ -2237,7 +2241,9 @@ class TranscriptionGUI:
             )
             self._file_queue_items[item_id] = item
             self._file_queue_lookup[key] = item_id
-            self._file_queue_table.insert("", tk.END, iid=item_id, values=self._file_queue_values(item))
+            self._file_queue_table.insert(
+                "", tk.END, iid=item_id, values=self._file_queue_values(item)
+            )
             if getattr(self, "_queue_metadata_async_enabled", False):
                 self._schedule_queue_metadata_probe(item_id, item)
             if first_added_id is None:
@@ -2299,16 +2305,15 @@ class TranscriptionGUI:
                 "file.workflow.step2_queue",
                 count=len(self._file_queue_items),
             )
+        elif transcript_ready:
+            workflow_text = self._tr("file.workflow.step3")
+        elif self._last_recorded_file is not None:
+            workflow_text = self._tr(
+                "file.workflow.step2_recorded",
+                file_name=self._last_recorded_file.name,
+            )
         else:
-            if transcript_ready:
-                workflow_text = self._tr("file.workflow.step3")
-            elif self._last_recorded_file is not None:
-                workflow_text = self._tr(
-                    "file.workflow.step2_recorded",
-                    file_name=self._last_recorded_file.name,
-                )
-            else:
-                workflow_text = self._tr("file.workflow.step1")
+            workflow_text = self._tr("file.workflow.step1")
         self._file_workflow_label.configure(text=workflow_text)
         llm_enabled = (
             transcript_ready
@@ -2439,9 +2444,7 @@ class TranscriptionGUI:
     ) -> str:
         self._available_llm_models = list(models)
         self._llm_model_contexts = {
-            model_id: tokens
-            for model_id, tokens in (contexts or {}).items()
-            if model_id in models
+            model_id: tokens for model_id, tokens in (contexts or {}).items() if model_id in models
         }
         self._llm_model_combo.configure(values=models)
         requested_model = self._llm_model_var.get().strip()
@@ -2648,7 +2651,9 @@ class TranscriptionGUI:
 
         pad = {"padx": 8, "pady": 3}
 
-        proxy_frame = ttk.LabelFrame(dlg, text=self._tr("settings.section.network"), padding=(10, 8))
+        proxy_frame = ttk.LabelFrame(
+            dlg, text=self._tr("settings.section.network"), padding=(10, 8)
+        )
         proxy_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 4))
         proxy_frame.columnconfigure(1, weight=1)
 
@@ -2681,11 +2686,20 @@ class TranscriptionGUI:
                     row=row + 1, column=1, columnspan=2, sticky="w", padx=8
                 )
 
-        _lbl_entry(2, self._tr("settings.label.http_proxy"), http_v, self._tr("settings.hint.http_proxy"))
-        _lbl_entry(4, self._tr("settings.label.https_proxy"), https_v, self._tr("settings.hint.https_proxy"))
+        _lbl_entry(
+            2, self._tr("settings.label.http_proxy"), http_v, self._tr("settings.hint.http_proxy")
+        )
+        _lbl_entry(
+            4,
+            self._tr("settings.label.https_proxy"),
+            https_v,
+            self._tr("settings.hint.https_proxy"),
+        )
         _lbl_entry(6, self._tr("settings.label.no_proxy"), no_v, self._tr("settings.hint.no_proxy"))
 
-        ttk.Label(proxy_frame, text=self._tr("settings.label.ca_bundle")).grid(row=8, column=0, sticky="w", **pad)
+        ttk.Label(proxy_frame, text=self._tr("settings.label.ca_bundle")).grid(
+            row=8, column=0, sticky="w", **pad
+        )
         ca_entry = ttk.Entry(proxy_frame, textvariable=ca_v, width=36)
         ca_entry.grid(row=8, column=1, sticky="ew", **pad)
         manual_widgets.append(ca_entry)
@@ -2701,7 +2715,9 @@ class TranscriptionGUI:
             if path:
                 ca_v.set(path)
 
-        browse_ca_btn = ttk.Button(proxy_frame, text=self._tr("settings.button.browse"), command=_browse_ca)
+        browse_ca_btn = ttk.Button(
+            proxy_frame, text=self._tr("settings.button.browse"), command=_browse_ca
+        )
         browse_ca_btn.grid(row=8, column=2, padx=(0, 4), pady=3)
         manual_widgets.append(browse_ca_btn)
 
@@ -2716,16 +2732,18 @@ class TranscriptionGUI:
         hf_frame.pack(fill=tk.X, padx=10, pady=(0, 4))
         hf_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(hf_frame, text=self._tr("settings.label.hf_token")).grid(row=0, column=0, sticky="w", **pad)
+        ttk.Label(hf_frame, text=self._tr("settings.label.hf_token")).grid(
+            row=0, column=0, sticky="w", **pad
+        )
         hf_entry = ttk.Entry(hf_frame, textvariable=hf_token_v, width=44, show="*")
         hf_entry.grid(row=0, column=1, sticky="ew", **pad)
 
         def _toggle_token_visibility() -> None:
             hf_entry.configure(show="" if hf_entry.cget("show") == "*" else "*")
 
-        ttk.Button(hf_frame, text=self._tr("settings.button.show"), command=_toggle_token_visibility).grid(
-            row=0, column=2, padx=(0, 4), pady=3
-        )
+        ttk.Button(
+            hf_frame, text=self._tr("settings.button.show"), command=_toggle_token_visibility
+        ).grid(row=0, column=2, padx=(0, 4), pady=3)
         ttk.Label(
             hf_frame,
             text=self._tr("settings.hint.hf_token"),
@@ -2744,6 +2762,7 @@ class TranscriptionGUI:
 
         def _save() -> None:
             import os
+
             self._proxy_use_system_var.set(use_sys.get())
             self._proxy_http_var.set(http_v.get().strip())
             self._proxy_https_var.set(https_v.get().strip())
@@ -2768,9 +2787,15 @@ class TranscriptionGUI:
                 os.environ.pop("HUGGING_FACE_HUB_TOKEN", None)
             dlg.destroy()
 
-        ttk.Button(btn_row, text=self._tr("settings.button.detect_proxy"), command=_detect).pack(side=tk.LEFT)
-        ttk.Button(btn_row, text=self._tr("settings.button.cancel"), command=dlg.destroy).pack(side=tk.RIGHT, padx=(4, 0))
-        ttk.Button(btn_row, text=self._tr("settings.button.save"), command=_save, style="Accent.TButton").pack(side=tk.RIGHT)
+        ttk.Button(btn_row, text=self._tr("settings.button.detect_proxy"), command=_detect).pack(
+            side=tk.LEFT
+        )
+        ttk.Button(btn_row, text=self._tr("settings.button.cancel"), command=dlg.destroy).pack(
+            side=tk.RIGHT, padx=(4, 0)
+        )
+        ttk.Button(
+            btn_row, text=self._tr("settings.button.save"), command=_save, style="Accent.TButton"
+        ).pack(side=tk.RIGHT)
 
     def _open_prompt_editor(self) -> None:
         prompt_name = self._llm_prompt_var.get().strip() or "summarize"
@@ -2809,9 +2834,7 @@ class TranscriptionGUI:
         def _save() -> None:
             prompt_text = user_text.get("1.0", tk.END).strip()
             if "{transcript}" not in prompt_text:
-                self._llm_status_label.configure(
-                    text=self._tr("prompt.status.invalid")
-                )
+                self._llm_status_label.configure(text=self._tr("prompt.status.invalid"))
                 return
             self._llm_custom_user_prompt = "" if prompt_text == prompt_def["user"] else prompt_text
             self._persist_gui_settings()
@@ -2820,9 +2843,15 @@ class TranscriptionGUI:
             )
             dialog.destroy()
 
-        ttk.Button(button_row, text=self._tr("prompt.button.reset"), command=_reset).pack(side=tk.LEFT)
-        ttk.Button(button_row, text=self._tr("prompt.button.save"), command=_save).pack(side=tk.RIGHT)
-        ttk.Button(button_row, text=self._tr("prompt.button.close"), command=dialog.destroy).pack(side=tk.RIGHT, padx=(0, 6))
+        ttk.Button(button_row, text=self._tr("prompt.button.reset"), command=_reset).pack(
+            side=tk.LEFT
+        )
+        ttk.Button(button_row, text=self._tr("prompt.button.save"), command=_save).pack(
+            side=tk.RIGHT
+        )
+        ttk.Button(button_row, text=self._tr("prompt.button.close"), command=dialog.destroy).pack(
+            side=tk.RIGHT, padx=(0, 6)
+        )
 
     def _poll_device_changes(self) -> None:
         """Check every 5 s if the audio device list has changed and refresh the menu."""
@@ -2908,18 +2937,30 @@ class TranscriptionGUI:
 
         if self._selected_microphone_id is None:
             default_mic = next(
-                (option.index for option in self._device_options if option.kind == "microphone" and option.is_default),
+                (
+                    option.index
+                    for option in self._device_options
+                    if option.kind == "microphone" and option.is_default
+                ),
                 None,
             )
             if default_mic is None:
                 default_mic = next(
-                    (option.index for option in self._device_options if option.kind == "microphone"),
+                    (
+                        option.index
+                        for option in self._device_options
+                        if option.kind == "microphone"
+                    ),
                     None,
                 )
             self._selected_microphone_id = default_mic
         if self._selected_system_id is None:
             default_system = next(
-                (option.index for option in self._device_options if option.kind == "system" and option.is_default),
+                (
+                    option.index
+                    for option in self._device_options
+                    if option.kind == "system" and option.is_default
+                ),
                 None,
             )
             if default_system is None:
@@ -2935,10 +2976,7 @@ class TranscriptionGUI:
             variable = self._device_check_vars.get(str(option.index))
             if variable is None:
                 continue
-            variable.set(
-                option.index == self._selected_microphone_id
-                or option.index == self._selected_system_id
-            )
+            variable.set(option.index in (self._selected_microphone_id, self._selected_system_id))
 
     def _toggle_device_option(self, option: DeviceOption) -> None:
         if option.index is None:
@@ -2968,7 +3006,11 @@ class TranscriptionGUI:
     def _update_device_picker_label(self) -> None:
         labels: list[str] = []
         mic_option = next(
-            (option for option in self._device_options if option.index == self._selected_microphone_id),
+            (
+                option
+                for option in self._device_options
+                if option.index == self._selected_microphone_id
+            ),
             None,
         )
         system_option = next(
@@ -2991,13 +3033,15 @@ class TranscriptionGUI:
 
     def _install_ffmpeg(self) -> None:
         """Start local FFmpeg installation in a background thread."""
-        self._ffmpeg_install_btn.configure(state="disabled", text=self._tr("ffmpeg.status.installing"))
+        self._ffmpeg_install_btn.configure(
+            state="disabled", text=self._tr("ffmpeg.status.installing")
+        )
         self._ffmpeg_install_status.configure(text=self._tr("ffmpeg.status.preparing"))
 
         def _run() -> None:
             ok = install_ffmpeg_local(
                 on_output=lambda line: self.root.after(
-                    0, lambda l=line: self._ffmpeg_install_status.configure(text=l[:80])
+                    0, lambda ln=line: self._ffmpeg_install_status.configure(text=ln[:80])
                 )
             )
 
@@ -3011,10 +3055,10 @@ class TranscriptionGUI:
                         text=self._tr("ffmpeg.status.restart_required")
                     )
                 else:
-                    self._ffmpeg_install_status.configure(
-                        text=self._tr("ffmpeg.status.failed")
+                    self._ffmpeg_install_status.configure(text=self._tr("ffmpeg.status.failed"))
+                    self._ffmpeg_install_btn.configure(
+                        state="normal", text=self._tr("ffmpeg.button.retry")
                     )
-                    self._ffmpeg_install_btn.configure(state="normal", text=self._tr("ffmpeg.button.retry"))
 
             self.root.after(0, _finish)
 
@@ -3029,7 +3073,9 @@ class TranscriptionGUI:
             added = self._add_files_to_queue([Path(path) for path in paths])
             self._last_transcript_path = None
             if added:
-                self._file_status_label.configure(text=self._tr("file.status.queued_files", count=added))
+                self._file_status_label.configure(
+                    text=self._tr("file.status.queued_files", count=added)
+                )
             else:
                 self._file_status_label.configure(text=self._tr("file.status.queue_duplicate"))
             self._file_progress["value"] = 0
@@ -3086,9 +3132,16 @@ class TranscriptionGUI:
         queued = sum(status == "Queued" for status in statuses)
         total = len(statuses)
 
-        if total == 1 and done == 1 and self._file_seg_count > 0 and self._last_transcript_path is not None:
+        if (
+            total == 1
+            and done == 1
+            and self._file_seg_count > 0
+            and self._last_transcript_path is not None
+        ):
             self._file_status_label.configure(
-                text=self._tr("file.status.ready_transcript", file_name=self._last_transcript_path.name),
+                text=self._tr(
+                    "file.status.ready_transcript", file_name=self._last_transcript_path.name
+                ),
                 foreground="",
             )
         elif total == 1 and done == 1:
@@ -3329,7 +3382,9 @@ class TranscriptionGUI:
         if self._file_worker is not None:
             self._file_batch_cancel_requested = True
             self._file_cancel_btn.configure(state=tk.DISABLED)
-            self._file_status_label.configure(text=self._tr("file.status.cancelling_queue"), foreground="")
+            self._file_status_label.configure(
+                text=self._tr("file.status.cancelling_queue"), foreground=""
+            )
             self._file_worker.cancel()
 
     def _download_file_model(self) -> None:
@@ -3387,6 +3442,7 @@ class TranscriptionGUI:
             try:
                 if model_info.engine == "gigaam":
                     from transformers import AutoModel
+
                     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
                     AutoModel.from_pretrained(
                         "ai-sage/GigaAM-v3",
@@ -3396,6 +3452,7 @@ class TranscriptionGUI:
                     )
                 elif model_info.engine == "breeze":
                     from huggingface_hub import snapshot_download
+
                     snapshot_download(
                         "MediaTek-Research/Breeze-ASR-25",
                         force_download=True,
@@ -3409,12 +3466,14 @@ class TranscriptionGUI:
                     )
                 elif model_info.engine == "parakeet":
                     from nemo.collections.asr.models import ASRModel
+
                     ASRModel.from_pretrained(
                         model_name="nvidia/parakeet-tdt-0.6b-v3",
                         refresh_cache=True,
                     )
                 else:
                     from huggingface_hub import snapshot_download
+
                     snapshot_download(
                         f"Systran/faster-whisper-{model_info.id}",
                         force_download=True,
@@ -3471,9 +3530,7 @@ class TranscriptionGUI:
             h, remainder = divmod(total_secs, 3600)
             m, s = divmod(remainder, 60)
             time_str = f"{h:02d}:{m:02d}:{s:02d}"
-            self._file_table.insert(
-                "", tk.END, values=(time_str, speaker, ts.text.strip())
-            )
+            self._file_table.insert("", tk.END, values=(time_str, speaker, ts.text.strip()))
             self._file_seg_count += 1
 
         self._file_segments.extend(segments)
@@ -3578,17 +3635,21 @@ class TranscriptionGUI:
                 continue
             match = _IMPORTED_TRANSCRIPT_LINE_RE.match(line)
             if match is not None:
-                rows.append((
-                    match.group("time"),
-                    match.group("speaker").strip() or _IMPORTED_TRANSCRIPT_SPEAKER,
-                    match.group("text").strip(),
-                ))
+                rows.append(
+                    (
+                        match.group("time"),
+                        match.group("speaker").strip() or _IMPORTED_TRANSCRIPT_SPEAKER,
+                        match.group("text").strip(),
+                    )
+                )
                 continue
-            rows.append((
-                TranscriptionGUI._transcript_time_label(fallback_seconds),
-                _IMPORTED_TRANSCRIPT_SPEAKER,
-                line,
-            ))
+            rows.append(
+                (
+                    TranscriptionGUI._transcript_time_label(fallback_seconds),
+                    _IMPORTED_TRANSCRIPT_SPEAKER,
+                    line,
+                )
+            )
             fallback_seconds += 1
         return rows
 
@@ -3784,9 +3845,7 @@ class TranscriptionGUI:
         transcript = self._get_file_transcript_text()
         if not transcript:
             log.warning("gui.llm_summarize_skipped", reason="no_transcript")
-            self._llm_status_label.configure(
-                text=self._tr("llm.status.no_transcript")
-            )
+            self._llm_status_label.configure(text=self._tr("llm.status.no_transcript"))
             self._refresh_file_workflow()
             return
 
@@ -4017,6 +4076,7 @@ def _secs_to_vtt(secs: float) -> str:
 # Entry points
 # ---------------------------------------------------------------------------
 
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run VoxFusion GUI mode.")
     parser.add_argument(
@@ -4062,8 +4122,12 @@ def main(argv: list[str] | None = None) -> int:
         model=args.model,
         language=args.language,
         translate=args.translate,
-        microphone_device_id=args.device if args.device and str(args.device).startswith("sd:") else None,
-        system_device_id=args.device if args.device and not str(args.device).startswith("sd:") else None,
+        microphone_device_id=args.device
+        if args.device and str(args.device).startswith("sd:")
+        else None,
+        system_device_id=args.device
+        if args.device and not str(args.device).startswith("sd:")
+        else None,
     )
 
     root = tk.Tk()

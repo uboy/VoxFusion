@@ -33,12 +33,11 @@ def derive_key(passphrase: str, salt: bytes) -> bytes:
         URL-safe base64-encoded 32-byte key suitable for Fernet.
     """
     try:
-        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
         from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
     except ImportError as exc:
         raise EncryptionError(
-            "cryptography package is not installed. "
-            "Install with: pip install cryptography"
+            "cryptography package is not installed. Install with: pip install cryptography"
         ) from exc
 
     kdf = PBKDF2HMAC(
@@ -67,8 +66,7 @@ def encrypt_bytes(data: bytes, passphrase: str) -> bytes:
         from cryptography.fernet import Fernet
     except ImportError as exc:
         raise EncryptionError(
-            "cryptography package is not installed. "
-            "Install with: pip install cryptography"
+            "cryptography package is not installed. Install with: pip install cryptography"
         ) from exc
 
     salt = os.urandom(_SALT_SIZE)
@@ -100,8 +98,7 @@ def decrypt_bytes(encrypted: bytes, passphrase: str) -> bytes:
         from cryptography.fernet import Fernet, InvalidToken
     except ImportError as exc:
         raise EncryptionError(
-            "cryptography package is not installed. "
-            "Install with: pip install cryptography"
+            "cryptography package is not installed. Install with: pip install cryptography"
         ) from exc
 
     if len(encrypted) < _SALT_SIZE + 1:
@@ -116,9 +113,7 @@ def decrypt_bytes(encrypted: bytes, passphrase: str) -> bytes:
     try:
         plaintext = fernet.decrypt(token)
     except InvalidToken as exc:
-        raise EncryptionError(
-            "Decryption failed. Wrong passphrase or corrupted data."
-        ) from exc
+        raise EncryptionError("Decryption failed. Wrong passphrase or corrupted data.") from exc
 
     log.debug("encryption.decrypted", size=len(plaintext))
     return plaintext

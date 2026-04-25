@@ -146,7 +146,7 @@ class CoreAudioCapture:
                     timeout=chunk_duration_ms / 1000 * 3,
                 )
                 yield chunk
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 if self._active:
                     continue
                 break

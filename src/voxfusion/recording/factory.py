@@ -28,12 +28,16 @@ def create_recording_source(
             microphone_device_id=(
                 microphone_device_id
                 if microphone_device_id is not None
-                else device_index if source_type != "system" else None
+                else device_index
+                if source_type != "system"
+                else None
             ),
             system_device_id=(
                 system_device_id
                 if system_device_id is not None
-                else device_index if source_type == "system" else None
+                else device_index
+                if source_type == "system"
+                else None
             ),
         )
 

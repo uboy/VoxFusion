@@ -18,7 +18,13 @@ from pathlib import Path
 
 import click
 
-from voxfusion.llm.client import DEFAULT_BASE_URL, DEFAULT_MODEL, LLMError, complete, stream_completion
+from voxfusion.llm.client import (
+    DEFAULT_BASE_URL,
+    DEFAULT_MODEL,
+    LLMError,
+    complete,
+    stream_completion,
+)
 from voxfusion.llm.prompts import BUILTIN_PROMPTS, build_messages
 from voxfusion.logging import configure_logging, get_logger
 
@@ -30,34 +36,39 @@ _PROMPT_CHOICES = sorted(BUILTIN_PROMPTS.keys())
 @click.command("summarize")
 @click.argument("transcript_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option(
-    "--url", "-u",
+    "--url",
+    "-u",
     default=DEFAULT_BASE_URL,
     show_default=True,
     envvar="VOXFUSION_LLM_URL",
     help="Open WebUI base URL.",
 )
 @click.option(
-    "--model", "-m",
+    "--model",
+    "-m",
     default=DEFAULT_MODEL,
     show_default=True,
     envvar="VOXFUSION_LLM_MODEL",
     help="Model name as it appears in Open WebUI (e.g. qwen2.5:32b).",
 )
 @click.option(
-    "--api-key", "-k",
+    "--api-key",
+    "-k",
     default="",
     envvar="VOXFUSION_LLM_API_KEY",
     help="Bearer token / API key for Open WebUI (optional).",
 )
 @click.option(
-    "--prompt", "-p",
+    "--prompt",
+    "-p",
     default="summarize",
     type=click.Choice(_PROMPT_CHOICES),
     show_default=True,
     help="Built-in prompt template to use.",
 )
 @click.option(
-    "--output", "-o",
+    "--output",
+    "-o",
     type=click.Path(dir_okay=False, path_type=Path),
     default=None,
     help="Write LLM output to this file instead of stdout.",
@@ -114,9 +125,7 @@ def summarize(
 
     try:
         if no_stream:
-            result = asyncio.run(
-                complete(messages, base_url=url, model=model, api_key=api_key)
-            )
+            result = asyncio.run(complete(messages, base_url=url, model=model, api_key=api_key))
             _write_or_print(result, output)
         else:
             asyncio.run(

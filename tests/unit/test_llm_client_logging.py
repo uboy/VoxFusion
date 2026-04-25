@@ -104,10 +104,14 @@ def test_fetch_models_retries_transient_http_error(monkeypatch) -> None:
     monkeypatch.setattr(
         llm_client.httpx,
         "AsyncClient",
-        lambda timeout=None, **kwargs: _FakeAsyncClient(get_response=responses, timeout=timeout, **kwargs),
+        lambda timeout=None, **kwargs: _FakeAsyncClient(
+            get_response=responses, timeout=timeout, **kwargs
+        ),
     )
 
-    models = asyncio.run(llm_client.fetch_models(base_url="http://openwebui:3000", api_key="secret"))
+    models = asyncio.run(
+        llm_client.fetch_models(base_url="http://openwebui:3000", api_key="secret")
+    )
 
     assert models == ["qwen2.5-7b"]
     fake_log.info.assert_any_call(
@@ -152,7 +156,9 @@ def test_fetch_models_logs_http_error_after_retries(monkeypatch) -> None:
     monkeypatch.setattr(
         llm_client.httpx,
         "AsyncClient",
-        lambda timeout=None, **kwargs: _FakeAsyncClient(get_response=responses, timeout=timeout, **kwargs),
+        lambda timeout=None, **kwargs: _FakeAsyncClient(
+            get_response=responses, timeout=timeout, **kwargs
+        ),
     )
 
     with pytest.raises(llm_client.LLMError, match="HTTP 503"):
@@ -177,7 +183,9 @@ def test_stream_completion_logs_start_and_done(monkeypatch) -> None:
     monkeypatch.setattr(
         llm_client.httpx,
         "AsyncClient",
-        lambda timeout=None, **kwargs: _FakeAsyncClient(stream_response=response, timeout=timeout, **kwargs),
+        lambda timeout=None, **kwargs: _FakeAsyncClient(
+            stream_response=response, timeout=timeout, **kwargs
+        ),
     )
 
     async def _collect() -> list[str]:
@@ -220,7 +228,9 @@ def test_stream_completion_logs_http_error(monkeypatch) -> None:
     monkeypatch.setattr(
         llm_client.httpx,
         "AsyncClient",
-        lambda timeout=None, **kwargs: _FakeAsyncClient(stream_response=response, timeout=timeout, **kwargs),
+        lambda timeout=None, **kwargs: _FakeAsyncClient(
+            stream_response=response, timeout=timeout, **kwargs
+        ),
     )
 
     async def _consume() -> None:

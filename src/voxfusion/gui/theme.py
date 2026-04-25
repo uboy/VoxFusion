@@ -19,7 +19,9 @@ def configure_gui_theme(root: tk.Tk) -> None:
     style.configure("TLabelframe", background="#f3f0e8", borderwidth=1, relief="solid")
     style.configure("TLabelframe.Label", background="#f3f0e8", foreground="#2f2618")
     style.configure("TLabel", background="#f3f0e8", foreground="#2f2618")
-    style.configure("Header.TLabel", background="#f3f0e8", foreground="#1f170c", font=("", 9, "bold"))
+    style.configure(
+        "Header.TLabel", background="#f3f0e8", foreground="#1f170c", font=("", 9, "bold")
+    )
     style.configure("Muted.TLabel", background="#f3f0e8", foreground="#6a6254")
     style.configure("Primary.TButton", padding=(8, 4))
     style.configure("Accent.TButton", padding=(8, 4))

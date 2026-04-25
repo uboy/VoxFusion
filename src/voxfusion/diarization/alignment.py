@@ -124,8 +124,7 @@ def align_segments(
 
     for seg in segments:
         overlapping_turns = [
-            turn for turn in turns
-            if _overlap(seg.start_time, seg.end_time, turn) > 0.0
+            turn for turn in turns if _overlap(seg.start_time, seg.end_time, turn) > 0.0
         ]
         if len(overlapping_turns) > 1 and seg.words:
             split = _split_segment_by_words(
@@ -139,11 +138,13 @@ def align_segments(
 
         best_speaker = _best_speaker_for_segment(seg, turns)
 
-        result.append(DiarizedSegment(
-            segment=seg,
-            speaker_id=best_speaker,
-            speaker_source=speaker_source,
-        ))
+        result.append(
+            DiarizedSegment(
+                segment=seg,
+                speaker_id=best_speaker,
+                speaker_source=speaker_source,
+            )
+        )
 
     log.debug(
         "alignment.completed",

@@ -5,9 +5,9 @@ import importlib.util
 import pytest
 
 from voxfusion.asr_catalog import (
+    get_available_model_catalog,
     get_language_code,
     get_language_label,
-    get_available_model_catalog,
     get_model_info,
     is_model_available,
     list_languages_for_model,
@@ -61,7 +61,9 @@ def test_gigaam_requires_both_transformers_and_torch(monkeypatch: pytest.MonkeyP
     assert is_model_available("gigaam-v3-e2e-ctc") is False
 
 
-def test_available_model_catalog_hides_backends_with_missing_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_available_model_catalog_hides_backends_with_missing_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     real_find_spec = importlib.util.find_spec
 
     def _fake_find_spec(name: str):

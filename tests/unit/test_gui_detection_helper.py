@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-import voxfusion.gui.helpers as helpers
+from voxfusion.gui import helpers
 
 
 def test_load_detection_audio_chunk_extracts_container_media(tmp_path: Path, monkeypatch) -> None:
@@ -29,7 +29,7 @@ def test_load_detection_audio_chunk_extracts_container_media(tmp_path: Path, mon
             assert mode == "r"
             assert Path(path) == extracted_path
 
-        def __enter__(self) -> "FakeSoundFile":
+        def __enter__(self) -> FakeSoundFile:
             return self
 
         def __exit__(self, exc_type, exc, tb) -> None:
@@ -93,7 +93,7 @@ def test_load_detection_audio_chunk_falls_back_to_ffmpeg_when_direct_open_fails(
             if current == media_path:
                 raise RuntimeError("unsupported format")
 
-        def __enter__(self) -> "FakeSoundFile":
+        def __enter__(self) -> FakeSoundFile:
             return self
 
         def __exit__(self, exc_type, exc, tb) -> None:

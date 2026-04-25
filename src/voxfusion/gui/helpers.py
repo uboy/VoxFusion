@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -17,6 +18,8 @@ from voxfusion.logging import configure_logging
 from voxfusion.media.extractor import extract_audio, needs_extraction
 from voxfusion.media.runtime_ffmpeg import (
     find_ffmpeg as _find_runtime_ffmpeg,
+)
+from voxfusion.media.runtime_ffmpeg import (
     install_ffmpeg_local as _install_runtime_ffmpeg_local,
 )
 from voxfusion.models.audio import AudioChunk
@@ -264,7 +267,7 @@ def probe_media_metadata(file_path: Path) -> tuple[float | None, int | None]:
     return duration_s, size_bytes
 
 
-def install_ffmpeg_local(on_output: "Callable[[str], None] | None" = None) -> bool:  # type: ignore[name-defined]
+def install_ffmpeg_local(on_output: Callable[[str], None] | None = None) -> bool:  # type: ignore[name-defined]
     """Install a local portable FFmpeg copy managed by VoxFusion.
 
     Args:

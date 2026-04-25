@@ -18,7 +18,9 @@ def test_parse_windows_device_id_treats_plain_int_as_default_backend() -> None:
     assert parse_windows_device_id("9", default_backend="pa") == ("pa", 9)
 
 
-def test_create_windows_capture_source_for_system_forwards_explicit_loopback_device(monkeypatch) -> None:
+def test_create_windows_capture_source_for_system_forwards_explicit_loopback_device(
+    monkeypatch,
+) -> None:
     from voxfusion.config.models import CaptureConfig
 
     seen: dict[str, object] = {}
@@ -83,10 +85,10 @@ def test_pyaudio_loopback_capture_retries_channel_count(monkeypatch) -> None:
             return None
 
     class StubPyAudioModule:
-        paFloat32 = object()
+        paFloat32 = object()  # noqa: N815 — mirrors pyaudiowpatch constant naming
 
         @staticmethod
-        def PyAudio() -> StubPyAudioInstance:
+        def PyAudio() -> StubPyAudioInstance:  # noqa: N802 — mirrors pyaudiowpatch API
             return StubPyAudioInstance()
 
     monkeypatch.setitem(sys.modules, "pyaudiowpatch", StubPyAudioModule)
@@ -122,22 +124,60 @@ def test_wasapi_loopback_retries_after_invalid_channel_error(monkeypatch) -> Non
 
         @staticmethod
         def query_hostapis() -> list[dict[str, object]]:
-            return [{
-                "name": "Windows WASAPI",
-                "default_input_device": 0,
-                "default_output_device": 5,
-                "devices": [5],
-            }]
+            return [
+                {
+                    "name": "Windows WASAPI",
+                    "default_input_device": 0,
+                    "default_output_device": 5,
+                    "devices": [5],
+                }
+            ]
 
         @staticmethod
         def query_devices(index: int | None = None):
             devices = [
-                {"name": "Mic", "hostapi": 0, "max_input_channels": 2, "max_output_channels": 0, "default_samplerate": 48000},
-                {"name": "Speaker", "hostapi": 0, "max_input_channels": 0, "max_output_channels": 2, "default_samplerate": 48000},
-                {"name": "Speaker2", "hostapi": 0, "max_input_channels": 0, "max_output_channels": 2, "default_samplerate": 48000},
-                {"name": "Speaker3", "hostapi": 0, "max_input_channels": 0, "max_output_channels": 2, "default_samplerate": 48000},
-                {"name": "Speaker4", "hostapi": 0, "max_input_channels": 0, "max_output_channels": 2, "default_samplerate": 48000},
-                {"name": "LoopbackTarget", "hostapi": 0, "max_input_channels": 0, "max_output_channels": 2, "default_samplerate": 48000},
+                {
+                    "name": "Mic",
+                    "hostapi": 0,
+                    "max_input_channels": 2,
+                    "max_output_channels": 0,
+                    "default_samplerate": 48000,
+                },
+                {
+                    "name": "Speaker",
+                    "hostapi": 0,
+                    "max_input_channels": 0,
+                    "max_output_channels": 2,
+                    "default_samplerate": 48000,
+                },
+                {
+                    "name": "Speaker2",
+                    "hostapi": 0,
+                    "max_input_channels": 0,
+                    "max_output_channels": 2,
+                    "default_samplerate": 48000,
+                },
+                {
+                    "name": "Speaker3",
+                    "hostapi": 0,
+                    "max_input_channels": 0,
+                    "max_output_channels": 2,
+                    "default_samplerate": 48000,
+                },
+                {
+                    "name": "Speaker4",
+                    "hostapi": 0,
+                    "max_input_channels": 0,
+                    "max_output_channels": 2,
+                    "default_samplerate": 48000,
+                },
+                {
+                    "name": "LoopbackTarget",
+                    "hostapi": 0,
+                    "max_input_channels": 0,
+                    "max_output_channels": 2,
+                    "default_samplerate": 48000,
+                },
             ]
             if index is None:
                 return devices
@@ -146,10 +186,12 @@ def test_wasapi_loopback_retries_after_invalid_channel_error(monkeypatch) -> Non
         WasapiSettings = StubWasapiSettings
 
         @staticmethod
-        def InputStream(**kwargs):
+        def InputStream(**kwargs):  # noqa: N802 — mirrors pyaudiowpatch API
             attempts.append(kwargs.get("channels"))
             if kwargs.get("channels") == 2:
-                raise OSError("Error opening InputStream: Invalid number of channels [PaErrorCode -9998]")
+                raise OSError(
+                    "Error opening InputStream: Invalid number of channels [PaErrorCode -9998]"
+                )
             return StubStream()
 
     monkeypatch.setitem(sys.modules, "sounddevice", StubSoundDeviceModule)
@@ -186,24 +228,64 @@ def test_wasapi_input_explicit_device_falls_back_to_another_input(monkeypatch) -
 
         @staticmethod
         def query_hostapis() -> list[dict[str, object]]:
-            return [{
-                "name": "Windows WASAPI",
-                "default_input_device": 3,
-                "default_output_device": 5,
-                "devices": [3, 17],
-            }]
+            return [
+                {
+                    "name": "Windows WASAPI",
+                    "default_input_device": 3,
+                    "default_output_device": 5,
+                    "devices": [3, 17],
+                }
+            ]
 
         @staticmethod
         def query_devices(index: int | None = None):
             devices = [
-                {"name": "Fallback Mic", "hostapi": 0, "max_input_channels": 2, "max_output_channels": 0, "default_samplerate": 48000},
-                {"name": "Unused1", "hostapi": 0, "max_input_channels": 0, "max_output_channels": 0, "default_samplerate": 48000},
-                {"name": "Unused2", "hostapi": 0, "max_input_channels": 0, "max_output_channels": 0, "default_samplerate": 48000},
-                {"name": "Fallback Mic", "hostapi": 0, "max_input_channels": 2, "max_output_channels": 0, "default_samplerate": 48000},
+                {
+                    "name": "Fallback Mic",
+                    "hostapi": 0,
+                    "max_input_channels": 2,
+                    "max_output_channels": 0,
+                    "default_samplerate": 48000,
+                },
+                {
+                    "name": "Unused1",
+                    "hostapi": 0,
+                    "max_input_channels": 0,
+                    "max_output_channels": 0,
+                    "default_samplerate": 48000,
+                },
+                {
+                    "name": "Unused2",
+                    "hostapi": 0,
+                    "max_input_channels": 0,
+                    "max_output_channels": 0,
+                    "default_samplerate": 48000,
+                },
+                {
+                    "name": "Fallback Mic",
+                    "hostapi": 0,
+                    "max_input_channels": 2,
+                    "max_output_channels": 0,
+                    "default_samplerate": 48000,
+                },
             ]
             while len(devices) <= 17:
-                devices.append({"name": f"Pad{len(devices)}", "hostapi": 0, "max_input_channels": 0, "max_output_channels": 0, "default_samplerate": 48000})
-            devices[17] = {"name": "Headset (M51)", "hostapi": 0, "max_input_channels": 1, "max_output_channels": 0, "default_samplerate": 48000}
+                devices.append(
+                    {
+                        "name": f"Pad{len(devices)}",
+                        "hostapi": 0,
+                        "max_input_channels": 0,
+                        "max_output_channels": 0,
+                        "default_samplerate": 48000,
+                    }
+                )
+            devices[17] = {
+                "name": "Headset (M51)",
+                "hostapi": 0,
+                "max_input_channels": 1,
+                "max_output_channels": 0,
+                "default_samplerate": 48000,
+            }
             if index is None:
                 return devices
             return devices[index]
@@ -211,7 +293,7 @@ def test_wasapi_input_explicit_device_falls_back_to_another_input(monkeypatch) -
         WasapiSettings = StubWasapiSettings
 
         @staticmethod
-        def InputStream(**kwargs):
+        def InputStream(**kwargs):  # noqa: N802 — mirrors pyaudiowpatch API
             device = kwargs.get("device")
             attempts.append(int(device))
             if device == 17:

@@ -7,8 +7,7 @@ import sys
 import types
 from pathlib import Path
 
-from voxfusion.media.runtime_ffmpeg import _repo_vendor_ffmpeg_dir
-from voxfusion.media.runtime_ffmpeg import activate_ffmpeg_runtime
+from voxfusion.media.runtime_ffmpeg import _repo_vendor_ffmpeg_dir, activate_ffmpeg_runtime
 
 
 def test_activate_ffmpeg_runtime_sets_env_and_pydub_paths(

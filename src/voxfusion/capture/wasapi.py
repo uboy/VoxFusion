@@ -12,8 +12,8 @@ from contextlib import suppress
 
 import numpy as np
 
-from voxfusion.config.models import CaptureConfig
 from voxfusion.capture.windows_audio import parse_windows_device_id
+from voxfusion.config.models import CaptureConfig
 from voxfusion.exceptions import AudioCaptureError, UnsupportedPlatformError
 from voxfusion.logging import get_logger
 from voxfusion.models.audio import AudioChunk
@@ -38,6 +38,7 @@ class WASAPICapture:
 
     Supports both microphone input and system loopback modes.
     """
+
     _last_working_input_device: int | None = None
     _last_working_loopback_device: int | None = None
 
@@ -123,7 +124,11 @@ class WASAPICapture:
         self._loop = asyncio.get_running_loop()
         hostapis = list(sd.query_hostapis())
         wasapi_hostapi = next(
-            (idx for idx, api in enumerate(hostapis) if "wasapi" in str(api.get("name", "")).lower()),
+            (
+                idx
+                for idx, api in enumerate(hostapis)
+                if "wasapi" in str(api.get("name", "")).lower()
+            ),
             None,
         )
         if wasapi_hostapi is None and self._loopback:
@@ -177,10 +182,7 @@ class WASAPICapture:
                 return "unknown"
 
         def _is_fatal_device_error(message: str) -> bool:
-            return (
-                "PaErrorCode -9996" in message
-                or "Blocking API not supported yet" in message
-            )
+            return "PaErrorCode -9996" in message or "Blocking API not supported yet" in message
 
         def _hostapi_to_skip(message: str) -> str | None:
             if "MME error 11" in message:
@@ -278,7 +280,15 @@ class WASAPICapture:
 
         def _ordered_sample_rates(default_rate: int) -> list[int | None]:
             # Prefer explicit rates first; samplerate=None is tried last.
-            rates: list[int | None] = [default_rate, self._config.sample_rate, 48000, 44100, 32000, 16000, None]
+            rates: list[int | None] = [
+                default_rate,
+                self._config.sample_rate,
+                48000,
+                44100,
+                32000,
+                16000,
+                None,
+            ]
             result: list[int | None] = []
             for rate in rates:
                 if rate is None and rate not in result:
@@ -300,7 +310,11 @@ class WASAPICapture:
             for channels in order:
                 if channels is None and channels not in deduped:
                     deduped.append(channels)
-                elif isinstance(channels, int) and 1 <= channels <= max_channels and channels not in deduped:
+                elif (
+                    isinstance(channels, int)
+                    and 1 <= channels <= max_channels
+                    and channels not in deduped
+                ):
                     deduped.append(channels)
             return deduped
 
@@ -362,9 +376,13 @@ class WASAPICapture:
                         self._stream.start()  # type: ignore[union-attr]
                         self._device_index = device_index
                         effective_sample_rate = (
-                            sample_rate if sample_rate is not None else int(dev.get("default_samplerate", 44100))
+                            sample_rate
+                            if sample_rate is not None
+                            else int(dev.get("default_samplerate", 44100))
                         )
-                        effective_channels = channels if channels is not None else max(1, max_channels)
+                        effective_channels = (
+                            channels if channels is not None else max(1, max_channels)
+                        )
                         self._config.sample_rate = effective_sample_rate
                         self._config.channels = effective_channels
                         self._active = True
@@ -384,7 +402,9 @@ class WASAPICapture:
                                 "wasapi.explicit_device_fallback",
                                 requested_device_index=explicit_device_requested,
                                 selected_device_index=device_index,
-                                requested_device=sd.query_devices(explicit_device_requested).get("name", str(explicit_device_requested)),
+                                requested_device=sd.query_devices(explicit_device_requested).get(
+                                    "name", str(explicit_device_requested)
+                                ),
                                 selected_device=dev.get("name", str(device_index)),
                             )
                         log.info(
@@ -542,12 +562,12 @@ class WASAPICapture:
                 break
             try:
                 data = await asyncio.wait_for(self._buffer.get(), timeout=wait_timeout)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 if pieces:
                     break
                 if self._active:
                     raise
-                raise AudioCaptureError("WASAPICapture is not active")
+                raise AudioCaptureError("WASAPICapture is not active") from None
 
             if data is None:
                 if not pieces:
@@ -572,7 +592,7 @@ class WASAPICapture:
         ts_end = self._position / self._config.sample_rate
 
         final_samples = data.astype(np.float32).squeeze()
-        raw_rms = float(np.sqrt(np.mean(final_samples ** 2)))
+        raw_rms = float(np.sqrt(np.mean(final_samples**2)))
         raw_peak = float(np.max(np.abs(final_samples)))
         log.debug(
             "wasapi.chunk_raw",
@@ -602,7 +622,7 @@ class WASAPICapture:
                     timeout=chunk_duration_ms / 1000 * 3,
                 )
                 yield chunk
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 if self._active:
                     log.debug("wasapi.stream_timeout")
                     continue
@@ -610,11 +630,9 @@ class WASAPICapture:
             except AudioCaptureError as exc:
                 if str(exc) == "WASAPICapture is not active" and not self._active:
                     break
+                if not self._active:
+                    break
                 raise
-            except AudioCaptureError:
-                if self._active:
-                    raise
-                break
 
 
 def find_loopback_input_device() -> int | None:
@@ -693,6 +711,7 @@ class RobustLoopbackCapture:
         """Return the current default output device name, or None on error."""
         try:
             import sounddevice as sd
+
             idx = sd.default.device[1]
             if isinstance(idx, int) and idx >= 0:
                 return str(sd.query_devices(idx).get("name", ""))
@@ -742,7 +761,9 @@ class RobustLoopbackCapture:
                 return
             except Exception as exc:
                 errors.append(f"wasapi_loopback: {exc}")
-                log.debug("robust_loopback.backend_failed", backend="wasapi_loopback", error=str(exc))
+                log.debug(
+                    "robust_loopback.backend_failed", backend="wasapi_loopback", error=str(exc)
+                )
                 if explicit_selection and selected_backend == "sd":
                     raise AudioCaptureError(
                         f"Selected WASAPI loopback device '{self._device_id}' failed: {exc}"
@@ -762,11 +783,15 @@ class RobustLoopbackCapture:
                     await candidate.start()  # type: ignore[union-attr]
                     self._delegate = candidate
                     self._started_default_device_name = self._current_default_output_name()
-                    log.info("robust_loopback.backend", backend="virtual_input", device_index=virtual_idx)
+                    log.info(
+                        "robust_loopback.backend", backend="virtual_input", device_index=virtual_idx
+                    )
                     return
                 except Exception as exc:
                     errors.append(f"virtual_input[{virtual_idx}]: {exc}")
-                    log.debug("robust_loopback.backend_failed", backend="virtual_input", error=str(exc))
+                    log.debug(
+                        "robust_loopback.backend_failed", backend="virtual_input", error=str(exc)
+                    )
 
         raise AudioCaptureError(
             "All system audio capture methods failed on this machine.\n"
@@ -785,14 +810,14 @@ class RobustLoopbackCapture:
         # Check default device every 60 chunks (~30 s with 500 ms chunks).
         # When a new audio output device becomes the system default (e.g. headphones
         # plugged in), restart capture on the new device automatically.
-        _CHECK_EVERY = 60
+        check_every = 60
         while self._delegate is not None:
             device_changed = False
             chunk_count = 0
             async for chunk in self._delegate.stream(chunk_duration_ms=chunk_duration_ms):  # type: ignore[union-attr]
                 yield chunk
                 chunk_count += 1
-                if chunk_count % _CHECK_EVERY == 0 and self._device_id is None:
+                if chunk_count % check_every == 0 and self._device_id is None:
                     # Only auto-switch when no explicit device was requested.
                     current = self._current_default_output_name()
                     if (
@@ -819,7 +844,10 @@ class RobustLoopbackCapture:
             self._delegate = None
             try:
                 await self.start()
-                log.info("robust_loopback.restarted_on_new_device", device=self._started_default_device_name)
+                log.info(
+                    "robust_loopback.restarted_on_new_device",
+                    device=self._started_default_device_name,
+                )
             except Exception as exc:
                 raise AudioCaptureError(
                     f"Failed to restart loopback after default device change: {exc}"
@@ -936,8 +964,7 @@ class PyAudioLoopbackCapture:
             import pyaudiowpatch as pyaudio  # type: ignore[import-not-found]
         except ImportError as exc:
             raise AudioCaptureError(
-                "pyaudiowpatch is not installed. "
-                "Run: pip install pyaudiowpatch"
+                "pyaudiowpatch is not installed. Run: pip install pyaudiowpatch"
             ) from exc
 
         self._loop = asyncio.get_running_loop()
@@ -954,7 +981,11 @@ class PyAudioLoopbackCapture:
             max_input_channels = max(1, int(device_info.get("maxInputChannels", 1)))
             channel_candidates: list[int] = []
             for candidate in (self._config.channels, 2, 1, max_input_channels):
-                if candidate >= 1 and candidate <= max_input_channels and candidate not in channel_candidates:
+                if (
+                    candidate >= 1
+                    and candidate <= max_input_channels
+                    and candidate not in channel_candidates
+                ):
                     channel_candidates.append(candidate)
 
             stream = None
@@ -1037,6 +1068,7 @@ class PyAudioLoopbackCapture:
             except asyncio.QueueEmpty:
                 break
         from contextlib import suppress as _suppress
+
         with _suppress(asyncio.QueueFull):
             self._buffer.put_nowait(None)
         log.info("pyaudio_loopback.stopped", dropped_buffer_chunks=dropped)
@@ -1056,12 +1088,12 @@ class PyAudioLoopbackCapture:
                 break
             try:
                 data = await asyncio.wait_for(self._buffer.get(), timeout=wait_timeout)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 if pieces:
                     break
                 if self._active:
                     raise
-                raise AudioCaptureError("PyAudioLoopbackCapture is not active")
+                raise AudioCaptureError("PyAudioLoopbackCapture is not active") from None
             if data is None:
                 if not pieces:
                     raise AudioCaptureError("PyAudioLoopbackCapture is not active")
@@ -1078,7 +1110,7 @@ class PyAudioLoopbackCapture:
         samples = combined.astype(np.float32).squeeze()
 
         ts_start = self._position / self._config.sample_rate
-        self._position += samples.shape[0] if samples.ndim == 1 else samples.shape[0]
+        self._position += samples.shape[0]
         ts_end = self._position / self._config.sample_rate
 
         return AudioChunk(
@@ -1101,7 +1133,7 @@ class PyAudioLoopbackCapture:
                     timeout=chunk_duration_ms / 1000 * 3,
                 )
                 yield chunk
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 if not read_task.done():
                     read_task.cancel()
                     with suppress(asyncio.CancelledError, AudioCaptureError):

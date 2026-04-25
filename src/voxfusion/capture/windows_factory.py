@@ -14,7 +14,9 @@ def _sounddevice_index(device_id: str | int | None) -> int | None:
     if backend is None:
         return None
     if backend != "sd":
-        raise ValueError(f"Microphone capture requires a sounddevice/WASAPI device, got '{device_id}'.")
+        raise ValueError(
+            f"Microphone capture requires a sounddevice/WASAPI device, got '{device_id}'."
+        )
     return native_index
 
 

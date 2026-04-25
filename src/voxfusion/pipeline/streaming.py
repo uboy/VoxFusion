@@ -13,7 +13,6 @@ from typing import Any
 from voxfusion.asr.base import ASREngine
 from voxfusion.config.models import PipelineConfig
 from voxfusion.diarization.base import DiarizationEngine
-from voxfusion.exceptions import PipelineError
 from voxfusion.logging import get_logger
 from voxfusion.models.audio import AudioChunk
 from voxfusion.models.diarization import DiarizedSegment
@@ -110,10 +109,12 @@ class StreamingPipeline:
         output_q: asyncio.Queue[AudioChunk | object],
     ) -> None:
         """Read raw chunks, preprocess, and forward."""
-        self._emit(PipelineEvent(
-            event_type=EventType.STAGE_STARTED,
-            stage=PipelineStage.PREPROCESSING,
-        ))
+        self._emit(
+            PipelineEvent(
+                event_type=EventType.STAGE_STARTED,
+                stage=PipelineStage.PREPROCESSING,
+            )
+        )
         while True:
             item = await input_q.get()
             if item is _SENTINEL:
@@ -129,10 +130,12 @@ class StreamingPipeline:
         output_q: asyncio.Queue[tuple[list[TranscriptionSegment], AudioChunk] | object],
     ) -> None:
         """Run ASR on preprocessed chunks."""
-        self._emit(PipelineEvent(
-            event_type=EventType.STAGE_STARTED,
-            stage=PipelineStage.ASR,
-        ))
+        self._emit(
+            PipelineEvent(
+                event_type=EventType.STAGE_STARTED,
+                stage=PipelineStage.ASR,
+            )
+        )
         while True:
             item = await input_q.get()
             if item is _SENTINEL:
@@ -166,10 +169,12 @@ class StreamingPipeline:
         output_q: asyncio.Queue[list[DiarizedSegment] | object],
     ) -> None:
         """Assign speakers to transcription segments."""
-        self._emit(PipelineEvent(
-            event_type=EventType.STAGE_STARTED,
-            stage=PipelineStage.DIARIZATION,
-        ))
+        self._emit(
+            PipelineEvent(
+                event_type=EventType.STAGE_STARTED,
+                stage=PipelineStage.DIARIZATION,
+            )
+        )
         while True:
             item = await input_q.get()
             if item is _SENTINEL:
@@ -201,10 +206,12 @@ class StreamingPipeline:
                 await output_q.put(translated)
             return
 
-        self._emit(PipelineEvent(
-            event_type=EventType.STAGE_STARTED,
-            stage=PipelineStage.TRANSLATION,
-        ))
+        self._emit(
+            PipelineEvent(
+                event_type=EventType.STAGE_STARTED,
+                stage=PipelineStage.TRANSLATION,
+            )
+        )
         while True:
             item = await input_q.get()
             if item is _SENTINEL:
@@ -243,7 +250,9 @@ class StreamingPipeline:
                 "streaming.output_batch",
                 segments=len(translated_list),
                 first_speaker=translated_list[0].diarized.speaker_id if translated_list else None,
-                first_start_s=round(translated_list[0].diarized.segment.start_time, 2) if translated_list else None,
+                first_start_s=round(translated_list[0].diarized.segment.start_time, 2)
+                if translated_list
+                else None,
             )
             if on_segments:
                 on_segments(translated_list)

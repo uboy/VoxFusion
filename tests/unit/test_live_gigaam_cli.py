@@ -82,10 +82,14 @@ def test_capture_live_gigaam_saves_finalized_segments(monkeypatch, tmp_path: Pat
     result = runner.invoke(
         capture,
         [
-            "--model", "gigaam-v3-e2e-ctc",
-            "--source", "system",
-            "--device", "pa:21",
-            "--save", str(output_path),
+            "--model",
+            "gigaam-v3-e2e-ctc",
+            "--source",
+            "system",
+            "--device",
+            "pa:21",
+            "--save",
+            str(output_path),
         ],
         obj={"verbose": False, "quiet": True},
     )
@@ -102,7 +106,9 @@ def test_capture_live_gigaam_saves_finalized_segments(monkeypatch, tmp_path: Pat
 
 def test_capture_live_gigaam_no_save_prints_finalized_segments(monkeypatch) -> None:
     monkeypatch.setattr("voxfusion.capture.factory.detect_platform", lambda: "wasapi")
-    monkeypatch.setattr("voxfusion.live_gigaam.session.LiveGigaAMSessionController", _FakeController)
+    monkeypatch.setattr(
+        "voxfusion.live_gigaam.session.LiveGigaAMSessionController", _FakeController
+    )
 
     runner = CliRunner()
     result = runner.invoke(

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from voxfusion.gui.helpers import probe_media_metadata
 import voxfusion.gui.helpers as gui_helpers
+from voxfusion.gui.helpers import probe_media_metadata
 
 
 def test_probe_media_metadata_uses_extracted_audio_when_direct_probes_fail(
@@ -17,7 +17,11 @@ def test_probe_media_metadata_uses_extracted_audio_when_direct_probes_fail(
     extracted_path = tmp_path / "meeting.wav"
     extracted_path.write_bytes(b"RIFF")
 
-    monkeypatch.setattr(gui_helpers, "_probe_duration_with_soundfile", lambda path: 42.5 if path == extracted_path else None)
+    monkeypatch.setattr(
+        gui_helpers,
+        "_probe_duration_with_soundfile",
+        lambda path: 42.5 if path == extracted_path else None,
+    )
     monkeypatch.setattr(gui_helpers, "_probe_duration_with_ffprobe", lambda _path: None)
     monkeypatch.setattr(gui_helpers, "needs_extraction", lambda _path: True)
     monkeypatch.setattr(gui_helpers, "extract_audio", lambda _path: extracted_path)

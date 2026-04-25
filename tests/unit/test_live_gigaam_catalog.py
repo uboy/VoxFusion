@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import voxfusion.asr_catalog as asr_catalog
+from voxfusion import asr_catalog
 
 
 def test_gigaam_model_info_marks_live_support() -> None:

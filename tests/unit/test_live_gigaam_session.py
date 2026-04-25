@@ -17,7 +17,9 @@ from voxfusion.models.transcription import TranscriptionSegment
 from voxfusion.models.translation import TranslatedSegment
 
 
-def _segment(text: str, *, start_s: float, end_s: float, speaker: str = "SPEAKER_LOCAL") -> TranslatedSegment:
+def _segment(
+    text: str, *, start_s: float, end_s: float, speaker: str = "SPEAKER_LOCAL"
+) -> TranslatedSegment:
     return TranslatedSegment(
         diarized=DiarizedSegment(
             segment=TranscriptionSegment(
@@ -213,7 +215,10 @@ def test_live_gigaam_session_reuses_successful_drafts_by_default(tmp_path: Path)
     assert any("Live GigaAM started" in status for status in statuses)
     assert drafts and [seg.diarized.segment.text for seg in drafts[0]] == ["draft 0"]
     assert drafts[-1][0].diarized.segment.text == "draft 1"
-    assert finalized and [seg.diarized.segment.text for seg in finalized[0]] == ["draft 0", "draft 1"]
+    assert finalized and [seg.diarized.segment.text for seg in finalized[0]] == [
+        "draft 0",
+        "draft 1",
+    ]
     assert [seg.diarized.segment.text for seg in result] == ["draft 0", "draft 1"]
     assert controller._dispatcher.jobs == [(0, False), (1, False)]
     assert controller._stop_reprocessed_utterances == 0
@@ -242,7 +247,10 @@ def test_live_gigaam_session_can_force_full_stop_finalize(tmp_path: Path) -> Non
     result = asyncio.run(controller.run(threading.Event()))
 
     assert [seg.diarized.segment.text for seg in result] == ["final 0", "final 1"]
-    assert finalized and [seg.diarized.segment.text for seg in finalized[0]] == ["final 0", "final 1"]
+    assert finalized and [seg.diarized.segment.text for seg in finalized[0]] == [
+        "final 0",
+        "final 1",
+    ]
     assert controller._dispatcher.jobs == [(0, False), (1, False), (0, True), (1, True)]
     assert controller._stop_reprocessed_utterances == 2
 
@@ -269,7 +277,10 @@ def test_live_gigaam_session_uses_draft_text_when_finalize_fails(tmp_path: Path)
     result = asyncio.run(controller.run(threading.Event()))
 
     assert [seg.diarized.segment.text for seg in result] == ["draft 0", "draft 1"]
-    assert finalized and [seg.diarized.segment.text for seg in finalized[0]] == ["draft 0", "draft 1"]
+    assert finalized and [seg.diarized.segment.text for seg in finalized[0]] == [
+        "draft 0",
+        "draft 1",
+    ]
     assert not (tmp_path / "session").exists()
 
 
@@ -313,13 +324,43 @@ def test_finalize_utterance_bounds_context_inside_same_source_neighbors(tmp_path
         requested_source="microphone",
     )
     controller._utterances = [
-        LiveUtterance(seq_id=0, source="microphone", start_s=0.0, end_s=1.0, sample_rate=16000, samples=np.ones(1600, dtype=np.float32)),
-        LiveUtterance(seq_id=1, source="system", start_s=1.1, end_s=1.4, sample_rate=16000, samples=np.ones(1600, dtype=np.float32)),
-        LiveUtterance(seq_id=2, source="microphone", start_s=1.5, end_s=2.0, sample_rate=16000, samples=np.ones(1600, dtype=np.float32)),
-        LiveUtterance(seq_id=3, source="microphone", start_s=2.2, end_s=3.0, sample_rate=16000, samples=np.ones(1600, dtype=np.float32)),
+        LiveUtterance(
+            seq_id=0,
+            source="microphone",
+            start_s=0.0,
+            end_s=1.0,
+            sample_rate=16000,
+            samples=np.ones(1600, dtype=np.float32),
+        ),
+        LiveUtterance(
+            seq_id=1,
+            source="system",
+            start_s=1.1,
+            end_s=1.4,
+            sample_rate=16000,
+            samples=np.ones(1600, dtype=np.float32),
+        ),
+        LiveUtterance(
+            seq_id=2,
+            source="microphone",
+            start_s=1.5,
+            end_s=2.0,
+            sample_rate=16000,
+            samples=np.ones(1600, dtype=np.float32),
+        ),
+        LiveUtterance(
+            seq_id=3,
+            source="microphone",
+            start_s=2.2,
+            end_s=3.0,
+            sample_rate=16000,
+            samples=np.ones(1600, dtype=np.float32),
+        ),
     ]
     controller._draft_results = {
-        2: LiveGigaAMResult(seq_id=2, source="microphone", start_s=1.5, end_s=2.0, text="draft 2", worker_id=0),
+        2: LiveGigaAMResult(
+            seq_id=2, source="microphone", start_s=1.5, end_s=2.0, text="draft 2", worker_id=0
+        ),
     }
 
     class _ReadWindowRecorder:

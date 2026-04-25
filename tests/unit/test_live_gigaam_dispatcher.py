@@ -7,8 +7,8 @@ import threading
 from concurrent.futures import Future
 from types import SimpleNamespace
 
-from voxfusion.config.models import ASRConfig, LiveGigaAMConfig
 import voxfusion.live_gigaam.dispatcher as live_dispatcher
+from voxfusion.config.models import ASRConfig, LiveGigaAMConfig
 from voxfusion.live_gigaam.dispatcher import LiveASRDispatcher, _WorkerSlot
 from voxfusion.live_gigaam.types import LiveGigaAMJob, LiveGigaAMResult
 

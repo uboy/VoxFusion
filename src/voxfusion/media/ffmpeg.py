@@ -6,7 +6,6 @@ import os
 import subprocess
 from collections.abc import Sequence
 
-
 ENCODER_PRIORITY: tuple[str, ...] = ("h264_nvenc", "h264_qsv", "libx264")
 
 

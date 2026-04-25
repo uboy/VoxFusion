@@ -64,9 +64,12 @@ def test_transcribe_passes_diarization_overrides(tmp_path: Path, monkeypatch) ->
         transcribe,
         [
             str(audio_file),
-            "--diarization-strategy", "hybrid",
-            "--min-speakers", "2",
-            "--max-speakers", "5",
+            "--diarization-strategy",
+            "hybrid",
+            "--min-speakers",
+            "2",
+            "--max-speakers",
+            "5",
         ],
         obj={"verbose": False, "quiet": True},
     )

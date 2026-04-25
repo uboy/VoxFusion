@@ -31,10 +31,7 @@ class ArgosTranslationEngine:
         try:
             from argostranslate import package as argos_package
 
-            return [
-                (p.from_code, p.to_code)
-                for p in argos_package.get_installed_packages()
-            ]
+            return [(p.from_code, p.to_code) for p in argos_package.get_installed_packages()]
         except ImportError:
             return []
 
@@ -44,25 +41,22 @@ class ArgosTranslationEngine:
             from argostranslate import translate as argos_translate
         except ImportError as exc:
             raise TranslationError(
-                "argostranslate is not installed. "
-                "Install with: pip install argostranslate"
+                "argostranslate is not installed. Install with: pip install argostranslate"
             ) from exc
 
         installed = argos_translate.get_installed_languages()
-        src = next((l for l in installed if l.code == source_lang), None)
-        tgt = next((l for l in installed if l.code == target_lang), None)
+        src = next((lang for lang in installed if lang.code == source_lang), None)
+        tgt = next((lang for lang in installed if lang.code == target_lang), None)
 
         if src is None or tgt is None:
             raise UnsupportedLanguagePair(
                 f"Language pair {source_lang}->{target_lang} not installed. "
-                f"Installed: {[l.code for l in installed]}"
+                f"Installed: {[lang.code for lang in installed]}"
             )
 
         translation = src.get_translation(tgt)
         if translation is None:
-            raise UnsupportedLanguagePair(
-                f"No translation model for {source_lang}->{target_lang}"
-            )
+            raise UnsupportedLanguagePair(f"No translation model for {source_lang}->{target_lang}")
 
         return translation.translate(text)
 
@@ -95,7 +89,4 @@ class ArgosTranslationEngine:
         target_language: str,
     ) -> list[str]:
         """Translate multiple texts. Each is translated individually."""
-        return [
-            await self.translate(t, source_language, target_language)
-            for t in texts
-        ]
+        return [await self.translate(t, source_language, target_language) for t in texts]

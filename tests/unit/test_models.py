@@ -1,7 +1,5 @@
 """Unit tests for voxfusion.models data classes."""
 
-import numpy as np
-
 from voxfusion.models.audio import AudioChunk, AudioDeviceInfo
 from voxfusion.models.diarization import DiarizedSegment
 from voxfusion.models.result import TranscriptionResult
@@ -62,9 +60,7 @@ class TestTranscriptionSegment:
         assert transcription_segment.words is not None
         assert len(transcription_segment.words) == 2
 
-    def test_words_absent(
-        self, transcription_segment_no_words: TranscriptionSegment
-    ) -> None:
+    def test_words_absent(self, transcription_segment_no_words: TranscriptionSegment) -> None:
         assert transcription_segment_no_words.words is None
 
 
@@ -84,9 +80,7 @@ class TestTranslatedSegment:
         assert translated_segment.translated_text is None
         assert translated_segment.target_language is None
 
-    def test_with_translation(
-        self, translated_segment_with_translation: TranslatedSegment
-    ) -> None:
+    def test_with_translation(self, translated_segment_with_translation: TranslatedSegment) -> None:
         assert translated_segment_with_translation.translated_text == "Bonjour le monde"
         assert translated_segment_with_translation.target_language == "fr"
 

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from voxfusion.gui.i18n import detect_system_gui_language
-from voxfusion.gui.i18n import load_gui_locale
-from voxfusion.gui.i18n import normalize_gui_language
-from voxfusion.gui.i18n import resolve_initial_gui_language
+from voxfusion.gui.i18n import (
+    detect_system_gui_language,
+    load_gui_locale,
+    normalize_gui_language,
+    resolve_initial_gui_language,
+)
 from voxfusion.gui.main import TranscriptionGUI
 
 
@@ -24,9 +26,8 @@ def test_gui_quality_and_speaker_labels_accept_localized_values() -> None:
     gui = object.__new__(TranscriptionGUI)
     gui._locale = load_gui_locale("ru")
 
-    assert gui._normalize_quality_label("Качество") == "Quality"  # noqa: SLF001
-    assert gui._normalize_speaker_preset("2 говорящих") == "2"  # noqa: SLF001
-
+    assert gui._normalize_quality_label("Качество") == "Quality"
+    assert gui._normalize_speaker_preset("2 говорящих") == "2"
 
 
 def test_detect_system_gui_language_uses_supported_locale_prefix(monkeypatch) -> None:

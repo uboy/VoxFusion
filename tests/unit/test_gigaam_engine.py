@@ -24,7 +24,7 @@ class _FakeGigaAMModel:
     """Minimal fake returned by AutoModel.from_pretrained for GigaAM."""
 
     @classmethod
-    def from_pretrained(cls, _model_ref: str, **_kwargs: object) -> "_FakeGigaAMModel":
+    def from_pretrained(cls, _model_ref: str, **_kwargs: object) -> _FakeGigaAMModel:
         return cls()
 
     def transcribe(self, wav_path: str) -> str:
@@ -52,7 +52,9 @@ async def test_gigaam_engine_transcribes_with_fake_modules(monkeypatch: pytest.M
 
     monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
 
-    engine = GigaAMCTCEngine(ASRConfig(model_size="gigaam-v3-e2e-ctc", model_path="C:/models/gigaam"))
+    engine = GigaAMCTCEngine(
+        ASRConfig(model_size="gigaam-v3-e2e-ctc", model_path="C:/models/gigaam")
+    )
     chunk = AudioChunk(
         samples=np.ones(16000, dtype=np.float32),
         sample_rate=16000,
@@ -98,7 +100,9 @@ def test_prepare_huggingface_runtime_env_removes_deprecated_transformers_cache(
 
     _prepare_huggingface_runtime_env()
 
-    assert os.environ["HUGGINGFACE_HUB_CACHE"].endswith("hf-home\\hub") or os.environ["HUGGINGFACE_HUB_CACHE"].endswith("hf-home/hub")
+    assert os.environ["HUGGINGFACE_HUB_CACHE"].endswith("hf-home\\hub") or os.environ[
+        "HUGGINGFACE_HUB_CACHE"
+    ].endswith("hf-home/hub")
     assert "TRANSFORMERS_CACHE" not in os.environ
 
 
@@ -122,7 +126,9 @@ def test_install_torchscript_source_fallback_returns_original_object_on_source_e
     class _FakeJit:
         def script(self, obj, *args, **kwargs):
             del args, kwargs
-            raise RuntimeError(f"Can't get source for {obj}. TorchScript requires source access in order to carry out compilation")
+            raise RuntimeError(
+                f"Can't get source for {obj}. TorchScript requires source access in order to carry out compilation"
+            )
 
     fake_torch = types.SimpleNamespace(jit=_FakeJit())
     _install_torchscript_source_fallback(fake_torch)

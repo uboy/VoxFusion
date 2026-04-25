@@ -1,7 +1,6 @@
 """Tests for prompt-building helpers used by GUI transcript post-processing."""
 
-from voxfusion.llm.prompts import build_chunk_messages
-from voxfusion.llm.prompts import build_merge_messages
+from voxfusion.llm.prompts import build_chunk_messages, build_merge_messages
 
 
 def test_build_chunk_messages_adds_chunk_scope_prefix() -> None:
@@ -28,4 +27,3 @@ def test_build_merge_messages_references_partial_outputs() -> None:
     assert "Merge them into one final response" in messages[1]["content"]
     assert "### Partial 1" in messages[1]["content"]
     assert "Original task template:" in messages[1]["content"]
-

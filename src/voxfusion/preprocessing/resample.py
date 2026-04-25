@@ -34,9 +34,7 @@ def _resample_array(samples: np.ndarray, orig_sr: int, target_sr: int) -> np.nda
         if samples.ndim == 1:
             return np.interp(xs_new, xs_old, samples).astype(np.float32)
         # 2-D: (frames, channels) — resample each channel independently
-        channels = [
-            np.interp(xs_new, xs_old, samples[:, ch]) for ch in range(samples.shape[1])
-        ]
+        channels = [np.interp(xs_new, xs_old, samples[:, ch]) for ch in range(samples.shape[1])]
         return np.stack(channels, axis=1).astype(np.float32)
 
     divisor = gcd(orig_sr, target_sr)

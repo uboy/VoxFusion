@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from voxfusion.logging import _ensure_runtime_environment_defaults
-from voxfusion.logging import _should_suppress_log_message
+from voxfusion.logging import _ensure_runtime_environment_defaults, _should_suppress_log_message
 
 
 def test_runtime_environment_defaults_set_noise_controls(tmp_path: Path, monkeypatch) -> None:

@@ -2,6 +2,10 @@
 
 import pytest
 
+pytest.importorskip(
+    "cryptography", reason="cryptography package not installed (pip install cryptography)"
+)
+
 from voxfusion.security.encryption import (
     EncryptionError,
     decrypt_bytes,

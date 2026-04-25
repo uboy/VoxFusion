@@ -1,6 +1,6 @@
 """Tests for ASR-diarization segment alignment."""
 
-from voxfusion.diarization.alignment import SpeakerTurn, align_segments, _overlap
+from voxfusion.diarization.alignment import SpeakerTurn, _overlap, align_segments
 from voxfusion.models.transcription import TranscriptionSegment, WordTiming
 
 

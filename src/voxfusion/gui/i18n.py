@@ -46,6 +46,7 @@ def load_gui_locale(language_code: str | None) -> dict[str, str]:
         data.update(_load_locale_file(normalized))
     return data
 
+
 def detect_system_gui_language() -> str:
     """Best-effort detect the preferred GUI language from the local environment."""
     candidates = [

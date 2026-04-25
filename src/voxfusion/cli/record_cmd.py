@@ -15,25 +15,29 @@ from voxfusion.recording import AudioRecorder, create_recording_source
 
 @click.command("record")
 @click.option(
-    "--source", "-s",
+    "--source",
+    "-s",
     type=click.Choice(["microphone", "system", "both"]),
     default="microphone",
     help="Audio source to record.",
 )
 @click.option(
-    "--device", "-d",
+    "--device",
+    "-d",
     type=str,
     default=None,
     help="Audio device id from 'voxfusion devices'.",
 )
 @click.option(
-    "--duration", "-t",
+    "--duration",
+    "-t",
     type=float,
     default=None,
     help="Maximum recording duration in seconds. Unlimited if omitted.",
 )
 @click.option(
-    "--output", "-o",
+    "--output",
+    "-o",
     type=click.Path(dir_okay=False, path_type=Path),
     default=None,
     help="Output WAV file path.",

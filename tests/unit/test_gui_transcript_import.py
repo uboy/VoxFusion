@@ -99,7 +99,9 @@ def test_load_transcript_file_populates_results_table(tmp_path: Path, monkeypatc
     gui._tr = lambda key, **kwargs: key if not kwargs else f"{key}:{kwargs}"
 
     monkeypatch.setattr(gui_main, "log", fake_log)
-    monkeypatch.setattr(gui_main.filedialog, "askopenfilename", lambda **kwargs: str(transcript_path))
+    monkeypatch.setattr(
+        gui_main.filedialog, "askopenfilename", lambda **kwargs: str(transcript_path)
+    )
 
     TranscriptionGUI._load_transcript_file(gui)
 
@@ -118,7 +120,9 @@ def test_load_transcript_file_populates_results_table(tmp_path: Path, monkeypatc
     )
 
 
-def test_load_markdown_transcript_file_uses_plain_text_fallback(tmp_path: Path, monkeypatch) -> None:
+def test_load_markdown_transcript_file_uses_plain_text_fallback(
+    tmp_path: Path, monkeypatch
+) -> None:
     transcript_path = tmp_path / "meeting.md"
     transcript_path.write_text(
         "First line\n\nSecond line\n",
@@ -141,7 +145,9 @@ def test_load_markdown_transcript_file_uses_plain_text_fallback(tmp_path: Path, 
     gui._tr = lambda key, **kwargs: key if not kwargs else f"{key}:{kwargs}"
 
     monkeypatch.setattr(gui_main, "log", fake_log)
-    monkeypatch.setattr(gui_main.filedialog, "askopenfilename", lambda **kwargs: str(transcript_path))
+    monkeypatch.setattr(
+        gui_main.filedialog, "askopenfilename", lambda **kwargs: str(transcript_path)
+    )
 
     TranscriptionGUI._load_transcript_file(gui)
 
@@ -178,7 +184,9 @@ def test_load_srt_transcript_file_populates_results_table(tmp_path: Path, monkey
     gui._tr = lambda key, **kwargs: key if not kwargs else f"{key}:{kwargs}"
 
     monkeypatch.setattr(gui_main, "log", fake_log)
-    monkeypatch.setattr(gui_main.filedialog, "askopenfilename", lambda **kwargs: str(transcript_path))
+    monkeypatch.setattr(
+        gui_main.filedialog, "askopenfilename", lambda **kwargs: str(transcript_path)
+    )
 
     TranscriptionGUI._load_transcript_file(gui)
 
@@ -214,7 +222,9 @@ def test_load_vtt_transcript_file_populates_results_table(tmp_path: Path, monkey
     gui._tr = lambda key, **kwargs: key if not kwargs else f"{key}:{kwargs}"
 
     monkeypatch.setattr(gui_main, "log", fake_log)
-    monkeypatch.setattr(gui_main.filedialog, "askopenfilename", lambda **kwargs: str(transcript_path))
+    monkeypatch.setattr(
+        gui_main.filedialog, "askopenfilename", lambda **kwargs: str(transcript_path)
+    )
 
     TranscriptionGUI._load_transcript_file(gui)
 

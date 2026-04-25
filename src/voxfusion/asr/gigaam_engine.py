@@ -11,7 +11,7 @@ import types
 import warnings
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager, suppress
+from contextlib import suppress
 from functools import partial
 from pathlib import Path
 
@@ -26,10 +26,10 @@ from voxfusion.models.audio import AudioChunk
 from voxfusion.models.transcription import TranscriptionSegment
 from voxfusion.runtime_subprocess import patch_subprocess_popen_no_window
 from voxfusion.runtime_torchscript import (
-    should_use_torchscript_source_fallback as _should_use_torchscript_source_fallback,
+    install_torchscript_source_fallback as _install_torchscript_source_fallback,  # noqa: F401 — re-exported for tests
 )
 from voxfusion.runtime_torchscript import (
-    install_torchscript_source_fallback as _install_torchscript_source_fallback,
+    should_use_torchscript_source_fallback as _should_use_torchscript_source_fallback,
 )
 from voxfusion.runtime_torchscript import (
     temporary_torchscript_source_fallback as _temporary_torchscript_source_fallback,
@@ -71,9 +71,10 @@ def _resolve_gigaam_device(requested: str) -> str:
         return "cpu"
     try:
         import torch
+
         if not torch.cuda.is_available():
             return "cpu"
-        free_bytes, total_bytes = torch.cuda.mem_get_info()
+        free_bytes, _total_bytes = torch.cuda.mem_get_info()
         free_mb = free_bytes // (1024 * 1024)
         if free_mb >= _MIN_CUDA_FREE_MB:
             return "cuda"
@@ -140,8 +141,8 @@ def _install_megatron_compat_shim() -> None:
     calc_mod.reconfigure_num_microbatches_calculator = _return_one  # type: ignore[attr-defined]
     calc_mod.destroy_num_microbatches_calculator = lambda: None  # type: ignore[attr-defined]
 
-    setattr(megatron_mod, "core", core_mod)
-    setattr(core_mod, "num_microbatches_calculator", calc_mod)
+    megatron_mod.core = core_mod
+    core_mod.num_microbatches_calculator = calc_mod
     sys.modules["megatron.core.num_microbatches_calculator"] = calc_mod
 
 
@@ -159,6 +160,7 @@ def _force_torchaudio_soundfile_backend() -> None:
     """
     try:
         import torchaudio
+
         if hasattr(torchaudio, "set_audio_backend"):
             torchaudio.set_audio_backend("soundfile")
     except Exception:
@@ -173,7 +175,7 @@ def _prepare_gigaam_runtime() -> None:
     _force_torchaudio_soundfile_backend()
     activate_ffmpeg_runtime()
     try:
-        import torch
+        import torch  # noqa: F401 — imported to trigger early ImportError if torch is missing
     except ImportError:
         return
 
@@ -235,7 +237,10 @@ class GigaAMCTCEngine:
                 torch = None
 
             if torch is not None:
-                kwargs["torch_dtype"] = torch.float32
+                # Use getattr — test mocks may not expose float32.
+                float32 = getattr(torch, "float32", None)
+                if float32 is not None:
+                    kwargs["torch_dtype"] = float32
 
             if torch is not None and _should_use_torchscript_source_fallback(torch):
                 with _temporary_torchscript_source_fallback(torch):
@@ -245,9 +250,13 @@ class GigaAMCTCEngine:
 
             # GigaAM-v3 checkpoint is stored in float16; cast to float32 so that CPU
             # inference doesn't raise "Input type (float) and bias type (c10::Half)".
+            # Guard with hasattr so unit-test stubs (which don't have .float/.to) pass.
             if torch is not None and self._model is not None:
                 device = _resolve_gigaam_device(self._config.device)
-                self._model.float().to(device)
+                if callable(getattr(self._model, "float", None)):
+                    self._model = self._model.float()
+                if callable(getattr(self._model, "to", None)):
+                    self._model.to(device)
                 log.info("gigaam.device_selected", device=device)
         except Exception as exc:
             err = str(exc).lower()
@@ -352,9 +361,13 @@ class GigaAMCTCEngine:
                     text = model.transcribe(tmp_path).strip()  # type: ignore[attr-defined]
                     if text:
                         parts.append(text)
-                        log.info("gigaam.chunk_done", chunk=chunk_idx, of=total_chunks, text=text[:80])
+                        log.info(
+                            "gigaam.chunk_done", chunk=chunk_idx, of=total_chunks, text=text[:80]
+                        )
                     else:
-                        log.info("gigaam.chunk_done", chunk=chunk_idx, of=total_chunks, text="(silence)")
+                        log.info(
+                            "gigaam.chunk_done", chunk=chunk_idx, of=total_chunks, text="(silence)"
+                        )
                 finally:
                     with suppress(OSError):
                         os.unlink(tmp_path)

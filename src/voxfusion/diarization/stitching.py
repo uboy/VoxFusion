@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import cache
 from typing import TypeAlias
 
 from voxfusion.diarization.alignment import SpeakerTurn
@@ -73,7 +73,10 @@ def _boundary_pair_scores(
 ) -> dict[tuple[str, str], float]:
     scores: dict[tuple[str, str], float] = {}
     for left_turn in left_turns:
-        if _overlap_seconds(left_turn.start_time, left_turn.end_time, overlap_start, overlap_end) <= 0:
+        if (
+            _overlap_seconds(left_turn.start_time, left_turn.end_time, overlap_start, overlap_end)
+            <= 0
+        ):
             continue
         for right_turn in right_turns:
             shared = _shared_overlap(left_turn, right_turn, overlap_start, overlap_end)
@@ -91,7 +94,7 @@ def _maximize_boundary_matches(
 ) -> list[tuple[str, str, float]]:
     """Return the maximum-weight one-to-one match across one chunk boundary."""
 
-    @lru_cache(maxsize=None)
+    @cache
     def _solve(left_index: int, used_mask: int) -> tuple[float, tuple[tuple[str, str, float], ...]]:
         if left_index >= len(left_ids):
             return 0.0, ()
@@ -108,7 +111,7 @@ def _maximize_boundary_matches(
             total_score = score + tail_score
             if total_score > best_score:
                 best_score = total_score
-                best_pairs = ((left_id, right_id, score),) + tail_pairs
+                best_pairs = ((left_id, right_id, score), *tail_pairs)
         return best_score, best_pairs
 
     return list(_solve(0, 0)[1])
@@ -147,7 +150,9 @@ def stitch_chunk_speakers(
             continue
         left_ids = tuple(sorted({left_id for left_id, _right_id in pair_scores}))
         right_ids = tuple(sorted({right_id for _left_id, right_id in pair_scores}))
-        for left_id, right_id, score in _maximize_boundary_matches(left_ids, right_ids, pair_scores):
+        for left_id, right_id, score in _maximize_boundary_matches(
+            left_ids, right_ids, pair_scores
+        ):
             if score <= 0:
                 continue
             union_find.union((boundary_index - 1, left_id), (boundary_index, right_id))
@@ -159,9 +164,7 @@ def stitch_chunk_speakers(
     ordered_components = sorted(
         components.values(),
         key=lambda component: min(
-            turn.start_time
-            for node in component
-            for turn in node_turns[node]
+            turn.start_time for node in component for turn in node_turns[node]
         ),
     )
     component_to_global_id = {
@@ -169,7 +172,7 @@ def stitch_chunk_speakers(
         for index, component in enumerate(ordered_components)
     }
 
-    per_chunk_mappings: list[dict[str, str]] = [dict() for _ in per_chunk_turns]
+    per_chunk_mappings: list[dict[str, str]] = [{} for _ in per_chunk_turns]
     for component in ordered_components:
         global_id = component_to_global_id[tuple(sorted(component))]
         for chunk_index, local_speaker_id in component:
@@ -178,6 +181,6 @@ def stitch_chunk_speakers(
 
 
 __all__ = [
-    "stitch_chunk_speakers",
     "_maximize_boundary_matches",
+    "stitch_chunk_speakers",
 ]

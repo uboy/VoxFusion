@@ -22,8 +22,10 @@ from voxfusion.logging import get_logger
 from voxfusion.models.audio import AudioChunk
 from voxfusion.models.diarization import DiarizedSegment
 from voxfusion.models.transcription import TranscriptionSegment
-from voxfusion.runtime_torchscript import should_use_torchscript_source_fallback
-from voxfusion.runtime_torchscript import temporary_torchscript_source_fallback
+from voxfusion.runtime_torchscript import (
+    should_use_torchscript_source_fallback,
+    temporary_torchscript_source_fallback,
+)
 
 log = get_logger(__name__)
 
@@ -55,9 +57,7 @@ def _extract_annotation(diarization_output: object) -> object:
     if speaker_diarization is not None and hasattr(speaker_diarization, "itertracks"):
         return speaker_diarization
 
-    raise DiarizationError(
-        "Unsupported pyannote diarization output: missing speaker annotation"
-    )
+    raise DiarizationError("Unsupported pyannote diarization output: missing speaker annotation")
 
 
 def _extract_exclusive_annotation(diarization_output: object) -> object | None:
@@ -124,11 +124,13 @@ def _annotation_to_turns(
         duration = getattr(turn, "duration", max(0.0, turn.end - turn.start))
         if duration < min_segment_duration:
             continue
-        turns.append(SpeakerTurn(
-            speaker_id=speaker,
-            start_time=turn.start,
-            end_time=turn.end,
-        ))
+        turns.append(
+            SpeakerTurn(
+                speaker_id=speaker,
+                start_time=turn.start,
+                end_time=turn.end,
+            )
+        )
     return turns
 
 
@@ -177,8 +179,7 @@ class PyAnnoteDiarizer:
             from pyannote.audio import Pipeline
         except ImportError as exc:
             raise DiarizationError(
-                "pyannote.audio is not installed. "
-                "Install with: pip install pyannote.audio"
+                "pyannote.audio is not installed. Install with: pip install pyannote.audio"
             ) from exc
 
         token = (
@@ -220,7 +221,7 @@ class PyAnnoteDiarizer:
         except Exception as exc:
             raise DiarizationError(f"Failed to load pyannote pipeline: {exc}") from exc
 
-        if self._config.device == "auto" or self._config.device == "cuda":
+        if self._config.device in {"auto", "cuda"}:
             try:
                 import torch
 
@@ -300,7 +301,8 @@ class PyAnnoteDiarizer:
             turns=_shift_turns(result.turns, audio.timestamp_start),
             exclusive_turns=(
                 _shift_turns(result.exclusive_turns, audio.timestamp_start)
-                if result.exclusive_turns is not None else None
+                if result.exclusive_turns is not None
+                else None
             ),
         )
 

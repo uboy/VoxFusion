@@ -233,13 +233,14 @@ ASR_MODEL_CATALOG: tuple[ASRModelInfo, ...] = (
         engine="gigaam",
         description=(
             "End-to-end CTC with automatic punctuation and text normalisation. "
-            "~3.0 % WER. Slightly faster inference than the RNN-T variant."
+            "~3.0 % WER. Slightly faster inference than the RNN-T variant. "
+            "Supports live capture via draft+finalize mode."
         ),
         accuracy_score=0.92,
         speed_score=0.70,
         supported_languages=("ru",),
         supports_translation=False,
-        supports_live_capture=False,
+        supports_live_capture=True,
         recommended=False,
         requires_packages=(
             "transformers",
@@ -307,9 +308,31 @@ ASR_MODEL_CATALOG: tuple[ASRModelInfo, ...] = (
         accuracy_score=0.80,
         speed_score=0.85,
         supported_languages=(
-            "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de",
-            "el", "hu", "it", "lv", "lt", "mt", "pl", "pt", "ro", "sk",
-            "sl", "es", "sv", "ru", "uk",
+            "bg",
+            "hr",
+            "cs",
+            "da",
+            "nl",
+            "en",
+            "et",
+            "fi",
+            "fr",
+            "de",
+            "el",
+            "hu",
+            "it",
+            "lv",
+            "lt",
+            "mt",
+            "pl",
+            "pt",
+            "ro",
+            "sk",
+            "sl",
+            "es",
+            "sv",
+            "ru",
+            "uk",
         ),
         supports_language_selection=False,
         supports_translation=False,
@@ -370,9 +393,7 @@ QUALITY_PRESETS: dict[str, dict[str, object]] = {
 }
 
 #: Map label → key (e.g. "Balanced" → "balanced").
-_PRESET_LABEL_TO_KEY: dict[str, str] = {
-    label: label.lower() for label in QUALITY_PRESET_LABELS
-}
+_PRESET_LABEL_TO_KEY: dict[str, str] = {label: label.lower() for label in QUALITY_PRESET_LABELS}
 
 
 def get_quality_preset(label_or_key: str) -> dict[str, object]:

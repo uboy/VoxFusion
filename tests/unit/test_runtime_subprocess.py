@@ -22,7 +22,9 @@ def test_patch_subprocess_popen_no_window_sets_creationflags(monkeypatch) -> Non
             seen["kwargs"] = kwargs
 
     monkeypatch.setattr(runtime_subprocess.subprocess, "Popen", DummyPopen)
-    monkeypatch.setattr(runtime_subprocess.subprocess, "STARTUPINFO", _DummyStartupInfo, raising=False)
+    monkeypatch.setattr(
+        runtime_subprocess.subprocess, "STARTUPINFO", _DummyStartupInfo, raising=False
+    )
     monkeypatch.setattr(runtime_subprocess.subprocess, "STARTF_USESHOWWINDOW", 1, raising=False)
     monkeypatch.setattr(runtime_subprocess.subprocess, "SW_HIDE", 0, raising=False)
     monkeypatch.setattr(runtime_subprocess.sys, "platform", "win32")
@@ -45,7 +47,9 @@ def test_patch_subprocess_popen_no_window_detects_pythonw(monkeypatch) -> None:
             seen["kwargs"] = kwargs
 
     monkeypatch.setattr(runtime_subprocess.subprocess, "Popen", DummyPopen)
-    monkeypatch.setattr(runtime_subprocess.subprocess, "STARTUPINFO", _DummyStartupInfo, raising=False)
+    monkeypatch.setattr(
+        runtime_subprocess.subprocess, "STARTUPINFO", _DummyStartupInfo, raising=False
+    )
     monkeypatch.setattr(runtime_subprocess.subprocess, "STARTF_USESHOWWINDOW", 1, raising=False)
     monkeypatch.setattr(runtime_subprocess.subprocess, "SW_HIDE", 0, raising=False)
     monkeypatch.setattr(runtime_subprocess.sys, "platform", "win32")

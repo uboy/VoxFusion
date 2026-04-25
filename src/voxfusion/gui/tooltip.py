@@ -31,7 +31,7 @@ class ToolTip:
     SHOW_DELAY_MS: int = 400
     AUTO_HIDE_MS: int = 4500
     WRAP_LENGTH_PX: int = 320
-    _active_tip: "ToolTip | None" = None
+    _active_tip: ToolTip | None = None
 
     def __init__(self, widget: tk.Widget, text: str) -> None:
         self._widget = widget

@@ -1,10 +1,10 @@
 """Tests for translation backend registry and engine instantiation."""
 
+import pytest
+
 from voxfusion.config.models import TranslationConfig
 from voxfusion.exceptions import ConfigurationError
 from voxfusion.translation.registry import get_backend, list_backends
-
-import pytest
 
 
 class TestTranslationRegistry:
@@ -51,17 +51,20 @@ class TestNLLBLangMap:
 
     def test_known_language(self):
         from voxfusion.translation.nllb_engine import _to_nllb_code
+
         assert _to_nllb_code("en") == "eng_Latn"
         assert _to_nllb_code("fr") == "fra_Latn"
         assert _to_nllb_code("zh") == "zho_Hans"
 
     def test_passthrough_nllb_code(self):
         from voxfusion.translation.nllb_engine import _to_nllb_code
+
         assert _to_nllb_code("eng_Latn") == "eng_Latn"
 
     def test_unknown_language_raises(self):
-        from voxfusion.translation.nllb_engine import _to_nllb_code
         from voxfusion.exceptions import UnsupportedLanguagePair
+        from voxfusion.translation.nllb_engine import _to_nllb_code
+
         with pytest.raises(UnsupportedLanguagePair):
             _to_nllb_code("xx")
 
@@ -71,15 +74,18 @@ class TestLibreTranslateEngine:
 
     def test_default_url(self):
         from voxfusion.translation.libretranslate import LibreTranslateEngine
+
         engine = LibreTranslateEngine()
         assert engine._api_url == "http://localhost:5000"
 
     def test_custom_url(self):
         from voxfusion.translation.libretranslate import LibreTranslateEngine
+
         engine = LibreTranslateEngine(api_url="http://myserver:8080/")
         assert engine._api_url == "http://myserver:8080"
 
     def test_api_key_stored(self):
         from voxfusion.translation.libretranslate import LibreTranslateEngine
+
         engine = LibreTranslateEngine(api_key="test-key")
         assert engine._api_key == "test-key"

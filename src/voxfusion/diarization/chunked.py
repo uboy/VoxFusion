@@ -23,7 +23,7 @@ from voxfusion.models.diarization import DiarizedSegment
 from voxfusion.models.transcription import TranscriptionSegment
 
 if TYPE_CHECKING:
-    from voxfusion.pipeline.events import PipelineEvent
+    pass
 
 log = get_logger(__name__)
 
@@ -152,9 +152,7 @@ class ChunkedDiarizer:
         self._chunk_duration_s = chunk_duration_s
         self._chunk_overlap_s = chunk_overlap_s
         self._device = device
-        self._max_workers = (
-            max_workers if max_workers is not None else _default_max_workers(device)
-        )
+        self._max_workers = max_workers if max_workers is not None else _default_max_workers(device)
         self._on_chunk_progress = on_chunk_progress
         self._inner: object | None = None
 
