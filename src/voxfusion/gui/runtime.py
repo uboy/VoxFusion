@@ -385,6 +385,11 @@ class LLMWorker:
         self._on_error = on_error
         self._on_finished = on_finished
         self._thread: threading.Thread | None = None
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        """Request cancellation of the ongoing LLM request."""
+        self._cancelled = True
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -394,7 +399,8 @@ class LLMWorker:
         try:
             asyncio.run(self._run_async())
         except Exception as exc:
-            self._on_error(str(exc))
+            if not self._cancelled:
+                self._on_error(str(exc))
         finally:
             self._on_finished()
 
@@ -545,6 +551,8 @@ class LLMWorker:
 
         partial_outputs: list[str] = []
         for chunk_index, chunk_text in enumerate(chunks, start=1):
+            if self._cancelled:
+                return ""
             log.info(
                 "llm.chunking.chunk_start",
                 model=self._model,
@@ -596,6 +604,8 @@ class LLMWorker:
             )
             next_outputs: list[str] = []
             for batch_index, batch_text in enumerate(batches, start=1):
+                if self._cancelled:
+                    return ""
                 merge_messages = build_merge_messages(
                     self._prompt_name,
                     batch_text,
@@ -634,9 +644,11 @@ class LLMWorker:
         if self._needs_chunked_summary(messages):
             try:
                 final_output = await self._summarize_chunks("estimated_context", messages)
-                self._on_token(final_output)
+                if not self._cancelled and final_output:
+                    self._on_token(final_output)
             except LLMError as exc:
-                self._on_error(str(exc))
+                if not self._cancelled:
+                    self._on_error(str(exc))
             return
 
         try:
@@ -646,6 +658,8 @@ class LLMWorker:
                 model=self._model,
                 api_key=self._api_key,
             ):
+                if self._cancelled:
+                    return
                 self._on_token(token)
         except LLMError as exc:
             if self._looks_like_context_length_error(str(exc)):

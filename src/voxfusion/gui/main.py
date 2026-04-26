@@ -1203,6 +1203,12 @@ class TranscriptionGUI:
         self._llm_summarize_btn.pack(side=tk.LEFT, padx=(0, 4))
         self._bind_text(self._llm_summarize_btn, "file.button.send_to_llm")
         self._bind_tooltip(self._llm_summarize_btn, "tooltip.llm.send")
+        self._llm_cancel_btn = ttk.Button(
+            llm_cfg, text="", command=self._cancel_llm_summarize, state=tk.DISABLED
+        )
+        self._llm_cancel_btn.pack(side=tk.LEFT, padx=(0, 4))
+        self._bind_text(self._llm_cancel_btn, "llm.button.cancel")
+        self._bind_tooltip(self._llm_cancel_btn, "tooltip.llm.cancel")
         self._llm_copy_btn = ttk.Button(llm_cfg, text="", command=self._copy_llm_output)
         self._llm_copy_btn.pack(side=tk.LEFT, padx=(0, 4))
         self._bind_text(self._llm_copy_btn, "file.button.copy")
@@ -2338,6 +2344,9 @@ class TranscriptionGUI:
             and not self._llm_preflight_running
         )
         self._llm_summarize_btn.configure(state=(tk.NORMAL if llm_enabled else tk.DISABLED))
+        llm_cancellable = self._llm_worker is not None and not self._llm_preflight_running
+        if hasattr(self, "_llm_cancel_btn"):
+            self._llm_cancel_btn.configure(state=(tk.NORMAL if llm_cancellable else tk.DISABLED))
         llm_probe_enabled = (
             self._llm_worker is None
             and self._file_worker is None
@@ -3387,9 +3396,7 @@ class TranscriptionGUI:
         if self._file_worker is not None:
             self._file_batch_cancel_requested = True
             self._file_cancel_btn.configure(state=tk.DISABLED)
-            self._file_status_label.configure(
-                text=self._tr("file.status.cancelling_queue"), foreground=""
-            )
+            self._set_file_status(self._tr("file.status.cancelling_queue"))
             self._file_worker.cancel()
 
     def _download_file_model(self) -> None:
@@ -3965,19 +3972,33 @@ class TranscriptionGUI:
         self._append_llm_token(f"\n\n[ERROR] {message}\n")
         self._refresh_file_workflow()
 
+    def _cancel_llm_summarize(self) -> None:
+        if self._llm_worker is not None:
+            self._llm_cancel_btn.configure(state=tk.DISABLED)
+            self._llm_worker.cancel()
+            self._set_llm_status(self._tr("llm.status.cancelled"))
+            log.info("gui.llm_cancelled")
+
     def _on_llm_finished(self) -> None:
+        was_cancelled = self._llm_worker is not None and self._llm_worker._cancelled
         log.info(
             "gui.llm_finished",
             base_url=self._llm_url_var.get().strip() or DEFAULT_BASE_URL,
             model=self._llm_model_var.get().strip() or DEFAULT_MODEL,
             prompt_name=self._llm_prompt_var.get().strip() or "summarize",
             success=self._llm_last_error_message is None,
+            cancelled=was_cancelled,
         )
         self._llm_worker = None
         self._llm_summarize_btn.configure(state=tk.NORMAL)
-        current = self._llm_status_label.cget("text")
-        if not str(current).startswith(self._tr("llm.status.error", message="").split("{", 1)[0]):
-            self._llm_status_label.configure(text=self._tr("llm.status.done"))
+        if was_cancelled:
+            self._set_llm_status(self._tr("llm.status.cancelled"))
+        else:
+            current = self._llm_status_label.cget("text")
+            if not str(current).startswith(
+                self._tr("llm.status.error", message="").split("{", 1)[0]
+            ):
+                self._set_llm_status(self._tr("llm.status.done"))
         self._refresh_file_workflow()
 
     def _clear_llm_output(self) -> None:
