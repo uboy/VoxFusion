@@ -91,6 +91,9 @@ jobs:
       - name: Check gui.main
         run: python -c "from voxfusion.gui.main import TranscriptionGUI; print('gui.main OK')"
 
+      - name: Collect tests
+        run: xvfb-run pytest tests/unit/ --co -q 2>&1 | tail -5
+
       - name: Run unit tests
         run: |
           xvfb-run pytest tests/unit/ \
