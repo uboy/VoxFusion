@@ -77,4 +77,6 @@ jobs:
         run: pip install pytest pytest-asyncio
 
       - name: Run unit tests
-        run: xvfb-run pytest tests/unit/ -q --tb=short
+        run: |
+          python -c "import torch, ctranslate2, sounddevice, numpy; print('native extensions OK')"
+          xvfb-run pytest tests/unit/ -q --tb=short
