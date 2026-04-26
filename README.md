@@ -194,12 +194,12 @@ voxfusion transcribe test.wav --model gigaam-v3-e2e-ctc
 
 ### Model sizes
 
-| Model | Size | Languages |
-|-------|------|-----------|
-| GigaAM v3 | ~1.5 GB | Russian |
-| Whisper large-v3 | ~3 GB | 99 languages |
-| Pyannote segmentation-3.0 | ~200 MB | - |
-| Pyannote speaker-diarization-3.1 | ~100 MB | - |
+| Model | Size | Languages | Quality |
+|-------|------|-----------|---------|
+| GigaAM v3 | ~1.5 GB | Russian (primary), English | Best for RU, excellent for EN |
+| Whisper large-v3 | ~3 GB | 99 languages | Good multilingual, slower |
+| Pyannote segmentation-3.0 | ~200 MB | - | Diarization support |
+| Pyannote speaker-diarization-3.1 | ~100 MB | - | Diarization support |
 
 ## Running
 
