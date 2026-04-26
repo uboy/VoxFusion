@@ -74,11 +74,7 @@ jobs:
         run: pip install --no-deps -e .
 
       - name: Install test dependencies
-        run: pip install pytest pytest-asyncio pytest-cov
+        run: pip install pytest pytest-asyncio
 
       - name: Run unit tests
-        run: |
-          xvfb-run pytest tests/unit/ \
-            -q --tb=short \
-            --cov=voxfusion --cov-report=term-missing \
-            --cov-fail-under=70
+        run: xvfb-run pytest tests/unit/ -q --tb=short

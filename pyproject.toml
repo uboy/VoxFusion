@@ -262,7 +262,7 @@ filterwarnings = [
 
 [tool.coverage.run]
 source = ["src/voxfusion"]
-branch = false
+branch = true
 omit = [
     "src/voxfusion/gui/*",
     "src/voxfusion/capture/wasapi.py",
