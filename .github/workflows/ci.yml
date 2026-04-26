@@ -29,8 +29,8 @@ jobs:
             ruff mypy \
             types-PyYAML types-tqdm
 
-      - name: Install package (editable)
-        run: pip install -e .
+      - name: Install package (editable, no deps)
+        run: pip install --no-deps -e .
 
       - name: Ruff lint
         run: ruff check src/ tests/
@@ -70,8 +70,8 @@ jobs:
             typing-extensions "transformers>=4.48,<5.0" \
             cryptography
 
-      - name: Install package (editable)
-        run: pip install -e .
+      - name: Install package (editable, no deps)
+        run: pip install --no-deps -e .
 
       - name: Install test dependencies
         run: pip install pytest pytest-asyncio pytest-cov pytest-xdist
@@ -84,6 +84,8 @@ jobs:
           python -c "import sounddevice; print('sounddevice', sounddevice.__version__)"
           python -c "import tkinter; print('tkinter OK')"
           python -c "from voxfusion.version import __version__; print('voxfusion', __version__)"
+          python -c "import voxfusion; print('voxfusion package OK')"
+          python -c "from voxfusion.gui.main import TranscriptionGUI; print('gui.main OK')"
 
       - name: Run unit tests
         run: |
