@@ -592,6 +592,10 @@ def create_capture_source(
 - Model download flows are backend-specific:
   - Whisper: first-use download via `faster-whisper`
   - GigaAM: Hugging Face `AutoModel.from_pretrained("ai-sage/GigaAM-v3", trust_remote_code=True)`
+    — **security note**: `trust_remote_code=True` executes Python code shipped inside the
+    HuggingFace repository at model-load time. This is mandatory for GigaAM (custom
+    architecture files). VoxFusion pins the branch revision to limit exposure and logs a
+    warning on every load. See `README.md § Security` for full details.
   - Breeze: `AutoProcessor` + `AutoModelForSpeechSeq2Seq`
   - Parakeet: `nemo.collections.asr.models.ASRModel.from_pretrained(...)`
 - Verified limitation: optional backend routing and GUI/CLI integration are covered by unit/integration tests, but true end-to-end transcription still depends on local model availability and platform/runtime prerequisites.

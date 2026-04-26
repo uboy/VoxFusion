@@ -247,6 +247,32 @@ The GUI file-transcription tab also persists speaker-separation settings and reu
 - [`docs/BINARY_BUILD.md`](docs/BINARY_BUILD.md) — binary packaging and Windows notes
 - [`docs/QUICK_START_RU.md`](docs/QUICK_START_RU.md) — quick start guide in Russian
 
+## Security
+
+### GigaAM — `trust_remote_code=True`
+
+Loading GigaAM models calls `AutoModel.from_pretrained(..., trust_remote_code=True)`.
+This flag allows the HuggingFace repository to execute arbitrary Python code on your
+machine during model loading. It is **required by GigaAM** because the model
+architecture is defined in custom Python files hosted in the `ai-sage/GigaAM-v3`
+repository.
+
+**What this means in practice:**
+
+- Code runs from the HuggingFace repo at download/load time.
+- If the repo is compromised (supply-chain attack), malicious code could execute with
+  your user privileges.
+- Mitigation: VoxFusion pins specific branch revisions (`e2e_ctc`, `ctc`, etc.) so you
+  only load what was available at that revision, not arbitrary future commits. For full
+  supply-chain protection, pin a specific commit hash via `model_path` pointing to a
+  local copy.
+
+**Who this affects:** Only users who download or use GigaAM models. All other backends
+(faster-whisper, Breeze, Parakeet) do **not** use `trust_remote_code=True`.
+
+VoxFusion logs a warning every time a model is loaded with `trust_remote_code=True` so
+the action is always visible in the application log.
+
 ## License
 
 GPLv2. All contributions and derivative works must remain open-source under the same license.

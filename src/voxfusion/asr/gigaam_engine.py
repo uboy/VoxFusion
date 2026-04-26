@@ -224,6 +224,15 @@ class GigaAMCTCEngine:
             ) from exc
 
         token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN") or None
+        log.warning(
+            "gigaam.trust_remote_code",
+            model_ref=model_ref,
+            reason=(
+                "GigaAM ships custom Python architecture files that must run locally. "
+                "Only load models from sources you trust. "
+                "See README.md § Security for details."
+            ),
+        )
         try:
             kwargs: dict = {"trust_remote_code": True, "token": token}
             if local_only:

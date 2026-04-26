@@ -76,6 +76,11 @@ def models_download(
                     f"  Downloading ai-sage/GigaAM-v3 (revision={revision}) from HuggingFace..."
                 )
                 click.echo("  This may take several minutes (~1.5 GB)...")
+                click.echo(
+                    "  NOTE: GigaAM uses trust_remote_code=True — the model repo contains "
+                    "custom Python code that will run on your machine. "
+                    "Only download from sources you trust. See README.md § Security."
+                )
                 AutoModel.from_pretrained(
                     "ai-sage/GigaAM-v3",
                     revision=revision,
