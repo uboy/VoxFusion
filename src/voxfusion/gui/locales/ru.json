@@ -254,5 +254,10 @@
   "llm.context.env": "Используется override из окружения: {tokens} токенов.",
   "llm.context.default": "Используется fallback-контекст: {tokens} токенов.",
   "llm.context.invalid": "Некорректное ручное значение контекста. Введи целое число >= 512 или оставь поле пустым.",
-  "tooltip.llm.context": "Необязательный ручной override размера контекстного окна в токенах. Если поле пустое, используется metadata модели или fallback-лимит."
+  "tooltip.llm.context": "Необязательный ручной override размера контекстного окна в токенах. Если поле пустое, используется metadata модели или fallback-лимит.",
+  "header.about": "О программе",
+  "about.title": "О программе VoxFusion",
+  "about.version": "Версия: {version}",
+  "about.license": "Лицензия: GPL-2.0",
+  "about.website": "Сайт:"
 }

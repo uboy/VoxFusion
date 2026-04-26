@@ -23,7 +23,7 @@ def _retry_download(fn: "callable", label: str) -> object:
             is_transient = any(kw in msg for kw in _TRANSIENT_KEYWORDS)
             if attempt == _MAX_ATTEMPTS or not is_transient:
                 raise
-            delay = _BACKOFF_BASE_S ** attempt
+            delay = _BACKOFF_BASE_S**attempt
             click.echo(
                 f"  Network error (attempt {attempt}/{_MAX_ATTEMPTS}): {exc}. "
                 f"Retrying in {delay:.0f}s…"

@@ -507,6 +507,10 @@ class TranscriptionGUI:
         header_controls = ttk.Frame(header)
         header_controls.pack(side=tk.RIGHT)
 
+        self._about_button = ttk.Button(header_controls, text="", command=self._open_about)
+        self._about_button.pack(side=tk.RIGHT, padx=(8, 0))
+        self._bind_text(self._about_button, "header.about")
+
         self._settings_button = ttk.Button(header_controls, text="", command=self._open_settings)
         self._settings_button.pack(side=tk.RIGHT, padx=(8, 0))
         self._bind_text(self._settings_button, "header.settings")
@@ -1220,9 +1224,7 @@ class TranscriptionGUI:
         self._file_detect_btn.configure(text=self._tr("file.button.detect"))
         self._refresh_file_diarization_controls()
         if error:
-            self._set_file_status(
-                self._tr("file.status.detect_failed", error=error), level="error"
-            )
+            self._set_file_status(self._tr("file.status.detect_failed", error=error), level="error")
             return
         if count is None or count == 0:
             self._set_file_status(self._tr("file.status.detect_empty"), level="warning")
@@ -1922,7 +1924,9 @@ class TranscriptionGUI:
                     )
                 )
                 return
-            self._set_llm_status(self._tr("file.status.model_load_failed", error=error), level="error")
+            self._set_llm_status(
+                self._tr("file.status.model_load_failed", error=error), level="error"
+            )
             return
         model_ids = [descriptor.id for descriptor in models]
         model_contexts = self._model_context_map(models)
@@ -2022,6 +2026,43 @@ class TranscriptionGUI:
                 self._tr("llm.status.model_failed", error=detail[:80]), level="error"
             )
         self._refresh_file_workflow()
+
+    def _open_about(self) -> None:
+        """Show About dialog with version, website, and license."""
+        from voxfusion.version import __version__
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title(self._tr("about.title"))
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        frame = ttk.Frame(dlg, padding=16)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(frame, text="VoxFusion", font=("", 14, "bold")).pack(anchor="w")
+        ttk.Label(frame, text=self._tr("about.version", version=__version__)).pack(
+            anchor="w", pady=(8, 0)
+        )
+        ttk.Label(frame, text=self._tr("about.license")).pack(anchor="w", pady=(4, 0))
+        ttk.Label(frame, text=self._tr("about.website")).pack(anchor="w", pady=(4, 0))
+        link = ttk.Label(
+            frame, text="https://github.com/uboy/VoxFusion", foreground="blue", cursor="hand2"
+        )
+        link.pack(anchor="w")
+
+        def _open_url(_event: tk.Event[object]) -> None:
+            import webbrowser
+
+            webbrowser.open("https://github.com/uboy/VoxFusion")
+
+        link.bind("<Button-1>", _open_url)
+
+        ttk.Button(frame, text="OK", command=dlg.destroy, width=10).pack(pady=(16, 0))
+
+        # Center on parent
+        dlg.geometry(f"+{self.root.winfo_root_x() + 100}+{self.root.winfo_root_y() + 100}")
+        dlg.wait_window()
 
     def _open_settings(self) -> None:
         """Open the application settings dialog (proxy / network)."""

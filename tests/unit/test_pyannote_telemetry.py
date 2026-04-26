@@ -13,6 +13,8 @@ import threading
 
 import pytest
 
+pyannote = pytest.importorskip("pyannote")
+
 
 @pytest.mark.unit
 def test_pyannote_telemetry_is_disabled_after_gigaam_import() -> None:

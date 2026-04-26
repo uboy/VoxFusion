@@ -441,9 +441,7 @@ class FileTranscriptionTab:
         _gui._llm_url_entry = ttk.Entry(llm_cfg, textvariable=_gui._llm_url_var, width=26)
         _gui._llm_url_entry.pack(side=tk.LEFT, padx=(0, 10))
         _gui._bind_tooltip(_gui._llm_url_entry, "tooltip.llm.url")
-        _gui._llm_refresh_btn = ttk.Button(
-            llm_cfg, text="", command=_gui._refresh_llm_models
-        )
+        _gui._llm_refresh_btn = ttk.Button(llm_cfg, text="", command=_gui._refresh_llm_models)
         _gui._llm_refresh_btn.pack(side=tk.LEFT, padx=(0, 4))
         _gui._bind_text(_gui._llm_refresh_btn, "file.button.refresh_models")
         _gui._bind_tooltip(_gui._llm_refresh_btn, "tooltip.llm.refresh_models")
@@ -464,9 +462,7 @@ class FileTranscriptionTab:
         _gui._llm_api_key_label = ttk.Label(llm_cfg, text="")
         _gui._llm_api_key_label.pack(side=tk.LEFT, padx=(0, 4))
         _gui._bind_text(_gui._llm_api_key_label, "llm.label.api_key")
-        _gui._llm_key_entry = ttk.Entry(
-            llm_cfg, textvariable=_gui._llm_key_var, width=14, show="*"
-        )
+        _gui._llm_key_entry = ttk.Entry(llm_cfg, textvariable=_gui._llm_key_var, width=14, show="*")
         _gui._llm_key_entry.pack(side=tk.LEFT, padx=(0, 10))
         _gui._bind_tooltip(_gui._llm_key_entry, "tooltip.llm.api_key")
         _gui._llm_prompt_label = ttk.Label(llm_cfg, text="")
@@ -481,9 +477,7 @@ class FileTranscriptionTab:
         )
         _gui._llm_prompt_combo.pack(side=tk.LEFT, padx=(0, 6))
         _gui._bind_tooltip(_gui._llm_prompt_combo, "tooltip.llm.prompt")
-        _gui._llm_prompt_btn = ttk.Button(
-            llm_cfg, text="", command=_gui._open_prompt_editor
-        )
+        _gui._llm_prompt_btn = ttk.Button(llm_cfg, text="", command=_gui._open_prompt_editor)
         _gui._llm_prompt_btn.pack(side=tk.LEFT, padx=(0, 10))
         _gui._bind_text(_gui._llm_prompt_btn, "file.button.prompt")
         _gui._bind_tooltip(_gui._llm_prompt_btn, "tooltip.llm.prompt_edit")

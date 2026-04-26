@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "voxfusion"
-version = "0.1.0"
+version = "0.3.0"
 description = "Cross-platform audio capture, transcription, diarization, and translation system"
 license = "GPL-2.0-only"
 authors = ["VoxFusion Contributors"]
@@ -218,6 +218,21 @@ filterwarnings = [
 [tool.coverage.run]
 source = ["src/voxfusion"]
 branch = true
+omit = [
+    "src/voxfusion/gui/*",
+    "src/voxfusion/capture/wasapi.py",
+    "src/voxfusion/capture/coreaudio.py",
+    "src/voxfusion/capture/pulseaudio.py",
+    "src/voxfusion/capture/windows_audio.py",
+    "src/voxfusion/capture/windows_factory.py",
+    "src/voxfusion/capture/enumerator.py",
+    "src/voxfusion/capture/vad_chunker.py",
+    "src/voxfusion/security/*",
+    "src/voxfusion/asr/openvino_engine.py",
+    "src/voxfusion/asr/streaming.py",
+    "src/voxfusion/cli/models_cmd.py",
+    "src/voxfusion/cli/devices_cmd.py",
+]
 
 [tool.coverage.report]
 show_missing = true

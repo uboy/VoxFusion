@@ -8,9 +8,9 @@ from voxfusion.version import __version__
 
 
 @click.group()
-@click.version_option(version=__version__, prog_name="voxfusion")
+@click.version_option(__version__, "--version", "-v", prog_name="voxfusion")
 @click.option(
-    "--debug", "--verbose", "-v", "verbose", is_flag=True, help="Enable debug logs from all stages."
+    "--debug", "--verbose", "verbose", is_flag=True, help="Enable debug logs from all stages."
 )
 @click.option("--quiet", "-q", is_flag=True, hidden=True, help="Legacy errors-only mode.")
 @click.option("--config", type=click.Path(exists=True), help="Path to config file.")

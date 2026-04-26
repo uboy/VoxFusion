@@ -90,6 +90,7 @@ def test_tmpdir_is_none_on_linux_without_dev_shm(monkeypatch: pytest.MonkeyPatch
     )
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-specific tempdir behavior")
 def test_tmpdir_is_none_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     """Windows always uses default tempdir regardless of /dev/shm.
 

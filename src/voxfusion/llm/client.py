@@ -539,7 +539,9 @@ async def discover_llm_endpoint(
     or ``None`` if none responds within ``_DISCOVER_TIMEOUT_S`` seconds.
     Intended for one-shot startup auto-detection.
     """
-    timeout = httpx.Timeout(connect=_DISCOVER_TIMEOUT_S, read=_DISCOVER_TIMEOUT_S, write=2.0, pool=2.0)
+    timeout = httpx.Timeout(
+        connect=_DISCOVER_TIMEOUT_S, read=_DISCOVER_TIMEOUT_S, write=2.0, pool=2.0
+    )
 
     async def _probe(base_url: str) -> str | None:
         try:

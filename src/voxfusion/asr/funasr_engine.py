@@ -23,9 +23,7 @@ from voxfusion.models.transcription import TranscriptionSegment
 
 log = get_logger(__name__)
 
-DEFAULT_FUNASR_MODEL = (
-    "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
-)
+DEFAULT_FUNASR_MODEL = "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
 _SAMPLE_RATE = 16000
 _MIN_TRANSCRIBE_SAMPLES = 320
 
@@ -131,14 +129,8 @@ class FunASREngine:
             total_duration_s = len(audio) / _SAMPLE_RATE
             log.info("funasr.transcribe_start", duration_s=round(total_duration_s, 1))
 
-            _tmpdir = (
-                "/dev/shm"
-                if sys.platform == "linux" and os.path.isdir("/dev/shm")
-                else None
-            )
-            with tempfile.NamedTemporaryFile(
-                suffix=".wav", delete=False, dir=_tmpdir
-            ) as f:
+            _tmpdir = "/dev/shm" if sys.platform == "linux" and os.path.isdir("/dev/shm") else None
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False, dir=_tmpdir) as f:
                 tmp_path = f.name
             try:
                 sf.write(tmp_path, audio, _SAMPLE_RATE, subtype="PCM_16")

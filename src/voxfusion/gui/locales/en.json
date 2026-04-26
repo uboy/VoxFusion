@@ -309,5 +309,10 @@
   "llm.context.env": "Using environment override: {tokens} tokens.",
   "llm.context.default": "Using fallback context: {tokens} tokens.",
   "llm.context.invalid": "Invalid manual context value. Enter an integer >= 512 or leave blank.",
-  "tooltip.llm.context": "Optional manual context-window override in tokens. Leave blank to use detected model metadata or the fallback limit."
+  "tooltip.llm.context": "Optional manual context-window override in tokens. Leave blank to use detected model metadata or the fallback limit.",
+  "header.about": "About",
+  "about.title": "About VoxFusion",
+  "about.version": "Version: {version}",
+  "about.license": "License: GPL-2.0",
+  "about.website": "Website:"
 }

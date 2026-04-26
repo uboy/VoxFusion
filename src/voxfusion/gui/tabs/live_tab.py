@@ -199,19 +199,13 @@ class LiveCaptureTab:
         _gui._context_menu.add_separator()
         _gui._context_menu.add_command(label="", command=_gui._select_all_rows)
         _gui._register_ui_refresher(
-            lambda: _gui._context_menu.entryconfigure(
-                0, label=_gui._tr("live.menu.copy_selected")
-            )
+            lambda: _gui._context_menu.entryconfigure(0, label=_gui._tr("live.menu.copy_selected"))
         )
         _gui._register_ui_refresher(
-            lambda: _gui._context_menu.entryconfigure(
-                1, label=_gui._tr("live.menu.copy_text_only")
-            )
+            lambda: _gui._context_menu.entryconfigure(1, label=_gui._tr("live.menu.copy_text_only"))
         )
         _gui._register_ui_refresher(
-            lambda: _gui._context_menu.entryconfigure(
-                3, label=_gui._tr("live.menu.select_all")
-            )
+            lambda: _gui._context_menu.entryconfigure(3, label=_gui._tr("live.menu.select_all"))
         )
 
         scroll = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=_gui.table.yview)

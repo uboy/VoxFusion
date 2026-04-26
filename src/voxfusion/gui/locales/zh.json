@@ -254,5 +254,10 @@
   "llm.context.env": "使用环境变量覆盖: {tokens} tokens。",
   "llm.context.default": "使用后备上下文: {tokens} tokens。",
   "llm.context.invalid": "手动上下文值无效。请输入 >= 512 的整数，或留空。",
-  "tooltip.llm.context": "可选的手动上下文窗口 token 覆盖值。留空时使用模型元数据或后备限制。"
+  "tooltip.llm.context": "可选的手动上下文窗口 token 覆盖值。留空时使用模型元数据或后备限制。",
+  "header.about": "关于",
+  "about.title": "关于 VoxFusion",
+  "about.version": "版本: {version}",
+  "about.license": "许可证: GPL-2.0",
+  "about.website": "网站:"
 }

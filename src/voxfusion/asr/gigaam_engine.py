@@ -65,7 +65,7 @@ def _with_retry(fn: Callable[[], _T], label: str) -> _T:
         except Exception as exc:  # broad: network or HF library may raise any error on download
             if attempt == _DOWNLOAD_MAX_ATTEMPTS or not _is_transient_error(exc):
                 raise
-            delay = _DOWNLOAD_BACKOFF_BASE_S ** attempt
+            delay = _DOWNLOAD_BACKOFF_BASE_S**attempt
             log.warning(
                 "download.retry",
                 label=label,
@@ -76,6 +76,7 @@ def _with_retry(fn: Callable[[], _T], label: str) -> _T:
             )
             time.sleep(delay)
     raise RuntimeError("unreachable")  # pragma: no cover
+
 
 # Minimum free GPU VRAM (MB) required to run GigaAM on CUDA.
 # Below this threshold the engine automatically falls back to CPU.
@@ -391,7 +392,9 @@ class GigaAMCTCEngine:
                 if callable(getattr(self._model, "to", None)):
                     self._model.to(device)
                 log.info("gigaam.device_selected", device=device)
-        except Exception as exc:  # broad: HuggingFace/torch loading surfaces many error types; classified below
+        except (
+            Exception
+        ) as exc:  # broad: HuggingFace/torch loading surfaces many error types; classified below
             err = str(exc).lower()
             if "401" in err or "unauthorized" in err or "authentication" in err:
                 hint = (
@@ -570,7 +573,9 @@ class GigaAMCTCEngine:
                     parts.append(text)
                     log.info("gigaam.chunk_done", chunk=chunk_idx, of=total_chunks, text=text[:80])
                 else:
-                    log.info("gigaam.chunk_done", chunk=chunk_idx, of=total_chunks, text="(silence)")
+                    log.info(
+                        "gigaam.chunk_done", chunk=chunk_idx, of=total_chunks, text="(silence)"
+                    )
             finally:
                 with suppress(OSError):
                     os.unlink(chunk_path)
