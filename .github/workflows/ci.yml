@@ -21,10 +21,11 @@ jobs:
       - name: Install core + dev deps
         run: |
           pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install \
             faster-whisper ctranslate2 numpy scipy pydantic pydantic-settings \
             click sounddevice soundfile structlog pyyaml httpx tqdm \
-            typing-extensions "transformers>=4.48,<5.0" torch \
+            typing-extensions "transformers>=4.48,<5.0" \
             ruff mypy \
             types-PyYAML types-tqdm
 
@@ -56,24 +57,37 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
+      - name: Install OS packages for GUI tests
+        run: sudo apt-get update && sudo apt-get install -y python3-tk xvfb
+
       - name: Install runtime dependencies
         run: |
           pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install \
             faster-whisper ctranslate2 numpy scipy pydantic pydantic-settings \
             click sounddevice soundfile structlog pyyaml httpx tqdm \
-            typing-extensions "transformers>=4.48,<5.0" torch \
+            typing-extensions "transformers>=4.48,<5.0" \
             cryptography
 
       - name: Install package (editable)
         run: pip install -e .
 
       - name: Install test dependencies
-        run: pip install pytest pytest-asyncio pytest-cov
+        run: pip install pytest pytest-asyncio pytest-cov pytest-xdist
+
+      - name: Sanity-check native extensions
+        run: |
+          python -c "import numpy; print('numpy', numpy.__version__)"
+          python -c "import torch; print('torch', torch.__version__)"
+          python -c "import ctranslate2; print('ctranslate2', ctranslate2.__version__)"
+          python -c "import sounddevice; print('sounddevice', sounddevice.__version__)"
+          python -c "import tkinter; print('tkinter OK')"
+          python -c "from voxfusion.version import __version__; print('voxfusion', __version__)"
 
       - name: Run unit tests
         run: |
-          pytest tests/unit/ \
+          xvfb-run pytest tests/unit/ \
             -q --tb=short \
             --cov=voxfusion --cov-report=term-missing \
             --cov-fail-under=70
