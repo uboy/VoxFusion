@@ -7,14 +7,15 @@ import logging
 import os
 import sys
 import tempfile
+import time
 import types
 import warnings
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from functools import partial
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Protocol, TypeVar, runtime_checkable
 
 import numpy as np
 import soundfile as sf
@@ -41,17 +42,74 @@ log = get_logger(__name__)
 
 DEFAULT_GIGAAM_MODEL_REF = "ai-sage/GigaAM-v3"
 
+_T = TypeVar("_T")
+_TRANSIENT_ERROR_KEYWORDS = ("connection", "timeout", "network", "proxy", "ssl", "reset", "eof")
+_DOWNLOAD_MAX_ATTEMPTS = 3
+_DOWNLOAD_BACKOFF_BASE_S = 2.0
+
+
+def _is_transient_error(exc: Exception) -> bool:
+    """Return True if *exc* looks like a transient network error worth retrying."""
+    msg = str(exc).lower()
+    return any(kw in msg for kw in _TRANSIENT_ERROR_KEYWORDS)
+
+
+def _with_retry(fn: Callable[[], _T], label: str) -> _T:
+    """Call *fn()* with exponential-backoff retry for transient network errors.
+
+    Auth errors (401/403) and other permanent failures are re-raised immediately.
+    """
+    for attempt in range(1, _DOWNLOAD_MAX_ATTEMPTS + 1):
+        try:
+            return fn()
+        except Exception as exc:  # broad: network or HF library may raise any error on download
+            if attempt == _DOWNLOAD_MAX_ATTEMPTS or not _is_transient_error(exc):
+                raise
+            delay = _DOWNLOAD_BACKOFF_BASE_S ** attempt
+            log.warning(
+                "download.retry",
+                label=label,
+                attempt=attempt,
+                max_attempts=_DOWNLOAD_MAX_ATTEMPTS,
+                delay_s=delay,
+                error=str(exc),
+            )
+            time.sleep(delay)
+    raise RuntimeError("unreachable")  # pragma: no cover
+
 # Minimum free GPU VRAM (MB) required to run GigaAM on CUDA.
 # Below this threshold the engine automatically falls back to CPU.
 _MIN_CUDA_FREE_MB = 3000
 
 # GigaAM raises ValueError for audio longer than 25 s; chunk at 24 s to be safe.
+# transcribe_longform (available in GigaAM-v3 November 2025+) handles long audio
+# natively via pyannote VAD and is used when HF_TOKEN is configured.  The manual
+# chunking path is the fallback when HF_TOKEN or pyannote/segmentation-3.0 is absent.
 _SAMPLE_RATE = 16000
 _CHUNK_DURATION_S = 24
 _OVERLAP_DURATION_S = 1
 _CHUNK_SAMPLES = _CHUNK_DURATION_S * _SAMPLE_RATE
 _OVERLAP_SAMPLES = _OVERLAP_DURATION_S * _SAMPLE_RATE
 _MIN_TRANSCRIBE_SAMPLES = 320
+# Maximum words to inspect at a chunk seam when deduplicating overlap artefacts.
+_SEAM_DEDUP_MAX_WORDS = 12
+
+
+def _dedup_seam(prev: str, curr: str) -> str:
+    """Remove from *curr* any word-prefix that duplicates the word-suffix of *prev*.
+
+    The 1-second chunk overlap means the last ~2-3 words of one chunk often
+    reappear at the start of the next.  This trims them from *curr* so the
+    joined transcript does not contain repeated phrases.
+    Used by the manual chunking fallback path.
+    """
+    prev_words = prev.split()
+    curr_words = curr.split()
+    limit = min(_SEAM_DEDUP_MAX_WORDS, len(prev_words), len(curr_words))
+    for n in range(limit, 0, -1):
+        if prev_words[-n:] == curr_words[:n]:
+            return " ".join(curr_words[n:])
+    return curr
 
 
 def _resolve_gigaam_device(requested: str) -> str:
@@ -77,7 +135,7 @@ def _resolve_gigaam_device(requested: str) -> str:
             required_mb=_MIN_CUDA_FREE_MB,
         )
         return "cpu"
-    except Exception:
+    except Exception:  # broad: torch / CUDA probing can raise any error from native code
         return "cpu"
 
 
@@ -106,11 +164,60 @@ def _suppress_gigaam_dependency_noise() -> None:
 
         nemo_logging.set_verbosity(nemo_logging.ERROR)
 
+    _disable_pyannote_telemetry()
+
+
+def _disable_pyannote_telemetry() -> None:
+    """Disable pyannote-audio 4.x OpenTelemetry telemetry and stop its background thread.
+
+    pyannote-audio 4.x ships an OpenTelemetry exporter (``pyannote.audio.telemetry``)
+    that by default posts usage metrics to ``https://otel.pyannote.ai/v1/metrics``
+    every 60 seconds via a ``PeriodicExportingMetricReader`` background thread.
+    Setting ``PYANNOTE_METRICS_ENABLED=false`` (done at startup in logging.py) prevents
+    data recording, but the background thread and its periodic HTTP POSTs still run.
+
+    This function calls pyannote's own API to:
+    1. Disable the flag so no data is recorded.
+    2. Shut down the background metric reader thread, eliminating all network traffic.
+    """
+    with suppress(Exception):
+        from pyannote.audio.telemetry.metrics import set_telemetry_metrics
+
+        set_telemetry_metrics(False)
+
+    # Shut down the OpenTelemetry MeterProvider that pyannote installed globally.
+    # This stops the PeriodicExportingMetricReader background thread.
+    with suppress(Exception):
+        from opentelemetry import metrics as _otel_metrics
+
+        prov = _otel_metrics.get_meter_provider()
+        if hasattr(prov, "shutdown"):
+            prov.shutdown()
+
 
 def _install_megatron_compat_shim() -> None:
-    """Provide a minimal Megatron shim for third-party imports expecting it."""
+    """Provide a minimal Megatron shim for third-party imports expecting it.
+
+    GigaAM's dependency chain imports ``megatron.core.num_microbatches_calculator``
+    even though the actual Megatron-LM training library is not installed.  This
+    function injects a stub module that satisfies the import without the real package.
+
+    .. warning::
+        This is a fragile compatibility shim.  If upstream libraries (NeMo, pyannote)
+        update their Megatron expectations the stubs may need updating.  Check the
+        VoxFusion issue tracker if you see ``AttributeError`` on Megatron symbols.
+    """
     if "megatron.core.num_microbatches_calculator" in sys.modules:
         return
+
+    log.warning(
+        "gigaam.megatron_shim",
+        reason=(
+            "Injecting Megatron compatibility stub into sys.modules. "
+            "This shim is required by GigaAM's dependency chain but is fragile — "
+            "if you see unexpected Megatron-related errors, check for upstream updates."
+        ),
+    )
 
     megatron_mod = sys.modules.setdefault("megatron", types.ModuleType("megatron"))
     core_mod = sys.modules.setdefault("megatron.core", types.ModuleType("megatron.core"))
@@ -156,7 +263,7 @@ def _force_torchaudio_soundfile_backend() -> None:
 
         if hasattr(torchaudio, "set_audio_backend"):
             torchaudio.set_audio_backend("soundfile")
-    except Exception:
+    except Exception:  # broad: torchaudio backend selection is best-effort
         pass
 
 
@@ -178,7 +285,16 @@ class GigaAMModelProtocol(Protocol):
     """Minimal interface expected from a loaded GigaAM model object."""
 
     def transcribe(self, wav_path: str) -> str:
-        """Transcribe a WAV file and return the recognised text."""
+        """Transcribe a short WAV file (≤ 25 s) and return the recognised text."""
+        ...
+
+    def transcribe_longform(self, wav_path: str) -> list[dict]:
+        """Transcribe a long WAV file using pyannote VAD segmentation.
+
+        Returns a list of ``{"transcription": str, "boundaries": (start_s, end_s)}``.
+        Available in GigaAM-v3 (November 2025+).  Requires ``HF_TOKEN`` env var and
+        a cached ``pyannote/segmentation-3.0`` model.
+        """
         ...
 
 
@@ -255,9 +371,15 @@ class GigaAMCTCEngine:
 
             if torch is not None and _should_use_torchscript_source_fallback(torch):
                 with _temporary_torchscript_source_fallback(torch):
-                    self._model = AutoModel.from_pretrained(model_ref, **kwargs)
+                    self._model = _with_retry(
+                        lambda: AutoModel.from_pretrained(model_ref, **kwargs),  # type: ignore[misc]
+                        label=model_ref,
+                    )
             else:
-                self._model = AutoModel.from_pretrained(model_ref, **kwargs)
+                self._model = _with_retry(
+                    lambda: AutoModel.from_pretrained(model_ref, **kwargs),  # type: ignore[misc]
+                    label=model_ref,
+                )
 
             # GigaAM-v3 checkpoint is stored in float16; cast to float32 so that CPU
             # inference doesn't raise "Input type (float) and bias type (c10::Half)".
@@ -269,7 +391,7 @@ class GigaAMCTCEngine:
                 if callable(getattr(self._model, "to", None)):
                     self._model.to(device)
                 log.info("gigaam.device_selected", device=device)
-        except Exception as exc:
+        except Exception as exc:  # broad: HuggingFace/torch loading surfaces many error types; classified below
             err = str(exc).lower()
             if "401" in err or "unauthorized" in err or "authentication" in err:
                 hint = (
@@ -344,61 +466,133 @@ class GigaAMCTCEngine:
         try:
             activate_ffmpeg_runtime()
             total_duration_s = len(audio) / _SAMPLE_RATE
-            total_chunks = max(1, -(-len(audio) // (_CHUNK_SAMPLES - _OVERLAP_SAMPLES)))
-            log.info(
-                "gigaam.transcribe_start",
-                duration_s=round(total_duration_s, 1),
-                chunks=total_chunks,
-            )
+            log.info("gigaam.transcribe_start", duration_s=round(total_duration_s, 1))
 
-            parts: list[str] = []
-            pos = 0
-            chunk_idx = 0
-            while pos < len(audio):
-                chunk_idx += 1
-                chunk = audio[pos : pos + _CHUNK_SAMPLES]
-                chunk_start_s = round(pos / _SAMPLE_RATE, 1)
-                chunk_end_s = round(min(pos + _CHUNK_SAMPLES, len(audio)) / _SAMPLE_RATE, 1)
-                log.info(
-                    "gigaam.chunk_start",
-                    chunk=chunk_idx,
-                    of=total_chunks,
-                    start_s=chunk_start_s,
-                    end_s=chunk_end_s,
-                )
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                    tmp_path = f.name
-                try:
-                    sf.write(tmp_path, chunk, _SAMPLE_RATE, subtype="PCM_16")
-                    text = model.transcribe(tmp_path).strip()
-                    if text:
-                        parts.append(text)
-                        log.info(
-                            "gigaam.chunk_done", chunk=chunk_idx, of=total_chunks, text=text[:80]
-                        )
-                    else:
-                        log.info(
-                            "gigaam.chunk_done", chunk=chunk_idx, of=total_chunks, text="(silence)"
-                        )
-                finally:
-                    with suppress(OSError):
-                        os.unlink(tmp_path)
-                pos += _CHUNK_SAMPLES - _OVERLAP_SAMPLES
+            # Write entire audio to a single temp file.  On Linux prefer /dev/shm to avoid disk I/O.
+            _tmpdir = "/dev/shm" if sys.platform == "linux" and os.path.isdir("/dev/shm") else None
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False, dir=_tmpdir) as f:
+                tmp_path = f.name
+            try:
+                sf.write(tmp_path, audio, _SAMPLE_RATE, subtype="PCM_16")
 
-            text = " ".join(parts).strip()
-            log.info("gigaam.transcribe_done", chunks=chunk_idx, result_chars=len(text))
-        except Exception as exc:
+                # Prefer model's native longform transcription (pyannote VAD, real timestamps).
+                # Falls back to manual chunking when HF_TOKEN is absent or the VAD model is not cached.
+                if total_duration_s > _CHUNK_DURATION_S and callable(
+                    getattr(model, "transcribe_longform", None)
+                ):
+                    try:
+                        return self._try_transcribe_longform(model, tmp_path, total_duration_s)
+                    except Exception as exc:
+                        log.warning(
+                            "gigaam.longform_unavailable",
+                            reason=str(exc)[:200],
+                            fallback="manual_chunking",
+                        )
+
+                # Manual chunking fallback: fixed 24-second windows with 1-second overlap.
+                return self._transcribe_chunked(model, audio, total_duration_s)
+            finally:
+                with suppress(OSError):
+                    os.unlink(tmp_path)
+        except Exception as exc:  # broad: model inference, numpy, soundfile, or tempfile may fail
             raise TranscriptionError(f"GigaAM transcription failed: {exc}") from exc
+
+    def _try_transcribe_longform(
+        self,
+        model: GigaAMModelProtocol,
+        wav_path: str,
+        total_duration_s: float,
+    ) -> list[TranscriptionSegment]:
+        """Use GigaAM's built-in pyannote-VAD longform transcription.
+
+        Returns one TranscriptionSegment per VAD-detected speech segment with
+        accurate start/end timestamps.  Requires HF_TOKEN and a cached
+        ``pyannote/segmentation-3.0`` model.
+        """
+        raw_segments: list[dict] = model.transcribe_longform(wav_path)
+        segments: list[TranscriptionSegment] = []
+        for seg in raw_segments:
+            text = seg.get("transcription", "").strip()
+            boundaries = seg.get("boundaries", (0.0, total_duration_s))
+            start_s, end_s = float(boundaries[0]), float(boundaries[1])
+            if text:
+                segments.append(
+                    TranscriptionSegment(
+                        text=text,
+                        language="ru",
+                        start_time=start_s,
+                        end_time=end_s,
+                        confidence=0.0,
+                        words=None,
+                        no_speech_prob=0.0,
+                    )
+                )
+        log.info(
+            "gigaam.transcribe_done",
+            mode="longform",
+            segments=len(segments),
+            result_chars=sum(len(s.text) for s in segments),
+        )
+        return segments
+
+    def _transcribe_chunked(
+        self,
+        model: GigaAMModelProtocol,
+        audio: np.ndarray,
+        total_duration_s: float,
+    ) -> list[TranscriptionSegment]:
+        """Fallback: fixed 24-second windows with 1-second overlap and seam dedup."""
+        total_chunks = max(1, -(-len(audio) // (_CHUNK_SAMPLES - _OVERLAP_SAMPLES)))
+        log.info("gigaam.chunked_start", duration_s=round(total_duration_s, 1), chunks=total_chunks)
+
+        _tmpdir = "/dev/shm" if sys.platform == "linux" and os.path.isdir("/dev/shm") else None
+        parts: list[str] = []
+        pos = 0
+        chunk_idx = 0
+        while pos < len(audio):
+            chunk_idx += 1
+            chunk = audio[pos : pos + _CHUNK_SAMPLES]
+            chunk_start_s = round(pos / _SAMPLE_RATE, 1)
+            chunk_end_s = round(min(pos + _CHUNK_SAMPLES, len(audio)) / _SAMPLE_RATE, 1)
+            log.info(
+                "gigaam.chunk_start",
+                chunk=chunk_idx,
+                of=total_chunks,
+                start_s=chunk_start_s,
+                end_s=chunk_end_s,
+            )
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False, dir=_tmpdir) as f:
+                chunk_path = f.name
+            try:
+                sf.write(chunk_path, chunk, _SAMPLE_RATE, subtype="PCM_16")
+                text = model.transcribe(chunk_path).strip()
+                if text:
+                    parts.append(text)
+                    log.info("gigaam.chunk_done", chunk=chunk_idx, of=total_chunks, text=text[:80])
+                else:
+                    log.info("gigaam.chunk_done", chunk=chunk_idx, of=total_chunks, text="(silence)")
+            finally:
+                with suppress(OSError):
+                    os.unlink(chunk_path)
+            pos += _CHUNK_SAMPLES - _OVERLAP_SAMPLES
+
+        # Deduplicate words duplicated at seam boundaries due to 1-second overlap.
+        deduped: list[str] = []
+        for part in parts:
+            clean = _dedup_seam(deduped[-1], part) if deduped else part
+            if clean:
+                deduped.append(clean)
+        text = " ".join(deduped).strip()
+        log.info("gigaam.transcribe_done", mode="chunked", chunks=chunk_idx, result_chars=len(text))
 
         if not text:
             return []
-
         return [
             TranscriptionSegment(
                 text=text,
                 language="ru",
                 start_time=0.0,
-                end_time=len(audio) / float(_SAMPLE_RATE),
+                end_time=total_duration_s,
                 confidence=0.0,
                 words=None,
                 no_speech_prob=0.0,

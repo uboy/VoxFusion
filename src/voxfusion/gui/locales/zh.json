@@ -119,6 +119,7 @@
   "file.status.cleared": "已清空。请添加文件并开始转写队列。",
   "file.status.queued_files": "已加入队列: {count} 个文件。",
   "file.status.queue_duplicate": "所选文件已经在队列中。",
+  "file.status.llm_auto_discovered": "已自动检测到 LLM 服务器：{url}",
   "file.status.loading_models": "正在从 Open WebUI 加载模型...",
   "file.status.model_load_failed": "模型加载失败: {error}",
   "file.status.loaded_models": "已从 Open WebUI 加载 {count} 个模型。",

@@ -45,6 +45,11 @@ poetry.lock
 *.flac
 *.ogg
 *.m4a
+*.mp4
+*.webm
+*.mkv
+*.avi
+*.mov
 *.pt
 *.bin
 *.onnx

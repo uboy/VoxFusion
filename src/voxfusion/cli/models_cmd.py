@@ -1,10 +1,35 @@
 """CLI command: voxfusion models -- model download and management."""
 
+import time
+
 import click
 
 from voxfusion.asr_catalog import GIGAAM_REVISIONS as _GIGAAM_REVISIONS
 from voxfusion.cli.formatting import echo_key_value, echo_success, echo_warning
 from voxfusion.config.loader import load_config
+
+_TRANSIENT_KEYWORDS = ("connection", "timeout", "network", "proxy", "ssl", "reset", "eof")
+_MAX_ATTEMPTS = 3
+_BACKOFF_BASE_S = 2.0
+
+
+def _retry_download(fn: "callable", label: str) -> object:
+    """Run *fn()* with exponential-backoff retry for transient network errors."""
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        try:
+            return fn()
+        except Exception as exc:
+            msg = str(exc).lower()
+            is_transient = any(kw in msg for kw in _TRANSIENT_KEYWORDS)
+            if attempt == _MAX_ATTEMPTS or not is_transient:
+                raise
+            delay = _BACKOFF_BASE_S ** attempt
+            click.echo(
+                f"  Network error (attempt {attempt}/{_MAX_ATTEMPTS}): {exc}. "
+                f"Retrying in {delay:.0f}s…"
+            )
+            time.sleep(delay)
+    raise RuntimeError("unreachable")  # pragma: no cover
 
 
 @click.group("models")
@@ -81,11 +106,14 @@ def models_download(
                     "custom Python code that will run on your machine. "
                     "Only download from sources you trust. See README.md § Security."
                 )
-                AutoModel.from_pretrained(
-                    "ai-sage/GigaAM-v3",
-                    revision=revision,
-                    trust_remote_code=True,
-                    token=token,
+                _retry_download(
+                    lambda: AutoModel.from_pretrained(
+                        "ai-sage/GigaAM-v3",
+                        revision=revision,
+                        trust_remote_code=True,
+                        token=token,
+                    ),
+                    label="ai-sage/GigaAM-v3",
                 )
                 echo_success(f"  GigaAM v3 ({revision}) model ready.")
             except Exception as exc:
@@ -101,15 +129,18 @@ def models_download(
                 ref = "MediaTek-Research/Breeze-ASR-25"
                 click.echo(f"  Downloading {ref} from HuggingFace...")
                 click.echo("  Skipping training artifacts (optimizer, scheduler, random states)...")
-                snapshot_download(
-                    ref,
-                    ignore_patterns=[
-                        "optimizer.bin",
-                        "scheduler.bin",
-                        "random_states_*.pkl",
-                        "*.png",
-                        "*.pt",
-                    ],
+                _retry_download(
+                    lambda: snapshot_download(
+                        ref,
+                        ignore_patterns=[
+                            "optimizer.bin",
+                            "scheduler.bin",
+                            "random_states_*.pkl",
+                            "*.png",
+                            "*.pt",
+                        ],
+                    ),
+                    label=ref,
                 )
                 echo_success("  Breeze ASR model ready.")
             except Exception as exc:

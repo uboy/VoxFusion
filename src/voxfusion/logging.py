@@ -56,6 +56,7 @@ _NORMAL_MODE_KEY_PREFIXES = (
     "pulseaudio.",
     "mixer.",
     "vad_chunker.",
+    "startup.",  # Offline/online mode status messages
 )
 
 
@@ -154,6 +155,11 @@ def _ensure_runtime_environment_defaults() -> None:
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
     os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
     os.environ.setdefault("PYANNOTE_METRICS_ENABLED", "false")
+    # Force offline mode after initial model download.
+    # Set VOXFUSION_ONLINE=1 to temporarily re-enable network access (e.g., for model updates).
+    if os.environ.get("VOXFUSION_ONLINE", "0") != "1":
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+        os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
     thread_count = min(os.cpu_count() or 4, 16)
     os.environ.setdefault("NUMEXPR_MAX_THREADS", str(thread_count))
@@ -262,6 +268,21 @@ def configure_logging(
         "huggingface_hub.utils._http",
     ):
         logging.getLogger(name).setLevel(max(level, logging.ERROR))
+
+    # Log offline mode status for user awareness
+    log = get_logger(__name__)
+    if os.environ.get("VOXFUSION_ONLINE", "0") == "1":
+        log.info(
+            "startup.online_mode_enabled",
+            note="Network access enabled by VOXFUSION_ONLINE=1. Model downloads and updates may use network.",
+        )
+    else:
+        log.info(
+            "startup.offline_mode",
+            hf_hub_offline=os.environ.get("HF_HUB_OFFLINE"),
+            transformers_offline=os.environ.get("TRANSFORMERS_OFFLINE"),
+            note="Models will be loaded from local cache only. Set VOXFUSION_ONLINE=1 to enable network access.",
+        )
 
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:

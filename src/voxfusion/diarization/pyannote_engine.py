@@ -10,6 +10,7 @@ import inspect
 import os
 import warnings
 from collections.abc import AsyncIterator
+from contextlib import suppress
 from dataclasses import replace
 
 import numpy as np
@@ -28,6 +29,38 @@ from voxfusion.runtime_torchscript import (
 )
 
 log = get_logger(__name__)
+
+
+def _disable_pyannote_telemetry() -> None:
+    """Disable pyannote-audio 4.x OpenTelemetry telemetry and stop its background thread.
+
+    pyannote-audio 4.x ships an OpenTelemetry exporter (``pyannote.audio.telemetry``)
+    that by default posts usage metrics to ``https://otel.pyannote.ai/v1/metrics``
+    every 60 seconds via a ``PeriodicExportingMetricReader`` background thread.
+    Setting ``PYANNOTE_METRICS_ENABLED=false`` (done at startup in logging.py) prevents
+    data recording, but the background thread and its periodic HTTP POSTs still run.
+
+    This function calls pyannote's own API to:
+    1. Disable the flag so no data is recorded.
+    2. Shut down the background metric reader thread, eliminating all network traffic.
+    """
+    with suppress(Exception):
+        from pyannote.audio.telemetry.metrics import set_telemetry_metrics
+
+        set_telemetry_metrics(False)
+
+    # Shut down the OpenTelemetry MeterProvider that pyannote installed globally.
+    # This stops the PeriodicExportingMetricReader background thread.
+    with suppress(Exception):
+        from opentelemetry import metrics as _otel_metrics
+
+        prov = _otel_metrics.get_meter_provider()
+        if hasattr(prov, "shutdown"):
+            prov.shutdown()
+
+
+# Disable pyannote telemetry at module import time (before Pipeline.from_pretrained).
+_disable_pyannote_telemetry()
 
 
 def _pipeline_auth_kwargs(

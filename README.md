@@ -98,19 +98,108 @@ Required for transcribing video files and compressed audio (MP3, MP4, MKV, AAC�
 - **Linux:** `sudo apt install ffmpeg`
 - **macOS:** `brew install ffmpeg`
 
-### pyannote gated models
+### Setting up ML diarization
 
-ML speaker diarization uses `pyannote.audio` and downloads gated models from Hugging Face on first use.
-Frozen GUI/CLI bundles also need the packaged `pyannote/audio/telemetry/config.yaml` file at runtime; `scripts/build_binaries.py` now includes it automatically when `pyannote.audio` is installed.
+ML diarization (`--diarization-strategy ml` or `auto`) uses `pyannote.audio`, which requires a free Hugging Face account and accepting the license for two gated model repositories.
 
-Before running diarization, make sure you:
+**One-time setup (five steps):**
 
-- created a Hugging Face token
-- accepted access for `pyannote/speaker-diarization-3.1`
-- accepted access for `pyannote/segmentation-3.0`
-- entered the token in GUI `Settings -> HuggingFace Token` or set `HF_TOKEN` / `VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN`
+1. **Install the diarization extra** (if not already installed):
 
-After the first successful download, the models are cached locally and can be reused offline.
+   ```bash
+   pip install -e .[diarization]        # pip / venv
+   # or
+   poetry install --extras diarization  # Poetry
+   ```
+
+2. **Create a Hugging Face account** at <https://huggingface.co> and generate a read token at <https://huggingface.co/settings/tokens>.
+
+3. **Accept the model licenses** (you must be logged in):
+   - <https://huggingface.co/pyannote/speaker-diarization-3.1>
+   - <https://huggingface.co/pyannote/segmentation-3.0>
+
+4. **Provide the token to VoxFusion**:
+   - GUI: `Settings → HuggingFace Token`
+   - CLI/env: `export HF_TOKEN=hf_your_token`
+   - Config: set `VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN=hf_your_token`
+
+5. **Run diarization** — VoxFusion downloads the models automatically on first use (~300 MB) and caches them locally for offline reuse:
+
+   ```bash
+   voxfusion transcribe meeting.wav --diarization-strategy ml
+   voxfusion transcribe meeting.wav --diarization-strategy auto  # tries ML first
+   ```
+
+Frozen GUI/CLI bundles also need the packaged `pyannote/audio/telemetry/config.yaml` file at runtime; `scripts/build_binaries.py` includes it automatically when `pyannote.audio` is installed.
+
+## Offline model download (air-gapped environments)
+
+VoxFusion runs fully offline after models are downloaded. Models are cached in:
+- **Linux/macOS**: `~/.cache/huggingface/hub/`
+- **Windows**: `%USERPROFILE%\.cache\huggingface\hub\`
+
+### Method 1: Automatic download (requires internet)
+
+```bash
+# GigaAM v3 (Russian, best accuracy)
+voxfusion models download --asr gigaam-v3-e2e-ctc
+
+# Whisper large-v3 (99 languages)
+voxfusion models download --asr large-v3
+
+# Pyannote diarization (requires HF token)
+export HF_TOKEN=hf_your_token
+voxfusion models download --diarization pyannote
+```
+
+### Method 2: Manual download (for air-gapped systems)
+
+1. **Download model files from Hugging Face**:
+   - GigaAM v3: https://huggingface.co/ai-sage/GigaAM-v3/tree/main
+   - Pyannote segmentation-3.0: https://huggingface.co/pyannote/segmentation-3.0 (gated, accept license first)
+   - Pyannote speaker-diarization-3.1: https://huggingface.co/pyannote/speaker-diarization-3.1 (gated)
+
+2. **Create the cache directory structure** on the target machine:
+   ```bash
+   # Linux/macOS
+   mkdir -p ~/.cache/huggingface/hub/models--ai-sage--GigaAM-v3/snapshots/<commit-hash>/
+
+   # Windows
+   mkdir "%USERPROFILE%\.cache\huggingface\hub\models--ai-sage--GigaAM-v3\snapshots\<commit-hash>\"
+   ```
+
+3. **Copy model files** to the snapshot directory (all files from the HF repo: `config.json`, `model.onnx`, `preprocessor_config.json`, `tokenizer_config.json`, `vocab.txt`, etc.)
+
+4. **Create `.no_exist` files** (HuggingFace cache requirement):
+   ```bash
+   touch ~/.cache/huggingface/hub/models--ai-sage--GigaAM-v3/snapshots/<commit-hash>/.no_exist
+   ```
+
+5. **Create refs** pointing to the snapshot:
+   ```bash
+   echo "<commit-hash>" > ~/.cache/huggingface/hub/models--ai-sage--GigaAM-v3/refs/main
+   ```
+
+### Verification
+
+Run VoxFusion in offline mode to verify models are available:
+```bash
+# Force offline mode (default after initial setup)
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
+# Test transcription (should use cached models)
+voxfusion transcribe test.wav --model gigaam-v3-e2e-ctc
+```
+
+### Model sizes
+
+| Model | Size | Languages |
+|-------|------|-----------|
+| GigaAM v3 | ~1.5 GB | Russian |
+| Whisper large-v3 | ~3 GB | 99 languages |
+| Pyannote segmentation-3.0 | ~200 MB | - |
+| Pyannote speaker-diarization-3.1 | ~100 MB | - |
 
 ## Running
 

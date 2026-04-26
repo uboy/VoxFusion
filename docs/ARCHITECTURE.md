@@ -2,7 +2,7 @@
 
 > **Version**: 0.1.0
 > **Status**: Implemented
-> **Last Updated**: 2026-03-17
+> **Last Updated**: 2026-04-26
 
 ---
 
@@ -46,7 +46,7 @@ VoxFusion is a cross-platform system that captures all audio played on a user's 
 ### Design Principles
 
 - **Modularity**: Each pipeline stage is an independent, replaceable component behind a well-defined interface.
-- **Streaming-First**: The architecture is designed around streaming data flow with backpressure support; batch mode is a degenerate case of the streaming pipeline.
+- **Batch-First in Practice**: File transcription is the primary implemented workflow. Live capture is a separate, parallel code path (not a streaming generalisation of batch). The `asyncio` + queue design in `pipeline/streaming.py` documents the intended streaming architecture for future extension, but shipped code routes most processing through the batch pipeline.
 - **Configuration over Code**: Behavior is controlled through configuration files and CLI flags, not code changes.
 - **Graceful Degradation**: If a component is unavailable (e.g., no GPU for diarization), the system falls back to simpler alternatives and logs a warning rather than failing.
 - **Testability**: Every module can be tested in isolation with mock inputs and outputs.
@@ -1758,6 +1758,18 @@ Before any release:
 
 ---
 
+### ADR-009-B: Batch-First Implementation (Correction to Original Design)
+
+**Context**: The original architecture document described a "Streaming-First" design where batch mode was a degenerate case of the streaming pipeline. In practice the shipped codebase is the reverse.
+
+**Decision**: Acknowledge the batch-first reality. The `pipeline/batch.py` path is the primary transcription flow. Live capture runs through a separate code path (`capture/` + `LiveGigaAMSessionController` or chunked Whisper) that does not reuse the batch pipeline.
+
+**Rationale**: The streaming abstraction in `pipeline/streaming.py` and the `asyncio.Queue`-based design remain valid aspirational architecture for future unification. Until that refactor happens, the documentation must not misrepresent what is implemented.
+
+**Consequences**: The "Streaming-First" design principle is replaced by "Batch-First in Practice". Streaming pipeline interfaces are retained as the intended future contract for all pipeline stages.
+
+---
+
 ### ADR-009: Pluggable Translation with Registry Pattern
 
 **Context**: Users need different translation backends depending on their requirements (offline privacy, online quality, cost).
@@ -1779,6 +1791,16 @@ Before any release:
 **Rationale**: GPLv2 requires that the combined work is distributable under GPLv2. Permissive licenses (MIT, BSD, Apache 2.0) are compatible. LGPL and MPL 2.0 are compatible when used as libraries.
 
 **Consequences**: Every new dependency must have its license checked before inclusion. A license audit should be part of the CI pipeline.
+
+### ADR-011: GUI Directly Orchestrates Pipeline Workers (No Service Layer)
+
+**Context**: The review (2026-04-25) identified that `gui/main.py` and `gui/runtime.py` directly instantiate and drive `PipelineOrchestrator`, `RecordingWorker`, and `FileTranscribeWorker`. There is no intermediate service layer that the CLI and GUI share.
+
+**Decision**: Keep the direct coupling. Do not introduce a `TranscriptionService` abstraction at this time.
+
+**Rationale**: VoxFusion is a single-developer project with two entry points (CLI and GUI) that have meaningfully different workflows — the CLI is batch-oriented and stateless, while the GUI manages long-lived workers with progress callbacks and Tkinter-bound state. A shared service layer would need to accommodate both models, adding abstraction cost with limited reuse. The CLI already composes the pipeline correctly for its needs via `pipeline/batch.py`.
+
+**Consequences**: GUI-level pipeline logic is harder to unit-test without Tkinter. Adding a third UI (e.g., a web front-end) would require extracting the service layer at that point. When that threshold is reached, the recommended path is to introduce a `TranscriptionService` class in `voxfusion/services/transcription.py` that encapsulates worker lifecycle and result delivery, with the GUI and any future UI depending on it.
 
 ---
 

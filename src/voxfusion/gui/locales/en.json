@@ -138,6 +138,7 @@
   "file.status.cleared": "Cleared. Add files and click Transcribe Queue.",
   "file.status.queued_files": "Queued {count} file(s).",
   "file.status.queue_duplicate": "Selected files are already in the queue.",
+  "file.status.llm_auto_discovered": "Auto-detected LLM server at {url}",
   "file.status.loading_models": "Loading models from Open WebUI...",
   "file.status.model_load_failed": "Model load failed: {error}",
   "file.status.loaded_models": "Loaded {count} model(s) from Open WebUI.",

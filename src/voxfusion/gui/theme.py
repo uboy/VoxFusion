@@ -2,12 +2,46 @@
 
 from __future__ import annotations
 
+import platform
 import tkinter as tk
 from tkinter import ttk
 
 
+def _apply_dpi_awareness(root: tk.Tk) -> None:
+    """Enable HiDPI / Retina awareness so the window is crisp on high-DPI screens.
+
+    * Windows — calls the Win32 ``SetProcessDpiAwareness(1)`` shim so the OS
+      stops bitmap-scaling the window and lets Tk manage its own coordinates.
+    * macOS — Tk on macOS already handles Retina natively; nothing to do.
+    * Linux — reads the screen DPI reported by the X server and scales the Tk
+      ``scaling`` factor proportionally so text and widgets are the right size.
+    """
+    os_name = platform.system()
+    if os_name == "Windows":
+        try:
+            import ctypes
+
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)  # type: ignore[attr-defined]
+        except Exception:  # — ctypes call may not exist on all Windows versions
+            pass
+    elif os_name == "Linux":
+        try:
+            # X server reports DPI in millimetres; 25.4 mm/inch → DPI.
+            # Tk's default scaling assumes 72 DPI; adjust the ratio accordingly.
+            screen_mm = root.winfo_screenmwidth()
+            screen_px = root.winfo_screenwidth()
+            if screen_mm > 0:
+                dpi = screen_px / screen_mm * 25.4
+                scale = dpi / 96.0  # 96 DPI is the canonical "1×" baseline
+                if scale > 1.1:  # only upscale, never downscale legacy 72-DPI displays
+                    root.tk.call("tk", "scaling", scale)
+        except Exception:  # — graceful degradation
+            pass
+
+
 def configure_gui_theme(root: tk.Tk) -> None:
-    """Apply a more intentional ttk theme and sizing defaults."""
+    """Apply HiDPI awareness and a more intentional ttk theme and sizing defaults."""
+    _apply_dpi_awareness(root)
     style = ttk.Style(root)
     available = set(style.theme_names())
     if "clam" in available:

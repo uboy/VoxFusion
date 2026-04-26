@@ -516,6 +516,53 @@ async def complete(
     return "".join(parts)
 
 
+# Candidate base URLs probed by discover_llm_endpoint(), in priority order.
+# Covers Open WebUI (3000), LiteLLM proxy (4000), Ollama (11434), and a common
+# self-hosted port (8080).
+_DISCOVER_CANDIDATES = (
+    "http://localhost:3000",
+    "http://localhost:8080",
+    "http://localhost:4000",
+    "http://localhost:11434",
+)
+_DISCOVER_TIMEOUT_S = 2.0  # per-candidate connect+read timeout
+
+
+async def discover_llm_endpoint(
+    candidates: tuple[str, ...] = _DISCOVER_CANDIDATES,
+) -> str | None:
+    """Probe common localhost ports and return the highest-priority URL that responds.
+
+    All candidates are probed concurrently.  Returns the base URL
+    (e.g. ``"http://localhost:11434"``) of the highest-priority candidate (earliest
+    in *candidates*) that answers ``/api/models`` or ``/api/tags`` with 200 or 401,
+    or ``None`` if none responds within ``_DISCOVER_TIMEOUT_S`` seconds.
+    Intended for one-shot startup auto-detection.
+    """
+    timeout = httpx.Timeout(connect=_DISCOVER_TIMEOUT_S, read=_DISCOVER_TIMEOUT_S, write=2.0, pool=2.0)
+
+    async def _probe(base_url: str) -> str | None:
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                for path in _MODEL_PATHS:
+                    try:
+                        r = await client.get(base_url.rstrip("/") + path)
+                        if r.status_code in (200, 401):
+                            # 200 = open, 401 = present but auth-gated — still found a server
+                            return base_url
+                    except httpx.HTTPError:
+                        continue
+        except Exception:  # broad: any connect/TLS/OS error means not found
+            pass
+        return None
+
+    results = await asyncio.gather(*(_probe(c) for c in candidates))
+    for url in results:
+        if url is not None:
+            return url
+    return None
+
+
 async def verify_model_ready(
     *,
     base_url: str = DEFAULT_BASE_URL,

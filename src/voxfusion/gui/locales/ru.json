@@ -119,6 +119,7 @@
   "file.status.cleared": "Очищено. Добавь файлы и нажми запуск очереди.",
   "file.status.queued_files": "Добавлено в очередь файлов: {count}.",
   "file.status.queue_duplicate": "Выбранные файлы уже есть в очереди.",
+  "file.status.llm_auto_discovered": "Обнаружен LLM-сервер по адресу {url}",
   "file.status.loading_models": "Загружаю список моделей из Open WebUI...",
   "file.status.model_load_failed": "Не удалось загрузить модели: {error}",
   "file.status.loaded_models": "Загружено моделей из Open WebUI: {count}.",
