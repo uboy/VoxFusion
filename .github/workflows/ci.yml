@@ -57,7 +57,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      - name: Install OS packages for GUI and audio tests
+      - name: Install OS packages
         run: sudo apt-get update && sudo apt-get install -y python3-tk xvfb libportaudio2
 
       - name: Install runtime dependencies
@@ -74,28 +74,11 @@ jobs:
         run: pip install --no-deps -e .
 
       - name: Install test dependencies
-        run: pip install pytest pytest-asyncio pytest-cov pytest-xdist
+        run: pip install pytest pytest-asyncio pytest-cov
 
-      - name: Check numpy
-        run: python -c "import numpy; print('numpy', numpy.__version__)"
-      - name: Check torch
-        run: python -c "import torch; print('torch', torch.__version__)"
-      - name: Check ctranslate2
-        run: python -c "import ctranslate2; print('ctranslate2', ctranslate2.__version__)"
-      - name: Check sounddevice
-        run: python -c "import sounddevice; print('sounddevice', sounddevice.__version__)"
-      - name: Check tkinter
-        run: python -c "import tkinter; print('tkinter OK')"
-      - name: Check voxfusion
-        run: python -c "import voxfusion; print('voxfusion OK')"
-      - name: Check gui.main
-        run: python -c "from voxfusion.gui.main import TranscriptionGUI; print('gui.main OK')"
-
-      - name: Collect tests
-        run: xvfb-run pytest tests/unit/ --co -q 2>&1 | tail -5
-
-      - name: Run unit tests (no coverage, for crash diagnosis)
+      - name: Run unit tests
         run: |
           xvfb-run pytest tests/unit/ \
             -q --tb=short \
-            -x --no-header 2>&1 | tail -30
+            --cov=voxfusion --cov-report=term-missing \
+            --cov-fail-under=70
