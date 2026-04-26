@@ -74,9 +74,10 @@ jobs:
         run: pip install --no-deps -e .
 
       - name: Install test dependencies
-        run: pip install pytest pytest-asyncio
+        run: pip install pytest pytest-asyncio pytest-xdist
 
       - name: Run unit tests
         run: |
+          set -o pipefail
           python -c "import torch, ctranslate2, sounddevice, numpy; print('native extensions OK')"
-          xvfb-run pytest tests/unit/ -q --tb=short
+          xvfb-run pytest tests/unit/ --tb=line -v 2>&1 | tee /tmp/test-output.txt
