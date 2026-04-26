@@ -1452,11 +1452,35 @@ class TranscriptionGUI:
         if hasattr(self, "queue_label") and self._worker is None:
             self.queue_label.configure(text=self._tr("live.summary.queue_empty"))
 
-    def _set_live_status(self, status: str) -> None:
-        self.status_label.configure(text=status)
+    def _set_live_status(self, status: str, *, level: str = "info") -> None:
+        if level == "error":
+            text, fg = f"[ERROR] {status}", "red"
+        elif level == "warning":
+            text, fg = f"[WARNING] {status}", "#BB6600"
+        else:
+            text, fg = status, ""
+        self.status_label.configure(text=text, foreground=fg)
+
+    def _set_file_status(self, text: str, *, level: str = "info") -> None:
+        if level == "error":
+            display, fg = f"[ERROR] {text}", "red"
+        elif level == "warning":
+            display, fg = f"[WARNING] {text}", "#BB6600"
+        else:
+            display, fg = text, ""
+        self._file_status_label.configure(text=display, foreground=fg)
+
+    def _set_llm_status(self, text: str, *, level: str = "info") -> None:
+        if level == "error":
+            display, fg = f"[ERROR] {text}", "red"
+        elif level == "warning":
+            display, fg = f"[WARNING] {text}", "#BB6600"
+        else:
+            display, fg = text, "#555555"
+        self._llm_status_label.configure(text=display, foreground=fg)
 
     def _show_error(self, message: str) -> None:
-        self._set_live_status(self._tr("live.status.error", message=message))
+        self._set_live_status(self._tr("live.status.error", message=message), level="error")
         log.error("gui.live_error", error=message)
 
     def _add_segment(self, time_str: str, speaker: str, text: str, translation: str | None) -> None:
@@ -1802,9 +1826,8 @@ class TranscriptionGUI:
 
         file_path = Path(raw_path)
         if not file_path.exists():
-            self._file_status_label.configure(
-                text=self._tr("file.status.file_not_found", file_name=file_path.name),
-                foreground="red",
+            self._set_file_status(
+                self._tr("file.status.file_not_found", file_name=file_path.name), level="error"
             )
             return
 
@@ -1813,16 +1836,11 @@ class TranscriptionGUI:
             or __import__("os").environ.get("HUGGING_FACE_HUB_TOKEN")
         )
         if not hf_token:
-            self._file_status_label.configure(
-                text=self._tr("file.status.hf_token_required"),
-                foreground="#BB6600",
-            )
+            self._set_file_status(self._tr("file.status.hf_token_required"), level="warning")
             return
 
         self._file_detect_btn.configure(state=tk.DISABLED, text=self._tr("file.button.detecting"))
-        self._file_status_label.configure(
-            text=self._tr("file.status.detecting_speakers"), foreground=""
-        )
+        self._set_file_status(self._tr("file.status.detecting_speakers"))
 
         def _run() -> None:
             import asyncio
@@ -1869,14 +1887,12 @@ class TranscriptionGUI:
         self._file_detect_btn.configure(text=self._tr("file.button.detect"))
         self._refresh_file_diarization_controls()
         if error:
-            self._file_status_label.configure(
-                text=self._tr("file.status.detect_failed", error=error), foreground="red"
+            self._set_file_status(
+                self._tr("file.status.detect_failed", error=error), level="error"
             )
             return
         if count is None or count == 0:
-            self._file_status_label.configure(
-                text=self._tr("file.status.detect_empty"), foreground="#BB6600"
-            )
+            self._set_file_status(self._tr("file.status.detect_empty"), level="warning")
             return
 
         # Preserve detected exact counts for 4+ speakers instead of degrading them
@@ -2530,9 +2546,7 @@ class TranscriptionGUI:
                     )
                 )
                 return
-            self._llm_status_label.configure(
-                text=self._tr("file.status.model_load_failed", error=error)
-            )
+            self._set_llm_status(self._tr("file.status.model_load_failed", error=error), level="error")
             return
         model_ids = [descriptor.id for descriptor in models]
         model_contexts = self._model_context_map(models)
@@ -2628,8 +2642,8 @@ class TranscriptionGUI:
                 model=model,
                 error=detail,
             )
-            self._llm_status_label.configure(
-                text=self._tr("llm.status.model_failed", error=detail[:80])
+            self._set_llm_status(
+                self._tr("llm.status.model_failed", error=detail[:80]), level="error"
             )
         self._refresh_file_workflow()
 
@@ -2834,7 +2848,7 @@ class TranscriptionGUI:
         def _save() -> None:
             prompt_text = user_text.get("1.0", tk.END).strip()
             if "{transcript}" not in prompt_text:
-                self._llm_status_label.configure(text=self._tr("prompt.status.invalid"))
+                self._set_llm_status(self._tr("prompt.status.invalid"), level="warning")
                 return
             self._llm_custom_user_prompt = "" if prompt_text == prompt_def["user"] else prompt_text
             self._persist_gui_settings()
@@ -3244,17 +3258,11 @@ class TranscriptionGUI:
                 self._tr("validation.field.max_speakers"),
             )
         except ValueError as exc:
-            self._file_status_label.configure(
-                text=self._tr("file.status.error", message=exc),
-                foreground="red",
-            )
+            self._set_file_status(self._tr("file.status.error", message=exc), level="error")
             self._refresh_file_workflow()
             return
         if min_speakers is not None and max_speakers is not None and min_speakers > max_speakers:
-            self._file_status_label.configure(
-                text=self._tr("file.status.min_max_invalid"),
-                foreground="red",
-            )
+            self._set_file_status(self._tr("file.status.min_max_invalid"), level="error")
             self._refresh_file_workflow()
             return
 
@@ -3347,7 +3355,7 @@ class TranscriptionGUI:
             self.root.after(0, self._on_file_worker_finished)
 
     def _update_file_status(self, msg: str, progress: float) -> None:
-        self._file_status_label.configure(text=msg, foreground="")
+        self._set_file_status(msg)
         self._file_progress["value"] = int(progress * 100)
         self._file_current_progress = progress
         if self._file_active_queue_id is not None:
@@ -3359,10 +3367,7 @@ class TranscriptionGUI:
         self._refresh_file_workflow()
 
     def _show_file_error(self, message: str) -> None:
-        self._file_status_label.configure(
-            text=self._tr("file.status.error", message=message),
-            foreground="red",
-        )
+        self._set_file_status(self._tr("file.status.error", message=message), level="error")
         self._file_progress["value"] = 0
         self._file_current_progress = 0.0
         self._file_active_error_message = message
@@ -3423,7 +3428,7 @@ class TranscriptionGUI:
             ts = datetime.now().strftime("%H:%M:%S")
             if error:
                 msg = self._tr("file.status.download_failed", error=error)
-                self._file_status_label.configure(text=msg, foreground="red")
+                self._set_file_status(msg, level="error")
                 self._append_log_line(f"{ts} | DOWNLOAD ERROR | {error}\n")
             else:
                 msg = self._tr("file.status.download_ready", model_name=model_info.name)
@@ -3711,8 +3716,8 @@ class TranscriptionGUI:
                 rows = self._parse_transcript_rows(transcript_text)
         except (OSError, UnicodeError) as exc:
             log.error("gui.transcript_load_failed", file=str(transcript_path), error=str(exc))
-            self._file_status_label.configure(
-                text=self._tr("file.status.transcript_load_failed", error=exc)
+            self._set_file_status(
+                self._tr("file.status.transcript_load_failed", error=exc), level="error"
             )
             self._refresh_file_workflow()
             return
@@ -3780,7 +3785,7 @@ class TranscriptionGUI:
                 text=self._tr("file.status.saved", count=self._file_seg_count, path=out_path.name)
             )
         except (OSError, ValueError) as exc:
-            self._file_status_label.configure(text=self._tr("file.status.save_failed", error=exc))
+            self._set_file_status(self._tr("file.status.save_failed", error=exc), level="error")
         self._refresh_file_workflow()
 
     def _save_as_txt(self, path: Path, children: tuple[str, ...]) -> None:
