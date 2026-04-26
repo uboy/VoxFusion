@@ -26,7 +26,7 @@ jobs:
             click sounddevice soundfile structlog pyyaml httpx tqdm \
             typing-extensions "transformers>=4.48,<5.0" torch \
             ruff mypy \
-            types-PyYAML
+            types-PyYAML types-tqdm
 
       - name: Install package (editable)
         run: pip install -e .
