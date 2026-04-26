@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from functools import partial
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 import numpy as np
 import soundfile as sf
@@ -172,12 +173,21 @@ def _prepare_gigaam_runtime() -> None:
         return
 
 
+@runtime_checkable
+class GigaAMModelProtocol(Protocol):
+    """Minimal interface expected from a loaded GigaAM model object."""
+
+    def transcribe(self, wav_path: str) -> str:
+        """Transcribe a WAV file and return the recognised text."""
+        ...
+
+
 class GigaAMCTCEngine:
     """PyTorch/CTC engine for Russian transcription via ai-sage/GigaAM-v3."""
 
     def __init__(self, config: ASRConfig | None = None) -> None:
         self._config = config or ASRConfig(model_size="gigaam-v3-e2e-ctc")
-        self._model: object | None = None
+        self._model: GigaAMModelProtocol | None = None
         self._executor: ThreadPoolExecutor | None = ThreadPoolExecutor(max_workers=1)
 
     @property
@@ -297,10 +307,11 @@ class GigaAMCTCEngine:
         with suppress(Exception):
             self.close()
 
-    def _ensure_model(self) -> object:
+    def _ensure_model(self) -> GigaAMModelProtocol:
         if self._model is None:
             self.load_model()
-        return self._model  # type: ignore[return-value]
+        assert self._model is not None  # load_model raises if load fails
+        return self._model
 
     def _transcribe_sync(
         self,
@@ -350,7 +361,7 @@ class GigaAMCTCEngine:
                     tmp_path = f.name
                 try:
                     sf.write(tmp_path, chunk, _SAMPLE_RATE, subtype="PCM_16")
-                    text = model.transcribe(tmp_path).strip()  # type: ignore[attr-defined]
+                    text = model.transcribe(tmp_path).strip()
                     if text:
                         parts.append(text)
                         log.info(

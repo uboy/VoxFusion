@@ -7,10 +7,12 @@ from pathlib import Path
 import click
 
 from voxfusion.config.loader import load_config
+from voxfusion.config.models import PipelineConfig
 from voxfusion.gui.helpers import find_ffmpeg
 from voxfusion.logging import configure_logging, get_logger
 from voxfusion.media.extractor import NEEDS_EXTRACTION_EXTENSIONS
 from voxfusion.output import FORMATTERS, get_formatter
+from voxfusion.pipeline.batch import EventCallback
 from voxfusion.pipeline.events import EventType, PipelineEvent
 from voxfusion.pipeline.orchestrator import PipelineOrchestrator
 
@@ -170,12 +172,12 @@ def _transcribe_single_file(
 
 def _transcribe_batch(
     *,
-    config: object,
+    config: PipelineConfig,
     files: list[Path],
     fmt: str,
     output_dir: Path | None,
     quiet: bool,
-    event_cb: object,
+    event_cb: EventCallback | None,
 ) -> None:
     """Transcribe multiple files sequentially and write one artifact per input."""
     successes = 0
