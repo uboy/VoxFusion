@@ -54,7 +54,12 @@ def _describe_active_live_sources(audio_source: object) -> tuple[int, list[str],
 
 _LLM_CONTEXT_TOKEN_ENV = "VOXFUSION_LLM_CONTEXT_TOKENS"
 _LLM_DEFAULT_CONTEXT_TOKENS = 2048
-_LLM_ESTIMATED_CHARS_PER_TOKEN = 2
+# Conservative chars-per-token used when computing a *character budget* from a token limit.
+# Value 2 is intentionally low: 1 Russian char ≈ 2 UTF-8 bytes → ≈ 0.5 tokens (4 bytes/token),
+# so 1 token ≈ 2 Russian chars.  For ASCII text this wastes a little space but never overflows.
+_LLM_CHARS_PER_TOKEN_BUDGET = 2
+# UTF-8 bytes per BPE token (average across typical multilingual BPE vocabularies).
+_LLM_UTF8_BYTES_PER_TOKEN = 4
 _LLM_RESERVED_COMPLETION_TOKENS = 384
 _LLM_MIN_CHUNK_INPUT_TOKENS = 256
 _LLM_MAX_MERGE_ROUNDS = 6
@@ -409,9 +414,8 @@ class LLMWorker:
         clean = str(text or "")
         if not clean:
             return 0
-        return max(
-            1, (len(clean) + _LLM_ESTIMATED_CHARS_PER_TOKEN - 1) // _LLM_ESTIMATED_CHARS_PER_TOKEN
-        )
+        utf8_bytes = len(clean.encode("utf-8"))
+        return max(1, (utf8_bytes + _LLM_UTF8_BYTES_PER_TOKEN - 1) // _LLM_UTF8_BYTES_PER_TOKEN)
 
     @classmethod
     def _estimate_messages_tokens(cls, messages: list[dict[str, str]]) -> int:
@@ -444,7 +448,7 @@ class LLMWorker:
         return max(_LLM_MIN_CHUNK_INPUT_TOKENS, available)
 
     def _split_block_to_fit(self, block: str, max_tokens: int) -> list[str]:
-        max_chars = max_tokens * _LLM_ESTIMATED_CHARS_PER_TOKEN
+        max_chars = max_tokens * _LLM_CHARS_PER_TOKEN_BUDGET
         clean = block.strip()
         if not clean:
             return []

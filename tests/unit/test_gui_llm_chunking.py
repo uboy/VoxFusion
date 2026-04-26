@@ -121,3 +121,25 @@ def test_llm_worker_prefers_explicit_context_limit() -> None:
     )
 
     assert worker._context_limit_tokens() == 32768
+
+
+def test_estimate_text_tokens_utf8_based() -> None:
+    """Token estimation must use UTF-8 byte length / 4, not raw char count / 2.
+
+    For Russian text (2 bytes per Cyrillic char), the old char/2 formula gave the
+    same result as bytes/4, so this test targets a multi-byte emoji (4 bytes each)
+    and an ASCII string to confirm both directions are correct.
+    """
+    # 4 ASCII chars → 4 UTF-8 bytes → ceil(4/4) = 1 token
+    assert LLMWorker._estimate_text_tokens("test") == 1
+    # 4 Cyrillic chars → 8 UTF-8 bytes → ceil(8/4) = 2 tokens
+    # Old formula (len/2): ceil(4/2) = 2 — same result for Russian; caught by emoji test
+    assert LLMWorker._estimate_text_tokens("тест") == 2
+    # 1 emoji (🎙) → 4 UTF-8 bytes → ceil(4/4) = 1 token
+    # Old formula (len/2): ceil(1/2) = 1 — still same; test longer string:
+    # 8 emoji → 32 UTF-8 bytes → ceil(32/4) = 8 tokens
+    # Old formula (len/2): ceil(8/2) = 4 tokens  ← this is what we fixed
+    assert LLMWorker._estimate_text_tokens("🎙" * 8) == 8
+    # Empty string → 0
+    assert LLMWorker._estimate_text_tokens("") == 0
+    assert LLMWorker._estimate_text_tokens("   ") == 1
