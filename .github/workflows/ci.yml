@@ -76,16 +76,20 @@ jobs:
       - name: Install test dependencies
         run: pip install pytest pytest-asyncio pytest-cov pytest-xdist
 
-      - name: Sanity-check native extensions
-        run: |
-          python -c "import numpy; print('numpy', numpy.__version__)"
-          python -c "import torch; print('torch', torch.__version__)"
-          python -c "import ctranslate2; print('ctranslate2', ctranslate2.__version__)"
-          python -c "import sounddevice; print('sounddevice', sounddevice.__version__)"
-          python -c "import tkinter; print('tkinter OK')"
-          python -c "from voxfusion.version import __version__; print('voxfusion', __version__)"
-          python -c "import voxfusion; print('voxfusion package OK')"
-          python -c "from voxfusion.gui.main import TranscriptionGUI; print('gui.main OK')"
+      - name: Check numpy
+        run: python -c "import numpy; print('numpy', numpy.__version__)"
+      - name: Check torch
+        run: python -c "import torch; print('torch', torch.__version__)"
+      - name: Check ctranslate2
+        run: python -c "import ctranslate2; print('ctranslate2', ctranslate2.__version__)"
+      - name: Check sounddevice
+        run: python -c "import sounddevice; print('sounddevice', sounddevice.__version__)"
+      - name: Check tkinter
+        run: python -c "import tkinter; print('tkinter OK')"
+      - name: Check voxfusion
+        run: python -c "import voxfusion; print('voxfusion OK')"
+      - name: Check gui.main
+        run: python -c "from voxfusion.gui.main import TranscriptionGUI; print('gui.main OK')"
 
       - name: Run unit tests
         run: |
