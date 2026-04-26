@@ -57,8 +57,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      - name: Install OS packages for GUI tests
-        run: sudo apt-get update && sudo apt-get install -y python3-tk xvfb
+      - name: Install OS packages for GUI and audio tests
+        run: sudo apt-get update && sudo apt-get install -y python3-tk xvfb libportaudio2
 
       - name: Install runtime dependencies
         run: |
