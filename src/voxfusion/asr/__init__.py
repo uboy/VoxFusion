@@ -4,6 +4,7 @@ from voxfusion.asr.base import ASREngine
 from voxfusion.asr.breeze_engine import BreezeASREngine
 from voxfusion.asr.dedup import OverlapDeduplicator
 from voxfusion.asr.faster_whisper import FasterWhisperEngine
+from voxfusion.asr.funasr_engine import FunASREngine
 from voxfusion.asr.gigaam_engine import GigaAMCTCEngine
 from voxfusion.asr.parakeet_engine import ParakeetASREngine
 from voxfusion.asr.streaming import StreamingASR
@@ -24,6 +25,7 @@ __all__ = [
     "ASRModelInfo",
     "BreezeASREngine",
     "FasterWhisperEngine",
+    "FunASREngine",
     "GigaAMCTCEngine",
     "LanguageInfo",
     "OverlapDeduplicator",

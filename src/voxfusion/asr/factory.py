@@ -75,6 +75,12 @@ def create_asr_engine(
         log.info("asr_factory.selected", backend="breeze")
         return BreezeASREngine(cfg), "breeze"
 
+    if cfg.engine == "funasr":
+        from voxfusion.asr.funasr_engine import FunASREngine
+
+        log.info("asr_factory.selected", backend="funasr")
+        return FunASREngine(cfg), "funasr"
+
     # ── 1. CUDA (NVIDIA) ────────────────────────────────────────────────────
     if _has_cuda():
         from voxfusion.asr.faster_whisper import FasterWhisperEngine

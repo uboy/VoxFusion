@@ -64,6 +64,8 @@ torchcodec = { version = ">=0.7", optional = true }
 tkinterdnd2 = { version = ">=0.3", optional = true }
 # Noise reduction (optional — lazy import in preprocessing/noise.py)
 noisereduce = { version = ">=0.4", optional = true }
+# FunASR Paraformer for Chinese ASR (optional)
+funasr = { version = ">=1.0", optional = true }
 # Platform-specific dependencies
 pyaudiowpatch = { version = ">=0.2.12", markers = "sys_platform == 'win32'" }
 pulsectl = { version = ">=23.5", markers = "sys_platform == 'linux'", optional = true }
@@ -87,6 +89,8 @@ macos = ["pyobjc-framework-CoreAudio", "pyobjc-framework-ScreenCaptureKit"]
 gigaam = ["torchaudio", "sentencepiece", "omegaconf", "hydra-core", "pyannote-audio", "torchcodec"]
 # Parakeet/NeMo pulls torchaudio transitively but we declare it explicitly.
 parakeet = ["nemo_toolkit", "torchaudio"]
+# FunASR Paraformer for best Chinese ASR.
+chinese = ["funasr"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=7.0"
@@ -183,6 +187,7 @@ mypy_path = "src"
 [[tool.mypy.overrides]]
 module = [
     "faster_whisper.*",
+    "funasr.*",
     "ctranslate2.*",
     "sounddevice.*",
     "soundfile.*",

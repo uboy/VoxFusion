@@ -352,6 +352,23 @@ ASR_MODEL_CATALOG: tuple[ASRModelInfo, ...] = (
         supports_live_capture=False,
         requires_packages=("transformers", "torch"),
     ),
+    # FunASR Paraformer-large — best Chinese ASR, ~3-4% CER (vs Whisper ~8-10%).
+    ASRModelInfo(
+        id="funasr-paraformer-zh",
+        name="FunASR Paraformer (Chinese)",
+        engine="funasr",
+        description=(
+            "Best Chinese ASR: Paraformer-large, ~3-4% CER. "
+            "Batch file transcription only. Requires model download."
+        ),
+        accuracy_score=0.95,
+        speed_score=0.70,
+        supported_languages=("zh",),
+        supports_translation=False,
+        supports_live_capture=False,
+        recommended=True,
+        requires_packages=("funasr", "torch", "torchaudio"),
+    ),
 )
 
 # ---------------------------------------------------------------------------
