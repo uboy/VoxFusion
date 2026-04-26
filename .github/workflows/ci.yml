@@ -94,9 +94,10 @@ jobs:
       - name: Collect tests
         run: xvfb-run pytest tests/unit/ --co -q 2>&1 | tail -5
 
-      - name: Run unit tests
+      - name: Run unit tests (forked for crash isolation)
         run: |
           xvfb-run pytest tests/unit/ \
             -q --tb=short \
+            --forked \
             --cov=voxfusion --cov-report=term-missing \
             --cov-fail-under=70
