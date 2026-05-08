@@ -13,6 +13,7 @@ from voxfusion.config.models import ASRConfig, DiarizationConfig, PipelineConfig
 from voxfusion.diarization.alignment import SpeakerTurn
 from voxfusion.diarization.types import DiarizationTurnResult
 from voxfusion.models.audio import AudioChunk
+from voxfusion.models.diarization import DiarizedSegment
 from voxfusion.models.transcription import TranscriptionSegment
 from voxfusion.pipeline.batch import BatchPipeline
 from voxfusion.pipeline.events import EventType
@@ -146,6 +147,32 @@ class _TinyTailTurnDiarizer:
             SpeakerTurn("SPEAKER_A", 0.0, 1.0),
             SpeakerTurn("SPEAKER_B", 1.0, 1.0 + (100 / SR)),
         ]
+
+
+class _SingleAutoTurnDiarizer:
+    def __init__(self) -> None:
+        self.diarize_calls = 0
+
+    async def diarize(self, segments, audio=None):
+        del audio
+        self.diarize_calls += 1
+        return [
+            DiarizedSegment(
+                segment=segment,
+                speaker_id="SPEAKER_A",
+                speaker_source="ml",
+            )
+            for segment in segments
+        ]
+
+    async def diarize_turns(self, audio: AudioChunk) -> list[SpeakerTurn]:
+        return [SpeakerTurn("SPEAKER_A", 0.0, audio.duration)]
+
+    async def diarize_turns_result(self, audio: AudioChunk) -> DiarizationTurnResult:
+        return DiarizationTurnResult(
+            turns=[SpeakerTurn("SPEAKER_A", 0.0, audio.duration)],
+            speaker_count_hint_applied="auto",
+        )
 
 
 class _ExclusiveTurnDiarizer:
@@ -349,3 +376,27 @@ async def test_batch_pipeline_skips_ultra_short_diarized_windows(tmp_path: Path)
     assert result.segments[0].diarized.speaker_id == "SPEAKER_A"
     assert len(asr.transcribe_calls) == 1
     assert asr.transcribe_calls[0][2] >= 320
+
+
+@pytest.mark.asyncio
+async def test_batch_pipeline_falls_back_to_asr_first_for_single_full_auto_turn(
+    tmp_path: Path,
+) -> None:
+    audio_file = _write_wav(tmp_path / "single_auto_turn.wav")
+    diarizer = _SingleAutoTurnDiarizer()
+    pipeline = BatchPipeline(
+        asr_engine=_FakeGigaAMEngine(),
+        diarizer=diarizer,
+        preprocessor=PreProcessingPipeline([]),
+        config=PipelineConfig(
+            asr=ASRConfig(model_size="gigaam-v3-e2e-ctc"),
+            diarization=DiarizationConfig(strategy="ml"),
+        ),
+        resolved_diarization_strategy="ml",
+    )
+
+    result = await pipeline.process_file(audio_file)
+
+    assert diarizer.diarize_calls == 1
+    assert len(result.segments) == 1
+    assert result.segments[0].diarized.speaker_id == "SPEAKER_A"

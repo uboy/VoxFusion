@@ -123,11 +123,38 @@ def _select_alignment_turns(
             "alignment_turns": len(selected),
             "used_exclusive": bool(turn_result.exclusive_turns),
             "speaker_count_estimate": turn_result.speaker_count_estimate,
+            "speaker_count_hint_applied": turn_result.speaker_count_hint_applied,
             "model_id": turn_result.model_id,
         }
 
     turns = list(turn_result)
     return turns, {"turns": len(turns)}
+
+
+def _should_fallback_to_asr_first(
+    *,
+    turn_log: dict[str, object],
+    normalized_turns: list[SpeakerTurn],
+    audio_duration_s: float,
+) -> bool:
+    """Decide when diarization-first should fall back to ASR-first.
+
+    In auto speaker-count mode pyannote may emit one full-audio speaker turn.
+    Running ASR per turn in that case can collapse transcript granularity into
+    one long segment. Prefer ASR-first so native ASR chunking/timestamps are preserved.
+    """
+    hint = str(turn_log.get("speaker_count_hint_applied") or "").strip().lower()
+    if bool(turn_log.get("used_exclusive")):
+        return False
+    if hint != "auto" or len(normalized_turns) != 1:
+        return False
+
+    only_turn = normalized_turns[0]
+    covered = max(0.0, only_turn.end_time - only_turn.start_time)
+    if audio_duration_s <= 0:
+        return False
+    coverage_ratio = covered / audio_duration_s
+    return coverage_ratio >= 0.95
 
 
 def _normalize_turns(turns: list[SpeakerTurn]) -> list[SpeakerTurn]:
@@ -360,6 +387,22 @@ class BatchPipeline:
 
         normalized_turns = _normalize_turns(turns)
         log.info("batch.diarization_turns_normalized", turns=len(normalized_turns))
+        if _should_fallback_to_asr_first(
+            turn_log=turn_log,
+            normalized_turns=normalized_turns,
+            audio_duration_s=full_audio.duration,
+        ):
+            log.warning(
+                "batch.diarization_first_fallback_to_asr_first",
+                reason="single_auto_turn_covering_full_audio",
+                audio_duration_s=round(full_audio.duration, 2),
+            )
+            self._warn(
+                "Auto speaker diarization returned one full-length turn; "
+                "switching to ASR-first path to preserve timestamp granularity.",
+                stage=PipelineStage.DIARIZATION,
+            )
+            return None
         total_windows = len(normalized_turns)
 
         max_concurrent = max(1, self._config.asr.parallel_windows)
