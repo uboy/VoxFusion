@@ -544,12 +544,12 @@ class GigaAMCTCEngine:
         audio: np.ndarray,
         total_duration_s: float,
     ) -> list[TranscriptionSegment]:
-        """Fallback: fixed 24-second windows with 1-second overlap and seam dedup."""
+        """Fallback: fixed 24-second windows with seam dedup and per-window timestamps."""
         total_chunks = max(1, -(-len(audio) // (_CHUNK_SAMPLES - _OVERLAP_SAMPLES)))
         log.info("gigaam.chunked_start", duration_s=round(total_duration_s, 1), chunks=total_chunks)
 
         _tmpdir = "/dev/shm" if sys.platform == "linux" and os.path.isdir("/dev/shm") else None
-        parts: list[str] = []
+        parts: list[tuple[float, float, str]] = []
         pos = 0
         chunk_idx = 0
         while pos < len(audio):
@@ -570,7 +570,7 @@ class GigaAMCTCEngine:
                 sf.write(chunk_path, chunk, _SAMPLE_RATE, subtype="PCM_16")
                 text = model.transcribe(chunk_path).strip()
                 if text:
-                    parts.append(text)
+                    parts.append((chunk_start_s, chunk_end_s, text))
                     log.info("gigaam.chunk_done", chunk=chunk_idx, of=total_chunks, text=text[:80])
                 else:
                     log.info(
@@ -581,28 +581,33 @@ class GigaAMCTCEngine:
                     os.unlink(chunk_path)
             pos += _CHUNK_SAMPLES - _OVERLAP_SAMPLES
 
-        # Deduplicate words duplicated at seam boundaries due to 1-second overlap.
-        deduped: list[str] = []
-        for part in parts:
-            clean = _dedup_seam(deduped[-1], part) if deduped else part
+        # Deduplicate words duplicated at seam boundaries due to overlap.
+        deduped_parts: list[tuple[float, float, str]] = []
+        for chunk_start_s, chunk_end_s, part_text in parts:
+            prev_text = deduped_parts[-1][2] if deduped_parts else ""
+            clean = _dedup_seam(prev_text, part_text) if deduped_parts else part_text
             if clean:
-                deduped.append(clean)
-        text = " ".join(deduped).strip()
-        log.info("gigaam.transcribe_done", mode="chunked", chunks=chunk_idx, result_chars=len(text))
+                deduped_parts.append((chunk_start_s, chunk_end_s, clean))
 
-        if not text:
+        result_chars = sum(len(text) for _, _, text in deduped_parts)
+        log.info("gigaam.transcribe_done", mode="chunked", chunks=chunk_idx, result_chars=result_chars)
+        if not deduped_parts:
             return []
-        return [
-            TranscriptionSegment(
-                text=text,
-                language="ru",
-                start_time=0.0,
-                end_time=total_duration_s,
-                confidence=0.0,
-                words=None,
-                no_speech_prob=0.0,
+
+        segments: list[TranscriptionSegment] = []
+        for chunk_start_s, chunk_end_s, text in deduped_parts:
+            segments.append(
+                TranscriptionSegment(
+                    text=text,
+                    language="ru",
+                    start_time=max(0.0, min(chunk_start_s, total_duration_s)),
+                    end_time=max(0.0, min(chunk_end_s, total_duration_s)),
+                    confidence=0.0,
+                    words=None,
+                    no_speech_prob=0.0,
+                )
             )
-        ]
+        return segments
 
     def transcribe_samples_sync(
         self,

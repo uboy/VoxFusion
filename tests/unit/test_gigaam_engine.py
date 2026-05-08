@@ -32,6 +32,16 @@ class _FakeGigaAMModel:
         return "privet mir"
 
 
+class _FakeChunkedModel:
+    def __init__(self) -> None:
+        self._idx = 0
+
+    def transcribe(self, wav_path: str) -> str:
+        del wav_path
+        self._idx += 1
+        return f"chunk {self._idx}"
+
+
 def test_asr_config_sets_engine_for_gigaam_model() -> None:
     cfg = ASRConfig(model_size="gigaam-v3-e2e-ctc")
     assert cfg.engine == "gigaam"
@@ -134,3 +144,27 @@ def test_install_torchscript_source_fallback_returns_original_object_on_source_e
     _install_torchscript_source_fallback(fake_torch)
     marker = object()
     assert fake_torch.jit.script(marker) is marker
+
+
+def test_gigaam_chunked_fallback_returns_timestamped_segments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import voxfusion.asr.gigaam_engine as gigaam_module
+
+    monkeypatch.setattr(gigaam_module, "_CHUNK_SAMPLES", 16_000)
+    monkeypatch.setattr(gigaam_module, "_OVERLAP_SAMPLES", 0)
+
+    engine = GigaAMCTCEngine()
+    model = _FakeChunkedModel()
+    audio = np.ones(32_000, dtype=np.float32)  # 2 seconds
+
+    segments = engine._transcribe_chunked(model, audio, total_duration_s=2.0)
+
+    assert len(segments) == 2
+    assert segments[0].text == "chunk 1"
+    assert segments[0].start_time == pytest.approx(0.0)
+    assert segments[0].end_time == pytest.approx(1.0)
+    assert segments[1].text == "chunk 2"
+    assert segments[1].start_time == pytest.approx(1.0)
+    assert segments[1].end_time == pytest.approx(2.0)
+    engine.close()
