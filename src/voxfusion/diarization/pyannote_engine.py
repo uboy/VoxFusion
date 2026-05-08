@@ -31,6 +31,22 @@ from voxfusion.runtime_torchscript import (
 log = get_logger(__name__)
 
 
+def _ensure_lightning_fabric_version_info() -> None:
+    """Best-effort runtime fix for frozen bundles missing lightning_fabric/version.info."""
+    with suppress(Exception):
+        import lightning_fabric as _lf
+
+        package_dir = os.path.dirname(getattr(_lf, "__file__", "") or "")
+        if not package_dir:
+            return
+        target = os.path.join(package_dir, "version.info")
+        if os.path.exists(target):
+            return
+        version_text = str(getattr(_lf, "__version__", "0.0.0")).strip() or "0.0.0"
+        with open(target, "w", encoding="utf-8") as handle:
+            handle.write(f"{version_text}\n")
+
+
 def _disable_pyannote_telemetry() -> None:
     """Disable pyannote-audio 4.x OpenTelemetry telemetry and stop its background thread.
 
@@ -209,6 +225,7 @@ class PyAnnoteDiarizer:
             module=r"pyannote\.audio\.core\.io",
         )
         try:
+            _ensure_lightning_fabric_version_info()
             from pyannote.audio import Pipeline
         except ImportError as exc:
             raise DiarizationError(

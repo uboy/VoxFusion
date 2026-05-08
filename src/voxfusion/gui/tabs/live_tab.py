@@ -44,8 +44,11 @@ class LiveCaptureTab:
         top_frame = ttk.Frame(live_paned)
         live_paned.add(top_frame, weight=1)
 
-        settings_box = ttk.LabelFrame(top_frame, text="", padding=(6, 5))
-        settings_box.pack(fill=tk.X, padx=0, pady=(0, 4))
+        top_split = ttk.PanedWindow(top_frame, orient=tk.HORIZONTAL)
+        top_split.pack(fill=tk.BOTH, expand=True, padx=0, pady=(0, 4))
+
+        settings_box = ttk.LabelFrame(top_split, text="", padding=(6, 5))
+        top_split.add(settings_box, weight=3)
         _gui._bind_labelframe_text(settings_box, "live.section.capture_setup")
         settings_box.columnconfigure(1, weight=1)
         settings_box.columnconfigure(3, weight=2)
@@ -96,13 +99,14 @@ class LiveCaptureTab:
         _gui._live_translate_label = ttk.Label(lang_row, text="")
         _gui._live_translate_label.pack(side=tk.LEFT, padx=(0, 4))
         _gui._bind_text(_gui._live_translate_label, "live.label.translate")
-        _gui.translate_entry = ttk.Entry(
+        _gui.translate_combo = ttk.Combobox(
             lang_row,
             textvariable=_gui._translate_var,
-            width=8,
+            state="readonly",
+            width=18,
         )
-        _gui.translate_entry.pack(side=tk.LEFT)
-        _gui._bind_tooltip(_gui.translate_entry, "tooltip.live.translate")
+        _gui.translate_combo.pack(side=tk.LEFT)
+        _gui._bind_tooltip(_gui.translate_combo, "tooltip.live.translate")
 
         # Row 2: Action buttons + stats
         btn_row = ttk.Frame(settings_box)
@@ -133,17 +137,7 @@ class LiveCaptureTab:
         _gui.record_button.pack(side=tk.LEFT, padx=(0, 4))
         _gui._bind_text(_gui.record_button, "live.button.record_audio")
         _gui._bind_tooltip(_gui.record_button, "tooltip.live.record_audio")
-        _gui._rec_format_combo = ttk.Combobox(
-            btn_row,
-            textvariable=_gui._rec_format_var,
-            values=["wav", "ogg", "opus", "mp3"],
-            state="readonly",
-            width=5,
-        )
-        _gui._rec_format_combo.pack(side=tk.LEFT, padx=(0, 12))
-        _gui._bind_tooltip(_gui._rec_format_combo, "tooltip.live.record_format")
-
-        ttk.Separator(btn_row, orient="vertical").pack(side=tk.LEFT, fill=tk.Y, padx=(0, 12))
+        ttk.Separator(btn_row, orient="vertical").pack(side=tk.LEFT, fill=tk.Y, padx=(8, 12))
 
         _gui.clear_button = ttk.Button(btn_row, text="", command=_gui._clear_table)
         _gui.clear_button.pack(side=tk.LEFT, padx=(0, 4))
@@ -161,12 +155,12 @@ class LiveCaptureTab:
         _gui.counter_label.pack(side=tk.RIGHT)
         _gui._bind_tooltip(_gui.counter_label, "tooltip.live.segment_counter")
 
-        # Hidden model summary (kept for API compatibility — not displayed)
         _gui._live_model_summary = ModelSummaryCard(
-            settings_box,
+            top_split,
             title=_gui._tr("model_summary.title.live"),
             translate=_gui._tr,
         )
+        top_split.add(_gui._live_model_summary, weight=2)
 
         _gui.status_label = ttk.Label(top_frame, text="", anchor="w")
         _gui.status_label.pack(fill=tk.X, padx=0, pady=(2, 2))

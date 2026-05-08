@@ -66,7 +66,7 @@
   "tooltip.live.devices": "Select one or more audio devices for capture.\n\nMicrophone — records your voice.\nSystem/Loopback — captures audio playing on your PC.\nSelecting both captures both sources simultaneously.",
   "tooltip.live.model": "ASR model for live transcription.\n\nWhisper Small — balanced default, multilingual.\nWhisper Tiny — fastest, lowest accuracy.\nNote: GigaAM and Parakeet are file-only models.",
   "tooltip.live.language": "Language spoken in the audio.\nSpecifying the language is faster and more accurate than Auto Detect.",
-  "tooltip.live.translate": "Translate transcription to this language code (for example 'en' or 'de'). Leave blank to disable translation.",
+  "tooltip.live.translate": "Optional live translation target. Choose a language from the list, or select Off to disable translation.",
   "tooltip.live.start": "Start live audio capture and real-time transcription.",
   "tooltip.live.stop": "Stop the running live capture or recording session.",
   "tooltip.live.pause": "Pause or resume the current audio recording.",

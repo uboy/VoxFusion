@@ -838,10 +838,14 @@ def _default_data_entries() -> list[str]:
         )
     entries.extend(_customtkinter_data_entries())
     entries.extend(_pyannote_data_entries())
-    # lightning version files are only needed when torch backends are bundled;
-    # collecting them triggers PyInstaller's isolated subprocess analysis which
-    # segfaults when torch.distributed is imported transitively on Linux.
-    # entries.extend(_package_file_data_entry(...) for lightning packages)
+    # lightning version files are needed by some pyannote/torch stacks at runtime.
+    # On Linux this can trigger isolated subprocess analysis crashes in PyInstaller,
+    # so keep it disabled there.
+    if platform.system().lower() != "linux":
+        for package_name in ("lightning_fabric",):
+            entry = _package_file_data_entry(package_name, "version.info")
+            if entry:
+                entries.append(entry)
     entries.extend(_ffmpeg_data_entries())
     return entries
 

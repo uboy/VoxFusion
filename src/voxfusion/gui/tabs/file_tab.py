@@ -16,6 +16,7 @@ incrementally.
 from __future__ import annotations
 
 import tkinter as tk
+from contextlib import suppress
 from tkinter import scrolledtext, ttk
 from typing import TYPE_CHECKING
 
@@ -84,23 +85,7 @@ class FileTranscriptionTab:
         top_area = ttk.Frame(file_paned)
         file_paned.add(top_area, weight=3)
 
-        workflow_hdr = ttk.Frame(top_area)
-        workflow_hdr.pack(fill=tk.X, padx=0, pady=(0, 2))
-        _gui._file_workflow_title = ttk.Label(
-            workflow_hdr,
-            text="",
-            style="Header.TLabel",
-        )
-        _gui._file_workflow_title.pack(side=tk.LEFT)
-        _gui._bind_text(_gui._file_workflow_title, "file.workflow.title")
-
-        _gui._file_workflow_label = ttk.Label(
-            top_area,
-            text="",
-            anchor="w",
-            foreground="#555555",
-        )
-        _gui._file_workflow_label.pack(fill=tk.X, padx=0, pady=(0, 4))
+        _gui._file_workflow_label = ttk.Label(top_area, text="", anchor="w", foreground="#555555")
 
         # -- File picker + queue --
         top = ttk.PanedWindow(top_area, orient=tk.HORIZONTAL)
@@ -192,7 +177,7 @@ class FileTranscriptionTab:
             opts,
             textvariable=_gui._file_model_var,
             state="readonly",
-            width=10,
+            width=28,
             values=_ASR_MODEL_CHOICES,
         )
         _gui._file_model_combo.pack(side=tk.LEFT, padx=(0, 12))
@@ -337,7 +322,6 @@ class FileTranscriptionTab:
         _gui._file_time_label.pack(side=tk.RIGHT, padx=(0, 6))
 
         _gui._file_status_label = ttk.Label(prog_row, text="", anchor="w")
-        _gui._file_status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
         _gui._bind_tooltip(_gui._file_status_label, "tooltip.file.status")
 
         _gui._file_artifact_label = ttk.Label(
@@ -346,7 +330,6 @@ class FileTranscriptionTab:
             anchor="w",
             foreground="#555555",
         )
-        _gui._file_artifact_label.pack(fill=tk.X, pady=(0, 4))
         _gui._bind_tooltip(_gui._file_artifact_label, "tooltip.file.artifact")
 
         _gui._file_model_summary = ModelSummaryCard(
@@ -356,9 +339,51 @@ class FileTranscriptionTab:
         )
         top.add(_gui._file_model_summary, weight=2)
 
-        # -- Results table --
-        results_frame = ttk.Frame(file_paned)
-        file_paned.add(results_frame, weight=6)
+        # -- Results table (collapsible body, header always visible) --
+        results_section = ttk.Frame(file_paned)
+        file_paned.add(results_section, weight=6)
+        results_hdr = ttk.Frame(results_section)
+        results_hdr.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(results_hdr, text="Result", font=("", 9, "bold")).pack(side=tk.LEFT)
+        _gui._file_results_toggle_btn = ttk.Button(results_hdr, text="▸", width=3)
+        _gui._file_results_toggle_btn.pack(side=tk.RIGHT)
+        results_frame = ttk.Frame(results_section)
+        _gui._file_results_collapsed = True
+        _gui._llm_section_collapsed = True
+
+        def _apply_collapsed_layout() -> None:
+            with suppress(Exception):
+                file_paned.update_idletasks()
+                total_h = file_paned.winfo_height()
+                if total_h <= 0:
+                    return
+                top_target = max(220, int(total_h * 0.42))
+                if _gui._file_results_collapsed and _gui._llm_section_collapsed:
+                    file_paned.sashpos(0, total_h - 64)
+                    file_paned.sashpos(1, total_h - 32)
+                elif _gui._file_results_collapsed:
+                    file_paned.sashpos(0, total_h - max(220, int(total_h * 0.35)))
+                    file_paned.sashpos(1, total_h - 32)
+                elif _gui._llm_section_collapsed:
+                    file_paned.sashpos(0, top_target)
+                    file_paned.sashpos(1, total_h - 32)
+                else:
+                    file_paned.sashpos(0, top_target)
+                    file_paned.sashpos(1, max(top_target + 160, int(total_h * 0.78)))
+
+        def _toggle_results() -> None:
+            collapsed = getattr(_gui, "_file_results_collapsed", False)
+            if collapsed:
+                results_frame.pack(fill=tk.BOTH, expand=True, padx=0, pady=(0, 0))
+                _gui._file_results_collapsed = False
+                _gui._file_results_toggle_btn.configure(text="▾")
+            else:
+                results_frame.pack_forget()
+                _gui._file_results_collapsed = True
+                _gui._file_results_toggle_btn.configure(text="▸")
+            _gui.root.after(0, _apply_collapsed_layout)
+
+        _gui._file_results_toggle_btn.configure(command=_toggle_results)
 
         file_table_frame = ttk.Frame(results_frame)
         file_table_frame.pack(fill=tk.BOTH, expand=True, padx=0, pady=(0, 4))
@@ -407,10 +432,30 @@ class FileTranscriptionTab:
         _gui._file_seg_counter_label.pack(side=tk.RIGHT)
         _gui._bind_tooltip(_gui._file_seg_counter_label, "tooltip.file.segment_counter")
 
-        # -- LLM post-processing panel --
-        llm_box = ttk.LabelFrame(file_paned, text="", padding=8)
-        file_paned.add(llm_box, weight=2)
-        _gui._bind_labelframe_text(llm_box, "file.section.transcript_processing")
+        # -- LLM post-processing panel (collapsible) --
+        llm_section = ttk.Frame(file_paned)
+        file_paned.add(llm_section, weight=2)
+        llm_section_hdr = ttk.Frame(llm_section)
+        llm_section_hdr.pack(fill=tk.X, pady=(0, 2))
+        _gui._llm_section_label = ttk.Label(llm_section_hdr, text="", font=("", 9, "bold"))
+        _gui._llm_section_label.pack(side=tk.LEFT)
+        _gui._bind_text(_gui._llm_section_label, "file.section.transcript_processing")
+        _gui._llm_section_toggle_btn = ttk.Button(llm_section_hdr, text="▸", width=3)
+        _gui._llm_section_toggle_btn.pack(side=tk.RIGHT)
+        llm_box = ttk.Frame(llm_section, padding=8)
+        def _toggle_llm() -> None:
+            collapsed = getattr(_gui, "_llm_section_collapsed", False)
+            if collapsed:
+                llm_box.pack(fill=tk.BOTH, expand=True, pady=(0, 0))
+                _gui._llm_section_collapsed = False
+                _gui._llm_section_toggle_btn.configure(text="▾")
+            else:
+                llm_box.pack_forget()
+                _gui._llm_section_collapsed = True
+                _gui._llm_section_toggle_btn.configure(text="▸")
+            _gui.root.after(0, _apply_collapsed_layout)
+
+        _gui._llm_section_toggle_btn.configure(command=_toggle_llm)
 
         llm_hdr = ttk.Frame(llm_box)
         llm_hdr.pack(fill=tk.X, pady=(0, 2))
@@ -537,3 +582,14 @@ class FileTranscriptionTab:
         _gui._refresh_file_workflow()
         _gui._refresh_llm_context_hint()
         _gui._register_dnd_drop_targets()
+        def _collapse_panels() -> None:
+            with suppress(Exception):
+                results_frame.pack_forget()
+                llm_box.pack_forget()
+                _gui._file_results_collapsed = True
+                _gui._llm_section_collapsed = True
+                _gui._file_results_toggle_btn.configure(text="▸")
+                _gui._llm_section_toggle_btn.configure(text="▸")
+                _apply_collapsed_layout()
+        file_paned.bind("<Configure>", lambda _e: _apply_collapsed_layout())
+        _gui.root.after(0, _collapse_panels)
