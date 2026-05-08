@@ -46,7 +46,7 @@ def test_gui_package_import_is_lazy_for_main_module() -> None:
 
 
 def test_gui_main_installs_torchcodec_warning_filter() -> None:
-    gui_main = importlib.import_module("voxfusion.gui.main")
+    importlib.import_module("voxfusion.gui.main")
 
     assert any(
         action == "ignore"
@@ -58,8 +58,8 @@ def test_gui_main_installs_torchcodec_warning_filter() -> None:
 
 def test_translate_label_code_roundtrip_supports_three_letter_codes() -> None:
     gui_main = importlib.import_module("voxfusion.gui.main")
-    TranscriptionGUI = gui_main.TranscriptionGUI
+    transcription_gui = gui_main.TranscriptionGUI
 
-    assert TranscriptionGUI._translate_label_to_code("Hawaiian (haw)") == "haw"
-    assert TranscriptionGUI._translate_label_to_code("English (en)") == "en"
-    assert TranscriptionGUI._translate_label_to_code("Off") == ""
+    assert transcription_gui._translate_label_to_code("Hawaiian (haw)") == "haw"
+    assert transcription_gui._translate_label_to_code("English (en)") == "en"
+    assert transcription_gui._translate_label_to_code("Off") == ""
