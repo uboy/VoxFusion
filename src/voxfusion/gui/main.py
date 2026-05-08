@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ctypes
 import json
 import logging
 import os
@@ -13,6 +14,7 @@ import sys
 import textwrap
 import threading
 import tkinter as tk
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass
@@ -22,7 +24,9 @@ from time import monotonic
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from voxfusion.asr_catalog import (
+    ASR_MODEL_CATALOG,
     DEFAULT_LANGUAGE_CODE,
+    LANGUAGE_CATALOG,
     QUALITY_PRESET_LABELS,
     get_available_model_catalog,
     get_default_model_id,
@@ -108,6 +112,18 @@ _IMPORTED_SRT_TIME_RANGE_RE = re.compile(
 )
 _IMPORTED_SRT_SPEAKER_RE = re.compile(r"^\[(?P<speaker>[^\]]+)\]\s*(?P<text>.+?)\s*$")
 log = get_logger(__name__)
+_TRANSLATE_DISABLED_LABEL = "Off"
+_WINDOW_GWL_EXSTYLE = -20
+_WINDOW_WS_EX_APPWINDOW = 0x00040000
+_WINDOW_WS_EX_TOOLWINDOW = 0x00000080
+_WINDOW_SPI_GETWORKAREA = 48
+
+# Must be installed before importing GUI runtime modules that may import pyannote.
+warnings.filterwarnings(
+    "ignore",
+    message=r".*torchcodec is not installed correctly so built-in audio decoding will fail.*",
+    category=UserWarning,
+)
 
 # File dialog filter for supported media files
 _AUDIO_EXTENSIONS = " ".join(
@@ -146,6 +162,7 @@ class TranscriptionGUI:
     def __init__(self, root: tk.Tk, options: CaptureOptions) -> None:
         self.root = root
         self.options = options
+        self._custom_chrome_enabled = os.environ.get("VOXFUSION_CUSTOM_CHROME", "0") == "1"
         self._ui_language_code = detect_system_gui_language()
         self._ui_language_explicit = False
         self._ui_language_var = tk.StringVar(value="")
@@ -176,7 +193,7 @@ class TranscriptionGUI:
         self._language_var = tk.StringVar(
             value=self._language_label_for_code(options.language, initial_model)
         )
-        self._translate_var = tk.StringVar(value=options.translate or "")
+        self._translate_var = tk.StringVar(value=self._translate_code_to_label(options.translate))
         self._device_picker_var = tk.StringVar(value=self._tr("device.loading"))
         self._device_options: list[DeviceOption] = []
         self._requested_device_index = options.microphone_device_id or options.system_device_id
@@ -186,7 +203,7 @@ class TranscriptionGUI:
         self._device_list_fingerprint: frozenset = frozenset()
         self._last_recorded_file: Path | None = None
         self._ffmpeg_path: Path | None = find_ffmpeg()
-        self._rec_format_var = tk.StringVar(value="mp3" if self._ffmpeg_path is not None else "wav")
+        self._rec_format_var = tk.StringVar(value="mp3")
 
         # File tab state
         self._file_worker: FileTranscribeWorker | None = None
@@ -248,6 +265,8 @@ class TranscriptionGUI:
         self._apply_saved_gui_settings()
 
         self._build_layout()
+        if self._custom_chrome_enabled:
+            self._enable_custom_window_chrome()
         self._apply_localized_ui()
         self._install_redirection()
         self._apply_gui_log_mode()
@@ -469,6 +488,8 @@ class TranscriptionGUI:
         self._refresh_file_queue_rows()
         self._refresh_live_summary_labels()
         self._refresh_file_workflow()
+        self._refresh_file_model_tooltips()
+        self._refresh_live_model_tooltips()
 
     def _refresh_language_selector(self) -> None:
         if not hasattr(self, "_ui_language_combo"):
@@ -492,46 +513,90 @@ class TranscriptionGUI:
         self._apply_localized_ui()
         self._persist_gui_settings()
 
+    @staticmethod
+    def _translate_label_to_code(label: str) -> str:
+        value = str(label or "").strip()
+        if not value or value == _TRANSLATE_DISABLED_LABEL:
+            return ""
+        match = re.search(r"\(([a-z]{2,5})\)\s*$", value)
+        return match.group(1) if match else value.lower()
+
+    @staticmethod
+    def _translate_code_to_label(code: str | None) -> str:
+        if not code:
+            return _TRANSLATE_DISABLED_LABEL
+        normalized = str(code).strip().lower()
+        for language in LANGUAGE_CATALOG:
+            if language.code == normalized:
+                return f"{language.label} ({normalized})"
+        return normalized
+
+    @staticmethod
+    def _translate_combo_values() -> list[str]:
+        values = [_TRANSLATE_DISABLED_LABEL]
+        for language in LANGUAGE_CATALOG:
+            if language.code:
+                values.append(f"{language.label} ({language.code})")
+        return values
+
     # ------------------------------------------------------------------
     # Layout builders
     # ------------------------------------------------------------------
 
     def _build_layout(self) -> None:
         """Build the top-level layout with a two-tab Notebook and resizable log pane."""
-        header = ttk.Frame(self.root)
-        header.pack(fill=tk.X, padx=6, pady=(6, 2))
+        self._title_bar = ttk.Frame(self.root)
+        self._title_bar.pack(fill=tk.X, padx=2, pady=(2, 0))
+        ttk.Style().configure("Titlebar.TButton", font=("", 10, "bold"), padding=(4, 1))
+        self._title_label = ttk.Label(self._title_bar, text=self._tr("app.title"), anchor="w")
+        self._title_label.pack(side=tk.LEFT, padx=(6, 0))
+        if self._custom_chrome_enabled:
+            self._title_bar.bind("<ButtonPress-1>", self._on_title_drag_start)
+            self._title_bar.bind("<B1-Motion>", self._on_title_drag_move)
+            self._title_label.bind("<ButtonPress-1>", self._on_title_drag_start)
+            self._title_label.bind("<B1-Motion>", self._on_title_drag_move)
 
-        header_title = ttk.Label(header, text=self._tr("app.title"), anchor="w")
-        header_title.pack(side=tk.LEFT)
-
-        header_controls = ttk.Frame(header)
-        header_controls.pack(side=tk.RIGHT)
-
-        self._about_button = ttk.Button(header_controls, text="", command=self._open_about)
-        self._about_button.pack(side=tk.RIGHT, padx=(8, 0))
-        self._bind_text(self._about_button, "header.about")
-
-        self._settings_button = ttk.Button(header_controls, text="", command=self._open_settings)
-        self._settings_button.pack(side=tk.RIGHT, padx=(8, 0))
-        self._bind_text(self._settings_button, "header.settings")
-        self._bind_tooltip(self._settings_button, "tooltip.header.settings")
-
-        self._ui_language_combo = ttk.Combobox(
-            header_controls,
-            textvariable=self._ui_language_var,
-            state="readonly",
-            width=10,
+        title_controls = ttk.Frame(self._title_bar)
+        title_controls.pack(side=tk.RIGHT)
+        self._about_button = ttk.Button(
+            title_controls, text="i", width=3, style="Titlebar.TButton", command=self._open_about
         )
-        self._ui_language_combo.pack(side=tk.RIGHT, padx=(0, 8))
-        self._ui_language_combo.bind("<<ComboboxSelected>>", self._on_ui_language_changed)
-        self._bind_tooltip(self._ui_language_combo, "tooltip.header.language")
-
-        self._ui_language_label = ttk.Label(header_controls, text="")
-        self._ui_language_label.pack(side=tk.RIGHT, padx=(0, 4))
-        self._bind_text(self._ui_language_label, "header.language")
+        self._about_button.pack(side=tk.RIGHT, padx=(4, 0))
+        self._bind_tooltip(self._about_button, "header.about")
+        self._settings_button = ttk.Button(
+            title_controls,
+            text="⚙",
+            width=3,
+            style="Titlebar.TButton",
+            command=self._open_settings,
+        )
+        self._settings_button.pack(side=tk.RIGHT, padx=(4, 0))
+        self._bind_tooltip(self._settings_button, "tooltip.header.settings")
+        if self._custom_chrome_enabled:
+            self._close_button = ttk.Button(
+                title_controls, text="✕", width=3, style="Titlebar.TButton", command=self._on_close
+            )
+            self._close_button.pack(side=tk.RIGHT, padx=(4, 0))
+            self._max_button = ttk.Button(
+                title_controls,
+                text="□",
+                width=3,
+                style="Titlebar.TButton",
+                command=self._toggle_maximize_window,
+            )
+            self._max_button.pack(side=tk.RIGHT, padx=(4, 0))
+            self._min_button = ttk.Button(
+                title_controls,
+                text="_",
+                width=3,
+                style="Titlebar.TButton",
+                command=self._minimize_window,
+            )
+            self._min_button.pack(side=tk.RIGHT, padx=(4, 0))
 
         paned = ttk.PanedWindow(self.root, orient=tk.VERTICAL)
         paned.pack(fill=tk.BOTH, expand=True, padx=2, pady=(2, 2))
+        self._main_paned = paned
 
         notebook_frame = ttk.Frame(paned)
         self._notebook = ttk.Notebook(notebook_frame)
@@ -549,6 +614,7 @@ class TranscriptionGUI:
         self._bind_notebook_tab(1, "file.tab")
         self._file_tab_builder = FileTranscriptionTab(self)
         self._file_tab_builder.build(file_tab)
+        self._refresh_file_model_tooltips()
 
         log_frame = ttk.Frame(paned)
         log_header = ttk.Frame(log_frame)
@@ -559,20 +625,8 @@ class TranscriptionGUI:
 
         log_controls = ttk.Frame(log_header)
         log_controls.pack(side=tk.RIGHT)
-
-        self._log_mode_combo = ttk.Combobox(
-            log_controls,
-            textvariable=self._log_mode_var,
-            state="readonly",
-            width=10,
-        )
-        self._log_mode_combo.pack(side=tk.RIGHT, padx=(0, 8))
-        self._log_mode_combo.bind("<<ComboboxSelected>>", self._on_log_mode_changed)
-        self._bind_tooltip(self._log_mode_combo, "tooltip.header.log_mode")
-
-        self._log_mode_caption = ttk.Label(log_controls, text="")
-        self._log_mode_caption.pack(side=tk.RIGHT, padx=(0, 4))
-        self._bind_text(self._log_mode_caption, "header.log_mode")
+        self._log_toggle_btn = ttk.Button(log_controls, text="▸", width=3, command=self._toggle_log_panel)
+        self._log_toggle_btn.pack(side=tk.RIGHT, padx=(4, 0))
 
         self.log_widget = scrolledtext.ScrolledText(
             log_frame,
@@ -582,6 +636,181 @@ class TranscriptionGUI:
         self.log_widget.pack(fill=tk.BOTH, expand=True, padx=4, pady=(2, 4))
         self._bind_tooltip(self.log_widget, "tooltip.logs.panel")
         paned.add(log_frame, weight=1)
+        self._log_frame = log_frame
+        self._log_collapsed = False
+        self.root.after(0, self._collapse_log_panel)
+
+    def _toggle_log_panel(self) -> None:
+        if getattr(self, "_log_collapsed", False):
+            self.log_widget.pack(fill=tk.BOTH, expand=True, padx=4, pady=(2, 4))
+            self._log_collapsed = False
+            self._log_toggle_btn.configure(text="▾")
+            return
+        self._collapse_log_panel()
+
+    def _collapse_log_panel(self) -> None:
+        if hasattr(self, "log_widget"):
+            self.log_widget.pack_forget()
+        self._log_collapsed = True
+        if hasattr(self, "_log_toggle_btn"):
+            self._log_toggle_btn.configure(text="▸")
+
+    def _enable_custom_window_chrome(self) -> None:
+        self._window_drag_origin: tuple[int, int] | None = None
+        self._window_restore_geometry: str | None = None
+        self._window_maximized = False
+        self._resize_anchor: tuple[int, int, int, int] | None = None
+        self._resize_mode: str | None = None
+        self.root.overrideredirect(True)
+        self.root.bind("<Map>", self._on_window_map)
+        self.root.bind_all("<ButtonPress-1>", self._on_global_press, add="+")
+        self.root.bind_all("<B1-Motion>", self._on_global_drag, add="+")
+        self.root.bind_all("<ButtonRelease-1>", self._on_global_release, add="+")
+        self.root.bind_all("<Motion>", self._on_global_motion, add="+")
+        self.root.after(50, self._force_taskbar_presence)
+
+    def _on_title_drag_start(self, event: tk.Event[object]) -> None:
+        self._window_drag_origin = (event.x_root, event.y_root)
+
+    def _on_title_drag_move(self, event: tk.Event[object]) -> None:
+        if self._window_maximized:
+            return
+        if self._window_drag_origin is None:
+            return
+        dx = event.x_root - self._window_drag_origin[0]
+        dy = event.y_root - self._window_drag_origin[1]
+        self._window_drag_origin = (event.x_root, event.y_root)
+        x = self.root.winfo_x() + dx
+        y = self.root.winfo_y() + dy
+        self.root.geometry(f"+{x}+{y}")
+
+    def _toggle_maximize_window(self) -> None:
+        if not self._window_maximized:
+            self._window_restore_geometry = self.root.geometry()
+            rect = ctypes.wintypes.RECT()
+            ok = ctypes.windll.user32.SystemParametersInfoW(
+                _WINDOW_SPI_GETWORKAREA,
+                0,
+                ctypes.byref(rect),
+                0,
+            )
+            if ok:
+                width = rect.right - rect.left
+                height = rect.bottom - rect.top
+                self.root.geometry(f"{width}x{height}+{rect.left}+{rect.top}")
+            else:
+                screen_w = self.root.winfo_screenwidth()
+                screen_h = self.root.winfo_screenheight()
+                self.root.geometry(f"{screen_w}x{screen_h}+0+0")
+            self._window_maximized = True
+            self._max_button.configure(text="❐")
+            return
+        if self._window_restore_geometry:
+            self.root.geometry(self._window_restore_geometry)
+        self._window_maximized = False
+        self._max_button.configure(text="□")
+
+    def _minimize_window(self) -> None:
+        self.root.overrideredirect(False)
+        self.root.iconify()
+
+    def _on_window_map(self, _event: tk.Event[object]) -> None:
+        def _restore() -> None:
+            self.root.overrideredirect(True)
+            self._force_taskbar_presence()
+        self.root.after(0, _restore)
+
+    def _force_taskbar_presence(self) -> None:
+        if sys.platform != "win32":
+            return
+        with suppress(Exception):
+            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, _WINDOW_GWL_EXSTYLE)
+            style = (style & ~_WINDOW_WS_EX_TOOLWINDOW) | _WINDOW_WS_EX_APPWINDOW
+            ctypes.windll.user32.SetWindowLongW(hwnd, _WINDOW_GWL_EXSTYLE, style)
+            self.root.withdraw()
+            self.root.after(0, self.root.deiconify)
+
+    def _resize_mode_for_pointer(self, x: int, y: int) -> str | None:
+        if self._window_maximized:
+            return None
+        margin = 8
+        width = self.root.winfo_width()
+        height = self.root.winfo_height()
+        on_left = x <= margin
+        on_right = x >= width - margin
+        on_top = y <= margin
+        on_bottom = y >= height - margin
+        if on_left and on_top:
+            return "nw"
+        if on_right and on_top:
+            return "ne"
+        if on_left and on_bottom:
+            return "sw"
+        if on_right and on_bottom:
+            return "se"
+        if on_left:
+            return "w"
+        if on_right:
+            return "e"
+        if on_top:
+            return "n"
+        if on_bottom:
+            return "s"
+        return None
+
+    def _on_global_motion(self, event: tk.Event[object]) -> None:
+        mode = self._resize_mode_for_pointer(event.x_root - self.root.winfo_rootx(), event.y_root - self.root.winfo_rooty())
+        cursor_map = {
+            "w": "size_we",
+            "e": "size_we",
+            "n": "size_ns",
+            "s": "size_ns",
+            "nw": "size_nw_se",
+            "se": "size_nw_se",
+            "ne": "size_ne_sw",
+            "sw": "size_ne_sw",
+            None: "",
+        }
+        self.root.configure(cursor=cursor_map.get(mode, ""))
+
+    def _on_global_press(self, event: tk.Event[object]) -> None:
+        mode = self._resize_mode_for_pointer(event.x_root - self.root.winfo_rootx(), event.y_root - self.root.winfo_rooty())
+        if mode is None:
+            return
+        self._resize_mode = mode
+        self._resize_anchor = (
+            self.root.winfo_x(),
+            self.root.winfo_y(),
+            self.root.winfo_width(),
+            self.root.winfo_height(),
+        )
+        self._window_drag_origin = (event.x_root, event.y_root)
+
+    def _on_global_drag(self, event: tk.Event[object]) -> None:
+        if self._resize_mode is None or self._resize_anchor is None or self._window_drag_origin is None:
+            return
+        x0, y0, w0, h0 = self._resize_anchor
+        dx = event.x_root - self._window_drag_origin[0]
+        dy = event.y_root - self._window_drag_origin[1]
+        min_w, min_h = 920, 620
+        x, y, w, h = x0, y0, w0, h0
+        mode = self._resize_mode
+        if "e" in mode:
+            w = max(min_w, w0 + dx)
+        if "s" in mode:
+            h = max(min_h, h0 + dy)
+        if "w" in mode:
+            w = max(min_w, w0 - dx)
+            x = x0 + (w0 - w)
+        if "n" in mode:
+            h = max(min_h, h0 - dy)
+            y = y0 + (h0 - h)
+        self.root.geometry(f"{w}x{h}+{x}+{y}")
+
+    def _on_global_release(self, _event: tk.Event[object]) -> None:
+        self._resize_mode = None
+        self._resize_anchor = None
 
     # ------------------------------------------------------------------
     # Live capture methods
@@ -615,7 +844,7 @@ class TranscriptionGUI:
                 self._language_var.get(),
                 self._model_var.get() or "small",
             ),
-            translate=(self._translate_var.get().strip() or None),
+            translate=(self._translate_label_to_code(self._translate_var.get()) or None),
             microphone_device_id=self._selected_microphone_id,
             system_device_id=self._selected_system_id,
         )
@@ -1051,7 +1280,7 @@ class TranscriptionGUI:
         self.record_button.configure(state=(tk.NORMAL if enabled else tk.DISABLED))
         self.model_combo.configure(state=combo_state)
         self.language_combo.configure(state=combo_state)
-        self.translate_entry.configure(state=(tk.NORMAL if enabled else tk.DISABLED))
+        self.translate_combo.configure(state=combo_state)
         self.device_picker.configure(state=("normal" if enabled else "disabled"))
 
     def _refresh_language_choices(self) -> None:
@@ -1062,6 +1291,11 @@ class TranscriptionGUI:
         self.language_combo.configure(values=live_values)
         self._language_var.set(self._language_label_for_code(current_live, live_model))
         self._live_model_summary.set_model(live_model)
+        if hasattr(self, "translate_combo"):
+            self.translate_combo.configure(values=self._translate_combo_values())
+            self._translate_var.set(
+                self._translate_code_to_label(self._translate_label_to_code(self._translate_var.get()))
+            )
         if live_model_info.supports_live_capture:
             if self._worker is None and self._record_worker is None:
                 self.start_button.configure(state=tk.NORMAL)
@@ -1085,6 +1319,7 @@ class TranscriptionGUI:
     def _on_model_changed(self, _event: object | None = None) -> None:
         self._model_var.set(get_model_info(self._model_var.get()).id)
         self._refresh_language_choices()
+        self._refresh_live_model_tooltips()
         self._persist_gui_settings()
 
     def _on_live_language_changed(self, _event: object | None = None) -> None:
@@ -1096,6 +1331,7 @@ class TranscriptionGUI:
     def _on_file_model_changed(self, _event: object | None = None) -> None:
         self._file_model_var.set(get_model_info(self._file_model_var.get()).id)
         self._refresh_language_choices()
+        self._refresh_file_model_tooltips()
 
     def _on_file_diarization_changed(self, _event: object | None = None) -> None:
         strategy = (self._file_diarization_var.get() or "auto").strip().lower()
@@ -1368,6 +1604,9 @@ class TranscriptionGUI:
         self._file_speaker_preset_var.set(
             self._normalize_speaker_preset(settings.get("file_speaker_preset", "auto"))
         )
+        saved_rec_format = settings.get("record_format", "").strip().lower()
+        if saved_rec_format in {"wav", "ogg", "opus", "mp3"}:
+            self._rec_format_var.set(saved_rec_format)
 
         saved_live_model = settings.get("live_model", "")
         _avail = {m.id for m in get_available_model_catalog()}
@@ -1376,6 +1615,9 @@ class TranscriptionGUI:
             saved_live_lang = settings.get("live_language", "")
             if saved_live_lang:
                 self._language_var.set(saved_live_lang)
+        self._translate_var.set(
+            self._translate_code_to_label(settings.get("live_translate", "").strip() or None)
+        )
 
         saved_file_model = settings.get("file_model", "")
         if saved_file_model and saved_file_model in _avail:
@@ -1417,6 +1659,8 @@ class TranscriptionGUI:
                 # Live transcription model/language
                 "live_model": self._model_var.get().strip(),
                 "live_language": self._language_var.get().strip(),
+                "live_translate": self._translate_label_to_code(self._translate_var.get()),
+                "record_format": self._rec_format_var.get().strip().lower() or "mp3",
                 # Transcription quality
                 "file_quality": self._file_quality_var.get(),
                 "file_diarization_strategy": self._file_diarization_var.get().strip(),
@@ -1665,7 +1909,8 @@ class TranscriptionGUI:
             )
         else:
             workflow_text = self._tr("file.workflow.step1")
-        self._file_workflow_label.configure(text=workflow_text)
+        if hasattr(self, "_file_workflow_label"):
+            self._file_workflow_label.configure(text=workflow_text)
         llm_enabled = (
             transcript_ready
             and self._llm_worker is None
@@ -1691,6 +1936,24 @@ class TranscriptionGUI:
             )
         else:
             self._file_artifact_label.configure(text=self._tr("file.label.transcript_missing"))
+
+    def _refresh_file_model_tooltips(self) -> None:
+        if not hasattr(self, "_file_model_combo"):
+            return
+        catalog = list(ASR_MODEL_CATALOG)
+        selected = get_model_info(self._file_model_var.get())
+        selected_text = f"{selected.name}: {selected.description}"
+        all_models = "\n".join(f"• {item.id} — {item.description}" for item in catalog)
+        self._bind_tooltip(self._file_model_combo, "tooltip.file.model", text=f"{selected_text}\n\n{all_models}")
+
+    def _refresh_live_model_tooltips(self) -> None:
+        if not hasattr(self, "model_combo"):
+            return
+        catalog = list(ASR_MODEL_CATALOG)
+        selected = get_model_info(self._model_var.get())
+        selected_text = f"{selected.name}: {selected.description}"
+        all_models = "\n".join(f"• {item.id} — {item.description}" for item in catalog)
+        self._bind_tooltip(self.model_combo, "tooltip.live.model", text=f"{selected_text}\n\n{all_models}")
 
     @staticmethod
     def _parse_llm_context_tokens(value: object) -> int | None:
@@ -2068,7 +2331,7 @@ class TranscriptionGUI:
         """Open the application settings dialog (proxy / network)."""
         dlg = tk.Toplevel(self.root)
         dlg.title(self._tr("settings.title"))
-        dlg.geometry("580x480")
+        dlg.geometry("620x560")
         dlg.resizable(False, False)
         dlg.grab_set()
 
@@ -2079,6 +2342,8 @@ class TranscriptionGUI:
         no_v = tk.StringVar(value=self._proxy_no_var.get())
         ca_v = tk.StringVar(value=self._proxy_ca_var.get())
         hf_token_v = tk.StringVar(value=self._hf_token_var.get())
+        ui_lang_v = tk.StringVar(value=self._language_label(self._ui_language_code))
+        log_mode_v = tk.StringVar(value=self._log_mode_label(self._current_log_mode()))
 
         pad = {"padx": 8, "pady": 3}
 
@@ -2181,6 +2446,38 @@ class TranscriptionGUI:
             foreground="#777777",
         ).grid(row=1, column=0, columnspan=3, sticky="w", padx=8)
 
+        app_frame = ttk.LabelFrame(dlg, text="Interface", padding=(10, 8))
+        app_frame.pack(fill=tk.X, padx=10, pady=(0, 4))
+        app_frame.columnconfigure(1, weight=1)
+        ttk.Label(app_frame, text=self._tr("header.language")).grid(row=0, column=0, sticky="w", **pad)
+        ui_combo = ttk.Combobox(
+            app_frame,
+            textvariable=ui_lang_v,
+            state="readonly",
+            values=[self._language_label(code) for code in SUPPORTED_GUI_LANGUAGES],
+            width=18,
+        )
+        ui_combo.grid(row=0, column=1, sticky="w", **pad)
+        ttk.Label(app_frame, text=self._tr("header.log_mode")).grid(row=1, column=0, sticky="w", **pad)
+        mode_combo = ttk.Combobox(
+            app_frame,
+            textvariable=log_mode_v,
+            state="readonly",
+            values=[self._log_mode_label("normal"), self._log_mode_label("debug")],
+            width=18,
+        )
+        mode_combo.grid(row=1, column=1, sticky="w", **pad)
+        ttk.Label(app_frame, text="Record format:").grid(row=2, column=0, sticky="w", **pad)
+        rec_format_v = tk.StringVar(value=self._rec_format_var.get() or "mp3")
+        rec_combo = ttk.Combobox(
+            app_frame,
+            textvariable=rec_format_v,
+            state="readonly",
+            values=["mp3", "wav", "ogg", "opus"],
+            width=18,
+        )
+        rec_combo.grid(row=2, column=1, sticky="w", **pad)
+
         # -- Bottom buttons --
         btn_row = ttk.Frame(dlg)
         btn_row.pack(fill=tk.X, padx=10, pady=(4, 10))
@@ -2200,6 +2497,15 @@ class TranscriptionGUI:
             self._proxy_no_var.set(no_v.get().strip())
             self._proxy_ca_var.set(ca_v.get().strip())
             self._hf_token_var.set(hf_token_v.get().strip())
+            self._ui_language_code = normalize_gui_language(
+                self._language_code_from_label(ui_lang_v.get())
+            )
+            self._ui_language_explicit = True
+            self._locale = load_gui_locale(self._ui_language_code)
+            self._log_mode_code = self._log_mode_code_from_label(log_mode_v.get())
+            self._rec_format_var.set((rec_format_v.get() or "mp3").strip().lower())
+            self._apply_gui_log_mode()
+            self._apply_localized_ui()
             self._persist_gui_settings()
             proxy_settings = {
                 "proxy_use_system": "true" if use_sys.get() else "false",
