@@ -625,7 +625,9 @@ class TranscriptionGUI:
 
         log_controls = ttk.Frame(log_header)
         log_controls.pack(side=tk.RIGHT)
-        self._log_toggle_btn = ttk.Button(log_controls, text="▸", width=3, command=self._toggle_log_panel)
+        self._log_toggle_btn = ttk.Button(
+            log_controls, text="▸", width=3, command=self._toggle_log_panel
+        )
         self._log_toggle_btn.pack(side=tk.RIGHT, padx=(4, 0))
 
         self.log_widget = scrolledtext.ScrolledText(
@@ -718,6 +720,7 @@ class TranscriptionGUI:
         def _restore() -> None:
             self.root.overrideredirect(True)
             self._force_taskbar_presence()
+
         self.root.after(0, _restore)
 
     def _force_taskbar_presence(self) -> None:
@@ -760,7 +763,9 @@ class TranscriptionGUI:
         return None
 
     def _on_global_motion(self, event: tk.Event[object]) -> None:
-        mode = self._resize_mode_for_pointer(event.x_root - self.root.winfo_rootx(), event.y_root - self.root.winfo_rooty())
+        mode = self._resize_mode_for_pointer(
+            event.x_root - self.root.winfo_rootx(), event.y_root - self.root.winfo_rooty()
+        )
         cursor_map = {
             "w": "size_we",
             "e": "size_we",
@@ -775,7 +780,9 @@ class TranscriptionGUI:
         self.root.configure(cursor=cursor_map.get(mode, ""))
 
     def _on_global_press(self, event: tk.Event[object]) -> None:
-        mode = self._resize_mode_for_pointer(event.x_root - self.root.winfo_rootx(), event.y_root - self.root.winfo_rooty())
+        mode = self._resize_mode_for_pointer(
+            event.x_root - self.root.winfo_rootx(), event.y_root - self.root.winfo_rooty()
+        )
         if mode is None:
             return
         self._resize_mode = mode
@@ -788,7 +795,11 @@ class TranscriptionGUI:
         self._window_drag_origin = (event.x_root, event.y_root)
 
     def _on_global_drag(self, event: tk.Event[object]) -> None:
-        if self._resize_mode is None or self._resize_anchor is None or self._window_drag_origin is None:
+        if (
+            self._resize_mode is None
+            or self._resize_anchor is None
+            or self._window_drag_origin is None
+        ):
             return
         x0, y0, w0, h0 = self._resize_anchor
         dx = event.x_root - self._window_drag_origin[0]
@@ -1294,7 +1305,9 @@ class TranscriptionGUI:
         if hasattr(self, "translate_combo"):
             self.translate_combo.configure(values=self._translate_combo_values())
             self._translate_var.set(
-                self._translate_code_to_label(self._translate_label_to_code(self._translate_var.get()))
+                self._translate_code_to_label(
+                    self._translate_label_to_code(self._translate_var.get())
+                )
             )
         if live_model_info.supports_live_capture:
             if self._worker is None and self._record_worker is None:
@@ -1944,7 +1957,9 @@ class TranscriptionGUI:
         selected = get_model_info(self._file_model_var.get())
         selected_text = f"{selected.name}: {selected.description}"
         all_models = "\n".join(f"• {item.id} — {item.description}" for item in catalog)
-        self._bind_tooltip(self._file_model_combo, "tooltip.file.model", text=f"{selected_text}\n\n{all_models}")
+        self._bind_tooltip(
+            self._file_model_combo, "tooltip.file.model", text=f"{selected_text}\n\n{all_models}"
+        )
 
     def _refresh_live_model_tooltips(self) -> None:
         if not hasattr(self, "model_combo"):
@@ -1953,7 +1968,9 @@ class TranscriptionGUI:
         selected = get_model_info(self._model_var.get())
         selected_text = f"{selected.name}: {selected.description}"
         all_models = "\n".join(f"• {item.id} — {item.description}" for item in catalog)
-        self._bind_tooltip(self.model_combo, "tooltip.live.model", text=f"{selected_text}\n\n{all_models}")
+        self._bind_tooltip(
+            self.model_combo, "tooltip.live.model", text=f"{selected_text}\n\n{all_models}"
+        )
 
     @staticmethod
     def _parse_llm_context_tokens(value: object) -> int | None:
@@ -2449,7 +2466,9 @@ class TranscriptionGUI:
         app_frame = ttk.LabelFrame(dlg, text="Interface", padding=(10, 8))
         app_frame.pack(fill=tk.X, padx=10, pady=(0, 4))
         app_frame.columnconfigure(1, weight=1)
-        ttk.Label(app_frame, text=self._tr("header.language")).grid(row=0, column=0, sticky="w", **pad)
+        ttk.Label(app_frame, text=self._tr("header.language")).grid(
+            row=0, column=0, sticky="w", **pad
+        )
         ui_combo = ttk.Combobox(
             app_frame,
             textvariable=ui_lang_v,
@@ -2458,7 +2477,9 @@ class TranscriptionGUI:
             width=18,
         )
         ui_combo.grid(row=0, column=1, sticky="w", **pad)
-        ttk.Label(app_frame, text=self._tr("header.log_mode")).grid(row=1, column=0, sticky="w", **pad)
+        ttk.Label(app_frame, text=self._tr("header.log_mode")).grid(
+            row=1, column=0, sticky="w", **pad
+        )
         mode_combo = ttk.Combobox(
             app_frame,
             textvariable=log_mode_v,

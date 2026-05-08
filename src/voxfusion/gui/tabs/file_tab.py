@@ -443,6 +443,7 @@ class FileTranscriptionTab:
         _gui._llm_section_toggle_btn = ttk.Button(llm_section_hdr, text="▸", width=3)
         _gui._llm_section_toggle_btn.pack(side=tk.RIGHT)
         llm_box = ttk.Frame(llm_section, padding=8)
+
         def _toggle_llm() -> None:
             collapsed = getattr(_gui, "_llm_section_collapsed", False)
             if collapsed:
@@ -582,6 +583,7 @@ class FileTranscriptionTab:
         _gui._refresh_file_workflow()
         _gui._refresh_llm_context_hint()
         _gui._register_dnd_drop_targets()
+
         def _collapse_panels() -> None:
             with suppress(Exception):
                 results_frame.pack_forget()
@@ -591,5 +593,6 @@ class FileTranscriptionTab:
                 _gui._file_results_toggle_btn.configure(text="▸")
                 _gui._llm_section_toggle_btn.configure(text="▸")
                 _apply_collapsed_layout()
+
         file_paned.bind("<Configure>", lambda _e: _apply_collapsed_layout())
         _gui.root.after(0, _collapse_panels)
