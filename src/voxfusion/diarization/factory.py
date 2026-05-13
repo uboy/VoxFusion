@@ -39,8 +39,11 @@ def _prompt_hf_token_interactively() -> str | None:
             "Get one at: https://huggingface.co/settings/tokens\n"
             "You also need to accept the model licenses:\n"
             "  https://huggingface.co/pyannote/speaker-diarization-3.1\n"
-            "  https://huggingface.co/pyannote/segmentation-3.0\n",
+            "  https://huggingface.co/pyannote/segmentation-3.0\n"
+            "\nPaste your token and press Enter (or press Enter to skip): ",
             file=sys.stderr,
+            end="",
+            flush=True,
         )
         token = sys.stdin.readline().strip()
         return token if token else None
