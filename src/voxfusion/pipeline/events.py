@@ -6,11 +6,14 @@ about progress, stage transitions, and errors.
 
 from dataclasses import dataclass, field
 from enum import Enum
-
-
-class StrEnum(str, Enum):
-    """Backport of enum.StrEnum for Python 3.10 compat."""
 from typing import Any
+
+try:
+    from enum import StrEnum
+except ImportError:
+
+    class StrEnum(str, Enum):  # noqa: UP042
+        """Backport of enum.StrEnum for Python 3.10 compat."""
 
 
 class PipelineStage(StrEnum):
