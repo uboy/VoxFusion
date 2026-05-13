@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -140,9 +140,7 @@ def test_interactive_token_is_saved_to_disk(tmp_path: Path) -> None:
                 "voxfusion.diarization.factory._prompt_hf_token_interactively",
                 return_value="hf_persist_test",
             ):
-                ok, _, source = _ml_prerequisites(
-                    _config_without_token(), interactive=True
-                )
+                ok, _, source = _ml_prerequisites(_config_without_token(), interactive=True)
 
     assert ok is True
     assert source == "interactive"
@@ -161,9 +159,7 @@ def test_saved_token_is_loaded_without_prompt(tmp_path: Path) -> None:
             with patch(
                 "voxfusion.diarization.factory._prompt_hf_token_interactively"
             ) as mock_prompt:
-                ok, _, source = _ml_prerequisites(
-                    _config_without_token(), interactive=True
-                )
+                ok, _, source = _ml_prerequisites(_config_without_token(), interactive=True)
                 mock_prompt.assert_not_called()
 
     assert ok is True

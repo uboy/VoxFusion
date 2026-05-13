@@ -5,10 +5,6 @@ from __future__ import annotations
 import types
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from voxfusion.asr.cuda_utils import MIN_CUDA_FREE_MB
-
 
 def _make_torch_mock(
     *,

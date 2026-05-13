@@ -237,7 +237,7 @@ class FasterWhisperEngine:
         except (ValueError, RuntimeError) as exc:
             # GPU device may be unusable despite reporting VRAM (e.g. CC mismatch).
             # Fall back to CPU instead of crashing.
-            if device != "cpu" and "cuda" in str(exc).lower() or "device" in str(exc).lower():
+            if device != "cpu" and ("cuda" in str(exc).lower() or "device" in str(exc).lower()):
                 log.warning(
                     "asr.cuda_load_failed_fallback_cpu",
                     device=device,

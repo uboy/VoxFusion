@@ -706,8 +706,7 @@ class BatchPipeline:
                 self._progress(
                     stage=PipelineStage.ASR,
                     message=(
-                        f"Transcribing... {elapsed:.0f}s elapsed, "
-                        f"{_format_eta(eta_remaining)}"
+                        f"Transcribing... {elapsed:.0f}s elapsed, {_format_eta(eta_remaining)}"
                     ),
                     progress=progress,
                     elapsed_s=round(elapsed, 1),
