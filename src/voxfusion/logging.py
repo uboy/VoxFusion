@@ -213,8 +213,10 @@ def configure_logging(
         import warnings
 
         warnings.filterwarnings("ignore", category=UserWarning, module="torch")
+        warnings.filterwarnings("ignore", category=UserWarning, module="pyannote")
         warnings.filterwarnings("ignore", message=".*torch_dtype.*", category=FutureWarning)
         warnings.filterwarnings("ignore", message=".*torchaudio._backend.*", category=UserWarning)
+        warnings.filterwarnings("ignore", message=".*torchcodec.*", category=UserWarning)
 
     shared_processors: list[structlog.types.Processor] = [
         structlog.contextvars.merge_contextvars,

@@ -100,6 +100,17 @@ Required for transcribing video files and compressed audio (MP3, MP4, MKV, AAC�
 - **Linux:** `sudo apt install ffmpeg`
 - **macOS:** `brew install ffmpeg`
 
+### Older GPUs (V100, GTX 1080, CC 7.0)
+
+Recent PyTorch versions (2.8+) ship with CUDA 12.6+ which **drops support** for compute capability 7.0 (Volta / Tesla V100). If you see a *"Found GPU Tesla V100 which is of compute capability (CC) 7.0"* warning, install PyTorch with an older CUDA toolkit:
+
+```bash
+# CUDA 12.4 — supports CC 7.0 and later
+pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+```
+
+Check your GPU's compute capability: `nvidia-smi --query-gpu=compute_cap --format=csv,noheader`. CC 7.0 needs CUDA ≤ 12.4; CC 7.5+ works with the latest PyTorch.
+
 ### Setting up ML diarization
 
 ML diarization (`--diarization-strategy ml` or `auto`) uses `pyannote.audio` (included in the base install), which requires a free Hugging Face account and accepting the license for two gated model repositories.
