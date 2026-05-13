@@ -234,10 +234,31 @@ class FasterWhisperEngine:
                 compute_type=compute_type,
                 cpu_threads=cpu_threads,
             )
-        except ValueError as exc:
-            raise ModelNotFoundError(
-                f"Model '{model_size}' not found or failed to download: {exc}"
-            ) from exc
+        except (ValueError, RuntimeError) as exc:
+            # GPU device may be unusable despite reporting VRAM (e.g. CC mismatch).
+            # Fall back to CPU instead of crashing.
+            if device != "cpu" and "cuda" in str(exc).lower() or "device" in str(exc).lower():
+                log.warning(
+                    "asr.cuda_load_failed_fallback_cpu",
+                    device=device,
+                    error=str(exc),
+                )
+                device, compute_type = "cpu", "int8"
+                try:
+                    self._model = WhisperModel(
+                        model_size,
+                        device=device,
+                        compute_type=compute_type,
+                        cpu_threads=cpu_threads,
+                    )
+                except Exception as cpu_exc:
+                    raise ModelLoadError(
+                        f"Failed to load model '{model_size}' on CPU: {cpu_exc}"
+                    ) from cpu_exc
+            else:
+                raise ModelNotFoundError(
+                    f"Model '{model_size}' not found or failed to download: {exc}"
+                ) from exc
         except Exception as exc:
             raise ModelLoadError(f"Failed to load model '{model_size}': {exc}") from exc
 

@@ -193,3 +193,27 @@ async def test_transcribe_skips_silent_audio() -> None:
     result = await engine.transcribe(silent)
     assert result == []
     engine._model.transcribe.assert_not_called()
+
+
+def test_load_model_falls_back_to_cpu_on_cuda_error() -> None:
+    """If CUDA device fails, engine must retry on CPU instead of crashing."""
+    cfg = ASRConfig(model_size="tiny", device="cuda:1", compute_type="auto")
+    engine = FasterWhisperEngine(cfg)
+    fake_model = _make_fake_whisper_model([])
+
+    call_count = 0
+
+    def _whisper_model_side_effect(*args: object, **kwargs: object) -> object:
+        nonlocal call_count
+        call_count += 1
+        if kwargs.get("device", "").startswith("cuda"):
+            raise ValueError(f"unsupported device {kwargs['device']}")
+        return fake_model
+
+    fake_fw = types.ModuleType("faster_whisper")
+    fake_fw.WhisperModel = MagicMock(side_effect=_whisper_model_side_effect)  # type: ignore[attr-defined]
+    with patch.dict("sys.modules", {"faster_whisper": fake_fw}):
+        engine.load_model()
+
+    assert call_count == 2  # first cuda:1 fails, second cpu succeeds
+    assert engine._model is fake_model
