@@ -178,7 +178,7 @@ class TranscriptionGUI:
         self._file_queue_generation = 0
 
         self.root.title(self._tr("app.title"))
-        self.root.geometry("1200x780")
+        self._set_adaptive_geometry()
         configure_gui_theme(self.root)
 
         # Live tab state
@@ -543,6 +543,28 @@ class TranscriptionGUI:
     # Layout builders
     # ------------------------------------------------------------------
 
+    def _set_adaptive_geometry(self) -> None:
+        """Set initial window size and position based on screen resolution.
+
+        Targets usable area from 720p to 4K.  The window occupies ~75 % of
+        the screen width (capped at 1500 px) and ~72 % of the height
+        (capped at 950 px), with a floor of 960 x 600 for small screens.
+        """
+        self.root.update_idletasks()
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+
+        # Usable height estimate — subtract taskbar (~40 px on most systems).
+        usable_h = sh - 40
+
+        w = max(960, min(1500, int(sw * 0.75)))
+        h = max(600, min(950, int(usable_h * 0.72)))
+        x = max(0, (sw - w) // 2)
+        y = max(0, (usable_h - h) // 3)
+
+        self.root.geometry(f"{w}x{h}+{x}+{y}")
+        self.root.minsize(960, 600)
+
     def _build_layout(self) -> None:
         """Build the top-level layout with a two-tab Notebook and resizable log pane."""
         self._title_bar = ttk.Frame(self.root)
@@ -616,7 +638,7 @@ class TranscriptionGUI:
         self._file_tab_builder.build(file_tab)
         self._refresh_file_model_tooltips()
 
-        log_frame = ttk.Frame(paned)
+        log_frame = ttk.Frame(paned, height=28)
         log_header = ttk.Frame(log_frame)
         log_header.pack(fill=tk.X, padx=4, pady=(2, 0))
         self._logs_label = ttk.Label(log_header, text="", anchor="w")
@@ -634,19 +656,20 @@ class TranscriptionGUI:
             log_frame,
             wrap=tk.WORD,
             state=tk.DISABLED,
+            height=6,
         )
-        self.log_widget.pack(fill=tk.BOTH, expand=True, padx=4, pady=(2, 4))
         self._bind_tooltip(self.log_widget, "tooltip.logs.panel")
-        paned.add(log_frame, weight=1)
+        paned.add(log_frame, weight=0)
         self._log_frame = log_frame
-        self._log_collapsed = False
-        self.root.after(0, self._collapse_log_panel)
+        self._log_collapsed = True
+        self._log_toggle_btn.configure(text="▸")
 
     def _toggle_log_panel(self) -> None:
         if getattr(self, "_log_collapsed", False):
             self.log_widget.pack(fill=tk.BOTH, expand=True, padx=4, pady=(2, 4))
             self._log_collapsed = False
             self._log_toggle_btn.configure(text="▾")
+            self._main_paned.paneconfigure(self._log_frame, weight=1)
             return
         self._collapse_log_panel()
 
@@ -656,6 +679,8 @@ class TranscriptionGUI:
         self._log_collapsed = True
         if hasattr(self, "_log_toggle_btn"):
             self._log_toggle_btn.configure(text="▸")
+        if hasattr(self, "_main_paned") and hasattr(self, "_log_frame"):
+            self._main_paned.paneconfigure(self._log_frame, weight=0)
 
     def _enable_custom_window_chrome(self) -> None:
         self._window_drag_origin: tuple[int, int] | None = None

@@ -14,6 +14,7 @@ from time import monotonic
 
 import numpy as np
 
+from voxfusion.asr.cuda_utils import has_ctranslate2_cuda, has_cuda_vram
 from voxfusion.config.models import ASRConfig
 from voxfusion.exceptions import ModelLoadError, ModelNotFoundError, TranscriptionError
 from voxfusion.logging import get_logger
@@ -51,15 +52,19 @@ def _is_hallucination(text: str) -> bool:
 
 
 def _resolve_device(device: str) -> tuple[str, str]:
-    """Resolve ``'auto'`` device to ``('cuda', 'float16')`` or ``('cpu', 'int8')``."""
-    if device == "auto":
-        try:
-            import ctranslate2
+    """Resolve ``'auto'`` device to ``('cuda', 'float16')`` or ``('cpu', 'int8')``.
 
-            if "cuda" in ctranslate2.get_supported_compute_types("cuda"):
-                return "cuda", "float16"
-        except Exception:
-            pass
+    Checks both CTranslate2 CUDA support and available GPU VRAM before
+    committing to CUDA.  Falls back to CPU when VRAM is insufficient.
+    """
+    if device == "cuda":
+        if has_ctranslate2_cuda() and has_cuda_vram():
+            return "cuda", "float16"
+        log.warning("asr.cuda_unavailable_fallback_cpu", requested="cuda")
+        return "cpu", "int8"
+    if device == "auto":
+        if has_ctranslate2_cuda() and has_cuda_vram():
+            return "cuda", "float16"
         return "cpu", "int8"
     return device, "float16" if device == "cuda" else "int8"
 

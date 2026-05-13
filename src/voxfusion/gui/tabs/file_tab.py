@@ -101,7 +101,7 @@ class FileTranscriptionTab:
         _gui._file_current_label = ttk.Label(picker, text="")
         _gui._file_current_label.pack(side=tk.LEFT, padx=(0, 6))
         _gui._bind_text(_gui._file_current_label, "file.label.current")
-        _gui._file_path_entry = ttk.Entry(picker, textvariable=_gui._file_path_var, width=70)
+        _gui._file_path_entry = ttk.Entry(picker, textvariable=_gui._file_path_var, width=40)
         _gui._file_path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
         _gui._bind_tooltip(_gui._file_path_entry, "tooltip.file.current")
         _gui._file_add_btn = ttk.Button(
@@ -166,9 +166,9 @@ class FileTranscriptionTab:
         queue_scroll.pack(fill=tk.Y, side=tk.RIGHT)
         _gui._file_queue_table.configure(yscrollcommand=queue_scroll.set)
 
-        # -- Options row --
+        # -- Options row 1: model / language / quality --
         opts = ttk.Frame(transcribe_box)
-        opts.pack(fill=tk.X, pady=(0, 4))
+        opts.pack(fill=tk.X, pady=(0, 2))
 
         _gui._file_model_label = ttk.Label(opts, text="")
         _gui._file_model_label.pack(side=tk.LEFT, padx=(0, 6))
@@ -292,8 +292,12 @@ class FileTranscriptionTab:
         _gui._bind_text(_gui._file_download_btn, "file.button.download_model")
         _gui._bind_tooltip(_gui._file_download_btn, "tooltip.file.download_model")
 
+        # -- Action buttons row --
+        actions = ttk.Frame(transcribe_box)
+        actions.pack(fill=tk.X, pady=(0, 4))
+
         _gui._file_transcribe_btn = ttk.Button(
-            opts,
+            actions,
             text="",
             command=_gui._start_file_transcribe,
             style="Accent.TButton",
@@ -302,7 +306,7 @@ class FileTranscriptionTab:
         _gui._bind_text(_gui._file_transcribe_btn, "file.button.transcribe_queue")
         _gui._bind_tooltip(_gui._file_transcribe_btn, "tooltip.file.transcribe_queue")
         _gui._file_cancel_btn = ttk.Button(
-            opts, text="", command=_gui._cancel_file_transcribe, state=tk.DISABLED
+            actions, text="", command=_gui._cancel_file_transcribe, state=tk.DISABLED
         )
         _gui._file_cancel_btn.pack(side=tk.LEFT, padx=(0, 4))
         _gui._bind_text(_gui._file_cancel_btn, "file.button.cancel")
@@ -357,19 +361,19 @@ class FileTranscriptionTab:
                 total_h = file_paned.winfo_height()
                 if total_h <= 0:
                     return
-                top_target = max(220, int(total_h * 0.42))
+                top_target = max(240, int(total_h * 0.50))
                 if _gui._file_results_collapsed and _gui._llm_section_collapsed:
                     file_paned.sashpos(0, total_h - 64)
                     file_paned.sashpos(1, total_h - 32)
                 elif _gui._file_results_collapsed:
-                    file_paned.sashpos(0, total_h - max(220, int(total_h * 0.35)))
+                    file_paned.sashpos(0, total_h - max(180, int(total_h * 0.30)))
                     file_paned.sashpos(1, total_h - 32)
                 elif _gui._llm_section_collapsed:
                     file_paned.sashpos(0, top_target)
                     file_paned.sashpos(1, total_h - 32)
                 else:
                     file_paned.sashpos(0, top_target)
-                    file_paned.sashpos(1, max(top_target + 160, int(total_h * 0.78)))
+                    file_paned.sashpos(1, max(top_target + 140, int(total_h * 0.75)))
 
         def _toggle_results() -> None:
             collapsed = getattr(_gui, "_file_results_collapsed", False)

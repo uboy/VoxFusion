@@ -368,7 +368,7 @@ class GigaAMCTCEngine:
                 # Use getattr — test mocks may not expose float32.
                 float32 = getattr(torch, "float32", None)
                 if float32 is not None:
-                    kwargs["torch_dtype"] = float32
+                    kwargs["dtype"] = float32
 
             if torch is not None and _should_use_torchscript_source_fallback(torch):
                 with _temporary_torchscript_source_fallback(torch):
@@ -590,7 +590,9 @@ class GigaAMCTCEngine:
                 deduped_parts.append((chunk_start_s, chunk_end_s, clean))
 
         result_chars = sum(len(text) for _, _, text in deduped_parts)
-        log.info("gigaam.transcribe_done", mode="chunked", chunks=chunk_idx, result_chars=result_chars)
+        log.info(
+            "gigaam.transcribe_done", mode="chunked", chunks=chunk_idx, result_chars=result_chars
+        )
         if not deduped_parts:
             return []
 

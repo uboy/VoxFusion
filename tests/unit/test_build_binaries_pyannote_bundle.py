@@ -46,12 +46,13 @@ def test_collect_all_packages_includes_pyannote_audio(monkeypatch) -> None:
     monkeypatch.setattr(
         module,
         "_is_installed",
-        lambda package: package in {"pyannote.audio", "pyaudiowpatch"},
+        lambda package: package in {"pyannote.audio", "pyaudiowpatch", "torch"},
     )
 
-    packages = module._collect_all_packages(backends={"whisper"})
+    packages = module._collect_all_packages(backends={"whisper", "gigaam"})
 
     assert "pyannote.audio" in packages
+    assert "torch" in packages
 
 
 def test_hidden_imports_include_dynamic_speaker_counter() -> None:

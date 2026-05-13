@@ -13,6 +13,7 @@ Usage::
 
 from __future__ import annotations
 
+from voxfusion.asr.cuda_utils import has_ctranslate2_cuda, has_cuda_vram
 from voxfusion.config.models import ASRConfig
 from voxfusion.logging import get_logger
 
@@ -20,14 +21,16 @@ log = get_logger(__name__)
 
 
 def _has_cuda() -> bool:
-    """Return True if a CUDA-capable GPU is accessible via CTranslate2."""
-    try:
-        import ctranslate2
-
-        types = ctranslate2.get_supported_compute_types("cuda")
-        return bool(types)
-    except Exception:
+    """Return True if a CUDA-capable GPU is accessible *and has enough free VRAM*."""
+    if not has_ctranslate2_cuda():
         return False
+    if has_cuda_vram():
+        return True
+    log.warning(
+        "asr_factory.cuda_vram_low",
+        note="Falling back to CPU — not enough free GPU memory.",
+    )
+    return False
 
 
 def _has_openvino() -> bool:

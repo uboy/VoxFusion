@@ -90,7 +90,7 @@ class BreezeASREngine:
                     model=model,
                     tokenizer=processor.tokenizer,
                     feature_extractor=processor.feature_extractor,
-                    torch_dtype=torch.float32,
+                    dtype=torch.float32,
                     device=-1,
                 )
         except Exception as exc:
