@@ -75,7 +75,12 @@ def _should_suppress_log_message(message: str) -> bool:
 
 def normalize_log_mode(mode: str | None) -> str:
     """Return the normalized runtime log mode."""
-    return "debug" if str(mode or "").strip().lower() == "debug" else "normal"
+    normalized = str(mode or "").strip().lower()
+    if normalized == "debug":
+        return "debug"
+    if normalized == "cli":
+        return "cli"
+    return "normal"
 
 
 def _is_key_stage_event(event_name: str) -> bool:
@@ -96,6 +101,15 @@ def _filter_normal_mode_events(
     event_name = str(event_dict.get("event", "")).strip()
     if _is_key_stage_event(event_name):
         return event_dict
+    raise structlog.DropEvent
+
+
+def _cli_mode_suppress_events(
+    _logger: logging.Logger,
+    _method_name: str,
+    event_dict: structlog.types.EventDict,
+) -> structlog.types.EventDict:
+    """Drop ALL structlog events in CLI mode. User feedback comes from event callbacks."""
     raise structlog.DropEvent
 
 
@@ -218,6 +232,7 @@ def configure_logging(
             *shared_processors,
             structlog.stdlib.filter_by_level,
             *([_filter_normal_mode_events] if effective_log_mode == "normal" else []),
+            *([_cli_mode_suppress_events] if effective_log_mode == "cli" else []),
             structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),

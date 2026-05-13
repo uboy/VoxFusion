@@ -13,24 +13,25 @@ Usage::
 
 from __future__ import annotations
 
-from voxfusion.asr.cuda_utils import has_ctranslate2_cuda, has_cuda_vram
+from voxfusion.asr.cuda_utils import has_ctranslate2_cuda, select_best_gpu
 from voxfusion.config.models import ASRConfig
 from voxfusion.logging import get_logger
 
 log = get_logger(__name__)
 
 
-def _has_cuda() -> bool:
-    """Return True if a CUDA-capable GPU is accessible *and has enough free VRAM*."""
+def _select_cuda_device() -> str | None:
+    """Return a specific CUDA device string (e.g. ``"cuda:1"``) or ``None``."""
     if not has_ctranslate2_cuda():
-        return False
-    if has_cuda_vram():
-        return True
+        return None
+    device = select_best_gpu()
+    if device is not None:
+        return device
     log.warning(
         "asr_factory.cuda_vram_low",
-        note="Falling back to CPU — not enough free GPU memory.",
+        note="Falling back to CPU — no GPU has enough free memory.",
     )
-    return False
+    return None
 
 
 def _has_openvino() -> bool:
@@ -85,12 +86,13 @@ def create_asr_engine(
         return FunASREngine(cfg), "funasr"
 
     # ── 1. CUDA (NVIDIA) ────────────────────────────────────────────────────
-    if _has_cuda():
+    cuda_device = _select_cuda_device()
+    if cuda_device is not None:
         from voxfusion.asr.faster_whisper import FasterWhisperEngine
 
-        cuda_cfg = ASRConfig(**{**cfg.model_dump(), "device": "cuda", "compute_type": "float16"})
-        log.info("asr_factory.selected", backend="cuda")
-        return FasterWhisperEngine(cuda_cfg), "cuda"
+        cuda_cfg = ASRConfig(**{**cfg.model_dump(), "device": cuda_device, "compute_type": "float16"})
+        log.info("asr_factory.selected", backend=cuda_device)
+        return FasterWhisperEngine(cuda_cfg), cuda_device
 
     # ── 2. OpenVINO (Intel) ─────────────────────────────────────────────────
     if prefer_openvino and _has_openvino():

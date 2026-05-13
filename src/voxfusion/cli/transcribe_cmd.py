@@ -31,14 +31,18 @@ def _event_printer(event: PipelineEvent) -> None:
                 click.echo(f"  [{event.stage}] {event.message} ...", err=True)
             case EventType.STAGE_COMPLETED:
                 click.echo(f"  [{event.stage}] {event.message}", err=True)
+            case EventType.PROGRESS:
+                pct = int(event.progress * 100)
+                click.echo(f"\r  [{event.stage}] {event.message} ({pct}%)", err=True, nl=False)
             case EventType.PIPELINE_COMPLETED:
+                click.echo(err=True)
                 click.echo(f"  {event.message}", err=True)
             case EventType.PIPELINE_FAILED:
+                click.echo(err=True)
                 click.echo(f"  FAILED: {event.message}", err=True)
             case EventType.WARNING:
                 click.echo(f"  WARNING: {event.message}", err=True)
     except OSError:
-        # Ignore console output errors
         pass
 
 
@@ -192,7 +196,7 @@ def _transcribe_batch(
     for index, audio_file in enumerate(files, start=1):
         _warn_if_ffmpeg_needed(audio_file)
         try:
-            orchestrator = PipelineOrchestrator(config, on_event=event_cb)
+            orchestrator = PipelineOrchestrator(config, on_event=event_cb, interactive=True)
         except Exception as exc:
             raise click.ClickException(str(exc)) from exc
         try:
@@ -339,8 +343,8 @@ def transcribe(
     quiet = ctx.obj.get("quiet", False)
     ctx.obj.get("config_path")
 
-    log_level = "DEBUG" if verbose else ("ERROR" if quiet else "INFO")
-    configure_logging(log_level, log_mode="debug" if verbose else "normal")
+    log_level = "DEBUG" if verbose else ("ERROR" if quiet else "WARNING")
+    configure_logging(log_level, log_mode="debug" if verbose else "cli")
 
     files = _collect_input_files(audio_files, input_list)
     is_batch = len(files) > 1
@@ -392,7 +396,7 @@ def transcribe(
     audio_file = files[0]
     _warn_if_ffmpeg_needed(audio_file)
     try:
-        orchestrator = PipelineOrchestrator(config, on_event=event_cb)
+        orchestrator = PipelineOrchestrator(config, on_event=event_cb, interactive=True)
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc
     try:

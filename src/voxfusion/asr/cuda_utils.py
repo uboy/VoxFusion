@@ -40,3 +40,43 @@ def has_ctranslate2_cuda() -> bool:
         return bool(ctranslate2.get_supported_compute_types("cuda"))
     except Exception:
         return False
+
+
+def select_best_gpu(min_free_mb: int = MIN_CUDA_FREE_MB) -> str | None:
+    """Find the first GPU with enough free VRAM and return its device string.
+
+    Scans all visible CUDA devices in order and returns ``"cuda:N"`` for
+    the first GPU with at least *min_free_mb* megabytes free.  Returns
+    ``None`` when no GPU qualifies or CUDA is unavailable.
+    """
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return None
+
+        device_count = torch.cuda.device_count()
+        for device_id in range(device_count):
+            free_bytes, total_bytes = torch.cuda.mem_get_info(device_id)
+            free_mb = free_bytes // (1024 * 1024)
+            total_mb = total_bytes // (1024 * 1024)
+            name = torch.cuda.get_device_name(device_id)
+            if free_mb >= min_free_mb:
+                log.info(
+                    "cuda.gpu_selected",
+                    device=f"cuda:{device_id}",
+                    gpu_name=name,
+                    free_mb=free_mb,
+                    total_mb=total_mb,
+                    index=device_id,
+                )
+                return f"cuda:{device_id}"
+
+        log.warning(
+            "cuda.no_gpu_with_enough_vram",
+            devices_scanned=device_count,
+            required_mb=min_free_mb,
+        )
+        return None
+    except Exception:
+        return None

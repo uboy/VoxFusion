@@ -12,8 +12,8 @@ from voxfusion.cli.transcribe_cmd import transcribe
 
 
 class _FakeOrchestrator:
-    def __init__(self, config, on_event=None) -> None:
-        del config, on_event
+    def __init__(self, config, on_event=None, *, interactive=False) -> None:
+        del config, on_event, interactive
         self._asr = SimpleNamespace(model_name="fake/asr")
 
     async def transcribe_file(self, file_path: Path):

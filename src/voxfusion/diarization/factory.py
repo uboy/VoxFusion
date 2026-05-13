@@ -18,6 +18,35 @@ from voxfusion.logging import get_logger
 
 log = get_logger(__name__)
 
+_interactive_hf_token: str | None = None
+
+
+def _reset_interactive_token() -> None:
+    """Clear the session-cached interactive token (for testing)."""
+    global _interactive_hf_token  # noqa: PLW0603
+    _interactive_hf_token = None
+
+
+def _prompt_hf_token_interactively() -> str | None:
+    """Prompt the user for an HF token via stdin. Returns None on failure."""
+    try:
+        import sys
+
+        if not sys.stdin.isatty():
+            return None
+        print(
+            "\nML diarization requires a Hugging Face token.\n"
+            "Get one at: https://huggingface.co/settings/tokens\n"
+            "You also need to accept the model licenses:\n"
+            "  https://huggingface.co/pyannote/speaker-diarization-3.1\n"
+            "  https://huggingface.co/pyannote/segmentation-3.0\n",
+            file=sys.stderr,
+        )
+        token = sys.stdin.readline().strip()
+        return token if token else None
+    except (EOFError, KeyboardInterrupt, OSError):
+        return None
+
 
 @dataclass(frozen=True)
 class DiarizerSelection:
@@ -29,7 +58,13 @@ class DiarizerSelection:
     warnings: tuple[str, ...] = ()
 
 
-def _resolve_hf_token(config: DiarizationConfig) -> tuple[str | None, str | None]:
+def _resolve_hf_token(
+    config: DiarizationConfig,
+    *,
+    interactive: bool = False,
+) -> tuple[str | None, str | None]:
+    global _interactive_hf_token  # noqa: PLW0603
+
     if config.ml.hf_auth_token:
         return config.ml.hf_auth_token, "config"
 
@@ -45,17 +80,31 @@ def _resolve_hf_token(config: DiarizationConfig) -> tuple[str | None, str | None
         token = os.environ.get(env_name)
         if token:
             return token, source
+
+    if _interactive_hf_token:
+        return _interactive_hf_token, "interactive (cached)"
+
+    if interactive:
+        token = _prompt_hf_token_interactively()
+        if token:
+            _interactive_hf_token = token
+            return token, "interactive"
+
     return None, None
 
 
-def _ml_prerequisites(config: DiarizationConfig) -> tuple[bool, str | None, str | None]:
+def _ml_prerequisites(
+    config: DiarizationConfig,
+    *,
+    interactive: bool = False,
+) -> tuple[bool, str | None, str | None]:
     try:
         spec = importlib.util.find_spec("pyannote.audio")
     except (ImportError, ModuleNotFoundError):
         spec = None
     if spec is None:
         return False, "ML diarization requires the optional 'pyannote.audio' package.", None
-    token, token_source = _resolve_hf_token(config)
+    token, token_source = _resolve_hf_token(config, interactive=interactive)
     if not token:
         return False, "ML diarization requires a HuggingFace token for pyannote models.", None
     return True, None, token_source
@@ -119,6 +168,7 @@ def create_diarizer(
     config: DiarizationConfig,
     *,
     mode: str,
+    interactive: bool = False,
 ) -> DiarizerSelection:
     """Resolve the effective diarizer for the given workflow mode."""
     requested = (config.strategy or "channel").strip().lower()
@@ -136,7 +186,7 @@ def create_diarizer(
             config=config,
         )
 
-    ml_ready, ml_reason, token_source = _ml_prerequisites(config)
+    ml_ready, ml_reason, token_source = _ml_prerequisites(config, interactive=interactive)
 
     if requested == "channel":
         return _log_selection(

@@ -14,7 +14,7 @@ from time import monotonic
 
 import numpy as np
 
-from voxfusion.asr.cuda_utils import has_ctranslate2_cuda, has_cuda_vram
+from voxfusion.asr.cuda_utils import has_ctranslate2_cuda, select_best_gpu
 from voxfusion.config.models import ASRConfig
 from voxfusion.exceptions import ModelLoadError, ModelNotFoundError, TranscriptionError
 from voxfusion.logging import get_logger
@@ -52,21 +52,31 @@ def _is_hallucination(text: str) -> bool:
 
 
 def _resolve_device(device: str) -> tuple[str, str]:
-    """Resolve ``'auto'`` device to ``('cuda', 'float16')`` or ``('cpu', 'int8')``.
+    """Resolve device string to ``(device, compute_type)``.
 
-    Checks both CTranslate2 CUDA support and available GPU VRAM before
-    committing to CUDA.  Falls back to CPU when VRAM is insufficient.
+    For ``"auto"`` or ``"cuda"``, scans all GPUs and picks the first with
+    enough VRAM.  Returns a specific device like ``("cuda:1", "float16")``
+    or falls back to ``("cpu", "int8")``.
     """
-    if device == "cuda":
-        if has_ctranslate2_cuda() and has_cuda_vram():
-            return "cuda", "float16"
-        log.warning("asr.cuda_unavailable_fallback_cpu", requested="cuda")
+    if device.startswith("cuda"):
+        if ":" in device:
+            if has_ctranslate2_cuda():
+                return device, "float16"
+            log.warning("asr.cuda_unavailable_fallback_cpu", requested=device)
+            return "cpu", "int8"
+        if has_ctranslate2_cuda():
+            selected = select_best_gpu()
+            if selected is not None:
+                return selected, "float16"
+        log.warning("asr.cuda_unavailable_fallback_cpu", requested=device)
         return "cpu", "int8"
     if device == "auto":
-        if has_ctranslate2_cuda() and has_cuda_vram():
-            return "cuda", "float16"
+        if has_ctranslate2_cuda():
+            selected = select_best_gpu()
+            if selected is not None:
+                return selected, "float16"
         return "cpu", "int8"
-    return device, "float16" if device == "cuda" else "int8"
+    return device, "float16" if device.startswith("cuda") else "int8"
 
 
 class FasterWhisperEngine:

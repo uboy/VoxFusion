@@ -36,13 +36,17 @@ class PipelineOrchestrator:
         self,
         config: PipelineConfig,
         on_event: EventCallback | None = None,
+        *,
+        interactive: bool = False,
     ) -> None:
         self._config = config
         self._on_event = on_event
 
         # Build components
         self._asr, self._asr_backend = create_asr_engine(config.asr)
-        self._diarizer_selection = create_diarizer(config.diarization, mode="file")
+        self._diarizer_selection = create_diarizer(
+            config.diarization, mode="file", interactive=interactive,
+        )
         self._preprocessor = self._build_preprocessor()
         log.info(
             "orchestrator.components_ready",
