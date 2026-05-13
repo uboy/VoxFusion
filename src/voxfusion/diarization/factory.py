@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from voxfusion.config.models import DiarizationConfig
 from voxfusion.diarization.base import DiarizationEngine
@@ -19,6 +20,28 @@ from voxfusion.logging import get_logger
 log = get_logger(__name__)
 
 _interactive_hf_token: str | None = None
+
+_HF_TOKEN_FILE = Path.home() / ".voxfusion" / "hf_token"
+
+
+def _load_saved_token() -> str | None:
+    """Load a previously saved HF token from ~/.voxfusion/hf_token."""
+    try:
+        token = _HF_TOKEN_FILE.read_text().strip()
+        return token if token else None
+    except (OSError, PermissionError):
+        return None
+
+
+def _save_token(token: str) -> None:
+    """Persist the HF token to ~/.voxfusion/hf_token for future sessions."""
+    try:
+        _HF_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _HF_TOKEN_FILE.write_text(token.strip() + "\n")
+        # Restrict to owner-only read/write
+        _HF_TOKEN_FILE.chmod(0o600)
+    except (OSError, PermissionError):
+        pass
 
 
 def _reset_interactive_token() -> None:
@@ -87,10 +110,16 @@ def _resolve_hf_token(
     if _interactive_hf_token:
         return _interactive_hf_token, "interactive (cached)"
 
+    # Check persisted token from ~/.voxfusion/hf_token
+    saved = _load_saved_token()
+    if saved:
+        return saved, "saved"
+
     if interactive:
         token = _prompt_hf_token_interactively()
         if token:
             _interactive_hf_token = token
+            _save_token(token)
             return token, "interactive"
 
     return None, None
