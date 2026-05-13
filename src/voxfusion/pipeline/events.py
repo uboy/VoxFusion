@@ -4,15 +4,16 @@ Events are emitted by the pipeline orchestrator to notify callers
 about progress, stage transitions, and errors.
 """
 
+import sys
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-try:
+if sys.version_info >= (3, 11):
     from enum import StrEnum
-except ImportError:
+else:
 
-    class StrEnum(str, Enum):  # noqa: UP042
+    class StrEnum(str, Enum):
         """Backport of enum.StrEnum for Python 3.10 compat."""
 
 
