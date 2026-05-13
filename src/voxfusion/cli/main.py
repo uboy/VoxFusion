@@ -1,6 +1,15 @@
 """CLI entry point and main command group."""
 
 import sys
+import warnings
+
+# Suppress noisy third-party warnings that fire at import time, before any
+# logging configuration is applied. These come from torch (CUDA CC mismatch),
+# pyannote (torchcodec missing), and torchaudio (deprecation).
+warnings.filterwarnings("ignore", category=UserWarning, module="torch")
+warnings.filterwarnings("ignore", category=UserWarning, module="pyannote")
+warnings.filterwarnings("ignore", message=".*torchaudio._backend.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*torchcodec.*", category=UserWarning)
 
 import click
 
