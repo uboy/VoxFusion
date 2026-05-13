@@ -5,7 +5,11 @@ about progress, stage transitions, and errors.
 """
 
 from dataclasses import dataclass, field
-from enum import StrEnum
+from enum import Enum
+
+
+class StrEnum(str, Enum):
+    """Backport of enum.StrEnum for Python 3.10 compat."""
 from typing import Any
 
 

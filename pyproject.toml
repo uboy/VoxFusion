@@ -17,6 +17,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: GNU General Public License v2 (GPLv2)",
     "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Multimedia :: Sound/Audio :: Speech",
@@ -28,7 +29,7 @@ voxfusion = "voxfusion.cli.main:main"
 voxfusion-gui = "voxfusion.gui.main:main"
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = ">=3.10"
 faster-whisper = ">=1.0"
 ctranslate2 = ">=4.0"
 numpy = ">=1.24"
