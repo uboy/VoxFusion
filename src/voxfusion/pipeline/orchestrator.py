@@ -45,7 +45,9 @@ class PipelineOrchestrator:
         # Build components
         self._asr, self._asr_backend = create_asr_engine(config.asr)
         self._diarizer_selection = create_diarizer(
-            config.diarization, mode="file", interactive=interactive,
+            config.diarization,
+            mode="file",
+            interactive=interactive,
         )
         self._preprocessor = self._build_preprocessor()
         log.info(

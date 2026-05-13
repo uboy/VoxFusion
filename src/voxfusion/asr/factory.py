@@ -90,7 +90,9 @@ def create_asr_engine(
     if cuda_device is not None:
         from voxfusion.asr.faster_whisper import FasterWhisperEngine
 
-        cuda_cfg = ASRConfig(**{**cfg.model_dump(), "device": cuda_device, "compute_type": "float16"})
+        cuda_cfg = ASRConfig(
+            **{**cfg.model_dump(), "device": cuda_device, "compute_type": "float16"}
+        )
         log.info("asr_factory.selected", backend=cuda_device)
         return FasterWhisperEngine(cuda_cfg), cuda_device
 
