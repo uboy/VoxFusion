@@ -186,9 +186,10 @@ def create_diarizer(
             config=config,
         )
 
-    ml_ready, ml_reason, token_source = _ml_prerequisites(config, interactive=interactive)
-
+    # "channel" never needs ML — skip prerequisites entirely to avoid
+    # spuriously prompting for an HF token the user doesn't need.
     if requested == "channel":
+        ml_ready, ml_reason, token_source = _ml_prerequisites(config, interactive=False)
         return _log_selection(
             mode=mode,
             requested=requested,
@@ -198,6 +199,9 @@ def create_diarizer(
             token_source=token_source,
             config=config,
         )
+
+    # Strategies that actually use ML: prompt interactively when allowed.
+    ml_ready, ml_reason, token_source = _ml_prerequisites(config, interactive=interactive)
 
     if requested == "ml":
         if not ml_ready:
@@ -248,6 +252,7 @@ def create_diarizer(
             config=config,
         )
 
+    # "auto" — use ML when available, otherwise channel.
     if mode == "file" and ml_ready:
         return _log_selection(
             mode=mode,

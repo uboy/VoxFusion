@@ -208,6 +208,14 @@ def configure_logging(
     level = getattr(logging, log_level.upper(), logging.INFO)
     effective_log_mode = normalize_log_mode(log_mode)
 
+    # Suppress Python warnings (torch CUDA, deprecations, etc.) in CLI mode
+    if effective_log_mode == "cli":
+        import warnings
+
+        warnings.filterwarnings("ignore", category=UserWarning, module="torch")
+        warnings.filterwarnings("ignore", message=".*torch_dtype.*", category=FutureWarning)
+        warnings.filterwarnings("ignore", message=".*torchaudio._backend.*", category=UserWarning)
+
     shared_processors: list[structlog.types.Processor] = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_log_level,

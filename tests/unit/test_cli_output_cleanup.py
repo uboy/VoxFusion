@@ -128,4 +128,22 @@ def test_event_printer_shows_pipeline_completed(capsys: object) -> None:
     assert "Done in 12.3s" in captured.err
 
 
+def test_cli_mode_installs_torch_warning_filter() -> None:
+    """CLI log mode must install warning filters for torch UserWarning."""
+    import re
+    import warnings
+
+    from voxfusion.logging import configure_logging
+
+    configure_logging(log_mode="cli")
+    found = False
+    for action, _msg, cat, module, _lineno in warnings.filters:
+        if cat is UserWarning and action == "ignore":
+            mod_str = module.pattern if isinstance(module, re.Pattern) else str(module or "")
+            if "torch" in mod_str:
+                found = True
+                break
+    assert found, "CLI mode should install a UserWarning ignore filter for torch"
+
+
 import pytest

@@ -92,3 +92,37 @@ def test_interactive_token_cached_across_calls() -> None:
     assert ok2 is True
     assert s1 == "interactive"
     assert s2 == "interactive (cached)"
+
+
+def test_channel_strategy_does_not_prompt_even_when_interactive() -> None:
+    """Channel strategy must never trigger the interactive HF token prompt."""
+    from voxfusion.diarization.factory import (
+        _reset_interactive_token,
+        create_diarizer,
+    )
+    from voxfusion.diarization.none import NoneDiarizer
+
+    _reset_interactive_token()
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k
+        not in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN")
+    }
+
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch("voxfusion.diarization.factory._prompt_hf_token_interactively") as mock_prompt,
+    ):
+        selection = create_diarizer(
+            _config_without_token().__class__(
+                strategy="channel",
+                ml=DiarizationMLConfig(hf_auth_token=None),
+            ),
+            mode="file",
+            interactive=True,
+        )
+        mock_prompt.assert_not_called()
+
+    assert selection.resolved_strategy == "channel"
+    assert not isinstance(selection.engine, NoneDiarizer)
