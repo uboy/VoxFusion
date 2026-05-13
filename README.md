@@ -84,7 +84,9 @@ pip install -e .[gigaam]                  # + GigaAM backend
 pip install -e .[linux,gigaam,parakeet]   # multiple extras
 ```
 
-Available extras: `gigaam`, `parakeet`, `diarization`, `translation-offline`, `audio-quality`, `noise-reduction`, `security`, `linux`, `macos`.
+Available extras: `gigaam`, `parakeet`, `translation-offline`, `audio-quality`, `noise-reduction`, `security`, `linux`, `macos`.
+
+> **Note:** `pyannote-audio` (ML diarization) is included in the base install — no extra flag needed. You only need to provide a Hugging Face token (see below).
 
 ### FFmpeg
 
@@ -100,30 +102,23 @@ Required for transcribing video files and compressed audio (MP3, MP4, MKV, AAC�
 
 ### Setting up ML diarization
 
-ML diarization (`--diarization-strategy ml` or `auto`) uses `pyannote.audio`, which requires a free Hugging Face account and accepting the license for two gated model repositories.
+ML diarization (`--diarization-strategy ml` or `auto`) uses `pyannote.audio` (included in the base install), which requires a free Hugging Face account and accepting the license for two gated model repositories.
 
-**One-time setup (five steps):**
+**One-time setup (three steps):**
 
-1. **Install the diarization extra** (if not already installed):
+1. **Create a Hugging Face account** at <https://huggingface.co> and generate a read token at <https://huggingface.co/settings/tokens>.
 
-   ```bash
-   pip install -e .[diarization]        # pip / venv
-   # or
-   poetry install --extras diarization  # Poetry
-   ```
-
-2. **Create a Hugging Face account** at <https://huggingface.co> and generate a read token at <https://huggingface.co/settings/tokens>.
-
-3. **Accept the model licenses** (you must be logged in):
+2. **Accept the model licenses** (you must be logged in):
    - <https://huggingface.co/pyannote/speaker-diarization-3.1>
    - <https://huggingface.co/pyannote/segmentation-3.0>
 
-4. **Provide the token to VoxFusion**:
+3. **Provide the token to VoxFusion**:
+   - **CLI**: run any transcribe command — VoxFusion will prompt you for the token interactively if none is found
    - GUI: `Settings → HuggingFace Token`
-   - CLI/env: `export HF_TOKEN=hf_your_token`
+   - Environment: `export HF_TOKEN=hf_your_token`
    - Config: set `VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN=hf_your_token`
 
-5. **Run diarization** — VoxFusion downloads the models automatically on first use (~300 MB) and caches them locally for offline reuse:
+Then **run diarization** — VoxFusion downloads the models automatically on first use (~300 MB) and caches them locally for offline reuse:
 
    ```bash
    voxfusion transcribe meeting.wav --diarization-strategy ml

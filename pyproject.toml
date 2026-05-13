@@ -57,9 +57,9 @@ torchaudio = { version = ">=2.4", optional = true }
 sentencepiece = { version = ">=0.1.99", optional = true }
 omegaconf = { version = ">=2.3", optional = true }
 hydra-core = { version = ">=1.3", optional = true }
-pyannote-audio = { version = ">=4.0", optional = true }
-# torchcodec: required by GigaAM-v3 (pulled transitively by pyannote-audio, declared explicitly)
-torchcodec = { version = ">=0.7", optional = true }
+pyannote-audio = ">=4.0"
+# torchcodec: required by pyannote-audio and GigaAM-v3 (declared explicitly for clarity)
+torchcodec = ">=0.7"
 
 # Drag-and-drop support for the GUI file tab (optional — gracefully disabled when absent)
 tkinterdnd2 = { version = ">=0.3", optional = true }
@@ -74,7 +74,7 @@ pyobjc-framework-CoreAudio = { version = ">=10.0", markers = "sys_platform == 'd
 pyobjc-framework-ScreenCaptureKit = { version = ">=10.0", markers = "sys_platform == 'darwin'", optional = true }
 
 [tool.poetry.extras]
-diarization = ["pyannote-audio", "torch"]
+diarization = ["torch"]
 translation-offline = ["argostranslate"]
 audio-quality = ["librosa", "soxr"]
 noise-reduction = ["noisereduce"]
@@ -87,7 +87,7 @@ macos = ["pyobjc-framework-CoreAudio", "pyobjc-framework-ScreenCaptureKit"]
 # torchaudio and sentencepiece are used by the model's trust_remote_code;
 # omegaconf + hydra-core are config frameworks GigaAM depends on;
 # pyannote.audio ≥ 4.0 + torchcodec ≥ 0.7 are required by GigaAM-v3 (November 2025+).
-gigaam = ["torchaudio", "sentencepiece", "omegaconf", "hydra-core", "pyannote-audio", "torchcodec"]
+gigaam = ["torchaudio", "sentencepiece", "omegaconf", "hydra-core"]
 # Parakeet/NeMo pulls torchaudio transitively but we declare it explicitly.
 parakeet = ["nemo_toolkit", "torchaudio"]
 # FunASR Paraformer for best Chinese ASR.
