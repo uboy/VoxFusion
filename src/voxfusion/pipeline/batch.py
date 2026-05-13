@@ -693,6 +693,7 @@ class BatchPipeline:
             asr_started_at = time.monotonic()
             estimated_asr_total = max(10.0, audio_duration * _ASR_ETA_REALTIME_FACTOR)
             heartbeat_count = 0
+            estimate_exceeded = False
             while not asr_task.done():
                 await asyncio.sleep(min(_ASR_HEARTBEAT_S, 0.5))
                 if asr_task.done():
@@ -701,17 +702,21 @@ class BatchPipeline:
                 if elapsed < (heartbeat_count + 1) * _ASR_HEARTBEAT_S:
                     continue
                 heartbeat_count += 1
-                progress = min(0.9, elapsed / estimated_asr_total)
-                eta_remaining = max(0.0, estimated_asr_total - elapsed)
+                if elapsed >= estimated_asr_total:
+                    if not estimate_exceeded:
+                        estimate_exceeded = True
+                    progress = 0.9
+                    msg = f"Transcribing... {elapsed:.0f}s elapsed (longer than expected)"
+                else:
+                    progress = min(0.9, elapsed / estimated_asr_total)
+                    eta_remaining = max(0.0, estimated_asr_total - elapsed)
+                    msg = f"Transcribing... {elapsed:.0f}s elapsed, {_format_eta(eta_remaining)}"
                 self._progress(
                     stage=PipelineStage.ASR,
-                    message=(
-                        f"Transcribing... {elapsed:.0f}s elapsed, {_format_eta(eta_remaining)}"
-                    ),
+                    message=msg,
                     progress=progress,
                     elapsed_s=round(elapsed, 1),
                     audio_duration_s=round(audio_duration, 1),
-                    eta_s=round(eta_remaining, 1),
                 )
             segments = await asr_task
         else:

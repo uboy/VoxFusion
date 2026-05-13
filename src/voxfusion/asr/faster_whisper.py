@@ -238,6 +238,13 @@ class FasterWhisperEngine:
             # GPU device may be unusable despite reporting VRAM (e.g. CC mismatch).
             # Fall back to CPU instead of crashing.
             if device != "cpu" and ("cuda" in str(exc).lower() or "device" in str(exc).lower()):
+                import sys
+
+                print(
+                    f"  WARNING: GPU {device} unavailable ({exc}). Using CPU — "
+                    f"transcription will be slower.",
+                    file=sys.stderr,
+                )
                 log.warning(
                     "asr.cuda_load_failed_fallback_cpu",
                     device=device,
