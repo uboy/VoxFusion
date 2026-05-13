@@ -28,12 +28,20 @@ def _event_printer(event: PipelineEvent) -> None:
             case EventType.PIPELINE_STARTED:
                 click.echo(f"  Starting: {event.message}", err=True)
             case EventType.STAGE_STARTED:
-                click.echo(f"  [{event.stage}] {event.message} ...", err=True)
+                click.echo(f"  [{event.stage}] {event.message}", err=True)
             case EventType.STAGE_COMPLETED:
                 click.echo(f"  [{event.stage}] {event.message}", err=True)
             case EventType.PROGRESS:
-                pct = int(event.progress * 100)
-                click.echo(f"\r  [{event.stage}] {event.message} ({pct}%)", err=True, nl=False)
+                stage = event.stage or ""
+                pct = int((event.progress or 0) * 100)
+                bar_width = 20
+                filled = int(bar_width * pct / 100)
+                bar = "█" * filled + "░" * (bar_width - filled)
+                click.echo(
+                    f"\r  [{stage}] {bar} {pct:3d}% | {event.message}",
+                    err=True,
+                    nl=False,
+                )
             case EventType.PIPELINE_COMPLETED:
                 click.echo(err=True)
                 click.echo(f"  {event.message}", err=True)

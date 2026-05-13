@@ -45,6 +45,10 @@ _ASR_PROGRESS_WINDOW_END = 0.78
 _DIARIZATION_ETA_FLOOR_S = 20.0
 _DIARIZATION_ETA_REALTIME_FACTOR = 0.08
 _MIN_GIGAAM_WINDOW_SAMPLES = 320
+# ASR heartbeat: emit PROGRESS events every N seconds during transcription
+_ASR_HEARTBEAT_S = 3.0
+# Conservative estimate: faster-whisper processes at ~3x realtime (CPU large-v3)
+_ASR_ETA_REALTIME_FACTOR = 0.35
 
 
 def _slice_audio_chunk(audio: AudioChunk, start_time: float, end_time: float) -> AudioChunk:
@@ -652,11 +656,15 @@ class BatchPipeline:
         )
 
         # -- Stage 3: ASR --
+        audio_duration = full_audio.duration
         self._emit(
             PipelineEvent(
                 event_type=EventType.STAGE_STARTED,
                 stage=PipelineStage.ASR,
-                message="Transcribing audio",
+                message=(
+                    f"Transcribing {audio_duration / 60:.1f} min of audio "
+                    f"(~{_format_eta(audio_duration * _ASR_ETA_REALTIME_FACTOR)})"
+                ),
             )
         )
 
@@ -674,11 +682,39 @@ class BatchPipeline:
             diarized = await self._transcribe_diarized_windows(raw_full_audio)
 
         if diarized is None:
-            segments = await self._asr.transcribe(
-                full_audio,
-                language=self._config.asr.language,
-                word_timestamps=self._config.asr.word_timestamps,
+            asr_task = asyncio.create_task(
+                self._asr.transcribe(
+                    full_audio,
+                    language=self._config.asr.language,
+                    word_timestamps=self._config.asr.word_timestamps,
+                )
             )
+            # Emit heartbeat PROGRESS events while ASR is running
+            asr_started_at = time.monotonic()
+            estimated_asr_total = max(10.0, audio_duration * _ASR_ETA_REALTIME_FACTOR)
+            heartbeat_count = 0
+            while not asr_task.done():
+                await asyncio.sleep(min(_ASR_HEARTBEAT_S, 0.5))
+                if asr_task.done():
+                    break
+                elapsed = time.monotonic() - asr_started_at
+                if elapsed < (heartbeat_count + 1) * _ASR_HEARTBEAT_S:
+                    continue
+                heartbeat_count += 1
+                progress = min(0.9, elapsed / estimated_asr_total)
+                eta_remaining = max(0.0, estimated_asr_total - elapsed)
+                self._progress(
+                    stage=PipelineStage.ASR,
+                    message=(
+                        f"Transcribing... {elapsed:.0f}s elapsed, "
+                        f"{_format_eta(eta_remaining)}"
+                    ),
+                    progress=progress,
+                    elapsed_s=round(elapsed, 1),
+                    audio_duration_s=round(audio_duration, 1),
+                    eta_s=round(eta_remaining, 1),
+                )
+            segments = await asr_task
         else:
             segments = [item.segment for item in diarized]
 

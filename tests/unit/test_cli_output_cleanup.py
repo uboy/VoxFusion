@@ -100,19 +100,22 @@ def test_event_printer_shows_warning(capsys: object) -> None:
     assert "WARNING: ML diarization requires a token" in captured.err
 
 
-def test_event_printer_shows_progress(capsys: object) -> None:
+def test_event_printer_shows_progress_bar(capsys: object) -> None:
     from voxfusion.cli.transcribe_cmd import _event_printer
     from voxfusion.pipeline.events import EventType, PipelineEvent, PipelineStage
 
     event = PipelineEvent(
         event_type=EventType.PROGRESS,
         stage=PipelineStage.ASR,
-        message="Transcribing",
-        progress=0.55,
+        message="45s elapsed, ETA ~01:30",
+        progress=0.33,
     )
     _event_printer(event)
     captured = capsys.readouterr()
-    assert "55%" in captured.err
+    assert "33%" in captured.err
+    assert "█" in captured.err
+    assert "░" in captured.err
+    assert "ETA ~01:30" in captured.err
 
 
 def test_event_printer_shows_pipeline_completed(capsys: object) -> None:
