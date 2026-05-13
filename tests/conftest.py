@@ -1,7 +1,7 @@
 """Shared pytest fixtures for VoxFusion tests."""
 
 import sys
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -208,7 +208,7 @@ def transcription_result(
         segments=[translated_segment],
         source_info={"file": "test.wav", "sample_rate": 16000, "duration_s": 1.0},
         processing_info={"asr_model": "faster-whisper/small", "processing_time_s": 0.5},
-        created_at=datetime(2025, 1, 15, 12, 0, 0, tzinfo=UTC).isoformat(),
+        created_at=datetime(2025, 1, 15, 12, 0, 0, tzinfo=timezone.utc).isoformat(),
     )
 
 
@@ -227,7 +227,7 @@ def multi_segment_result(
         segments=[translated_segment, seg2],
         source_info={"file": "multi.wav", "sample_rate": 16000, "duration_s": 3.0},
         processing_info={"asr_model": "faster-whisper/small", "processing_time_s": 1.2},
-        created_at=datetime(2025, 1, 15, 12, 0, 0, tzinfo=UTC).isoformat(),
+        created_at=datetime(2025, 1, 15, 12, 0, 0, tzinfo=timezone.utc).isoformat(),
     )
 
 

@@ -28,7 +28,7 @@ Runs on Windows, macOS, and Linux. Comes with a GUI and a CLI.
 
 ## Requirements
 
-- Python 3.11+
+- Python 3.10+
 - FFmpeg (optional — needed only for video and compressed audio files)
 
 ## Quick start

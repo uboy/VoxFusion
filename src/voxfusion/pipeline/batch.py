@@ -9,7 +9,7 @@ import asyncio
 import itertools
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -743,7 +743,7 @@ class BatchPipeline:
                 "requested_diarization_strategy": self._requested_diarization_strategy,
                 "resolved_diarization_strategy": self._resolved_diarization_strategy,
             },
-            created_at=datetime.now(UTC).isoformat(),
+            created_at=datetime.now(timezone.utc).isoformat(),
         )
 
         self._emit(
