@@ -314,5 +314,12 @@
   "about.title": "About VoxFusion",
   "about.version": "Version: {version}",
   "about.license": "License: GPL-2.0",
-  "about.website": "Website:"
+  "about.website": "Website:",
+  "dialog.title.speaker_detect_failed": "Speaker Detection Failed",
+  "dialog.message.speaker_detect_failed": "Could not detect speakers:\n{error}\n\nContinue without speaker detection?",
+  "dialog.title.speaker_detect_empty": "No Speakers Detected",
+  "dialog.message.speaker_detect_empty": "Speaker detection did not find any speakers in the audio sample.\n\nPossible reasons:\n  \u2022 The audio is too short or has no speech\n  \u2022 The pyannote model is not installed\n  \u2022 No HuggingFace token is configured\n  \u2022 Offline mode is active (model not cached)\n\nContinue without speaker detection?",
+  "dialog.title.gpu_warning": "GPU Not Available",
+  "dialog.message.gpu_warning": "No CUDA-compatible GPU was detected (or GPU memory is insufficient).\n\nTranscription will run on CPU, which may be significantly slower.\n\nContinue anyway?",
+  "file.status.all_files_done": "All files in the queue are already processed. Nothing to transcribe."
 }

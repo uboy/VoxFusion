@@ -669,7 +669,7 @@ class TranscriptionGUI:
             self.log_widget.pack(fill=tk.BOTH, expand=True, padx=4, pady=(2, 4))
             self._log_collapsed = False
             self._log_toggle_btn.configure(text="▾")
-            self._main_paned.paneconfigure(self._log_frame, weight=1)
+            self._main_paned.pane(self._log_frame, weight=1)
             return
         self._collapse_log_panel()
 
@@ -680,7 +680,7 @@ class TranscriptionGUI:
         if hasattr(self, "_log_toggle_btn"):
             self._log_toggle_btn.configure(text="▸")
         if hasattr(self, "_main_paned") and hasattr(self, "_log_frame"):
-            self._main_paned.paneconfigure(self._log_frame, weight=0)
+            self._main_paned.pane(self._log_frame, weight=0)
 
     def _enable_custom_window_chrome(self) -> None:
         self._window_drag_origin: tuple[int, int] | None = None
@@ -1499,9 +1499,27 @@ class TranscriptionGUI:
         self._refresh_file_diarization_controls()
         if error:
             self._set_file_status(self._tr("file.status.detect_failed", error=error), level="error")
+            proceed = messagebox.askyesno(
+                self._tr("dialog.title.speaker_detect_failed"),
+                self._tr("dialog.message.speaker_detect_failed", error=error),
+                parent=self.root,
+            )
+            if not proceed:
+                return
+            self._file_diarization_var.set("none")
+            self._refresh_file_diarization_controls()
             return
         if count is None or count == 0:
             self._set_file_status(self._tr("file.status.detect_empty"), level="warning")
+            proceed = messagebox.askyesno(
+                self._tr("dialog.title.speaker_detect_empty"),
+                self._tr("dialog.message.speaker_detect_empty"),
+                parent=self.root,
+            )
+            if not proceed:
+                return
+            self._file_diarization_var.set("none")
+            self._refresh_file_diarization_controls()
             return
 
         # Preserve detected exact counts for 4+ speakers instead of degrading them
@@ -2373,8 +2391,9 @@ class TranscriptionGUI:
         """Open the application settings dialog (proxy / network)."""
         dlg = tk.Toplevel(self.root)
         dlg.title(self._tr("settings.title"))
-        dlg.geometry("620x560")
-        dlg.resizable(False, False)
+        dlg.geometry("620x580")
+        dlg.minsize(500, 480)
+        dlg.resizable(True, True)
         dlg.grab_set()
 
         # Local copies so changes are only applied on Save
@@ -2389,10 +2408,47 @@ class TranscriptionGUI:
 
         pad = {"padx": 8, "pady": 3}
 
-        proxy_frame = ttk.LabelFrame(
-            dlg, text=self._tr("settings.section.network"), padding=(10, 8)
+        # -- Bottom buttons (packed FIRST so they claim bottom space) --
+        btn_row = ttk.Frame(dlg)
+        btn_row.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=(4, 10))
+
+        ttk.Separator(dlg, orient="horizontal").pack(side=tk.BOTTOM, fill=tk.X)
+
+        # Scrollable content area fills the rest
+        content_canvas = tk.Canvas(dlg, highlightthickness=0)
+        v_scrollbar = ttk.Scrollbar(dlg, orient=tk.VERTICAL, command=content_canvas.yview)
+        scroll_frame = ttk.Frame(content_canvas)
+
+        scroll_frame.bind(
+            "<Configure>",
+            lambda _: content_canvas.configure(scrollregion=content_canvas.bbox("all")),
         )
-        proxy_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 4))
+        content_canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        content_canvas.configure(yscrollcommand=v_scrollbar.set)
+
+        v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=(10, 0))
+        content_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=(10, 0))
+
+        def _on_canvas_configure(_event: object) -> None:
+            content_canvas.itemconfigure("all", width=content_canvas.winfo_width())
+
+        content_canvas.bind("<Configure>", _on_canvas_configure)
+
+        def _on_mousewheel(event: tk.Event[object]) -> None:
+            delta = getattr(event, "delta", 0)
+            if delta:
+                content_canvas.yview_scroll(int(-1 * (delta / 120)), "units")
+
+        content_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        dlg.bind(
+            "<Destroy>",
+            lambda _: content_canvas.unbind_all("<MouseWheel>"),
+        )
+
+        proxy_frame = ttk.LabelFrame(
+            scroll_frame, text=self._tr("settings.section.network"), padding=(10, 8)
+        )
+        proxy_frame.pack(fill=tk.BOTH, expand=True, padx=0, pady=(0, 4))
         proxy_frame.columnconfigure(1, weight=1)
 
         ttk.Checkbutton(
@@ -2463,11 +2519,13 @@ class TranscriptionGUI:
             row=9, column=1, columnspan=2, sticky="w", padx=8
         )
 
-        _field_state()  # set initial enabled/disabled state
+        _field_state()
 
         # -- HuggingFace Token --
-        hf_frame = ttk.LabelFrame(dlg, text=self._tr("settings.section.hf"), padding=(10, 8))
-        hf_frame.pack(fill=tk.X, padx=10, pady=(0, 4))
+        hf_frame = ttk.LabelFrame(
+            scroll_frame, text=self._tr("settings.section.hf"), padding=(10, 8)
+        )
+        hf_frame.pack(fill=tk.X, padx=0, pady=(0, 4))
         hf_frame.columnconfigure(1, weight=1)
 
         ttk.Label(hf_frame, text=self._tr("settings.label.hf_token")).grid(
@@ -2488,8 +2546,8 @@ class TranscriptionGUI:
             foreground="#777777",
         ).grid(row=1, column=0, columnspan=3, sticky="w", padx=8)
 
-        app_frame = ttk.LabelFrame(dlg, text="Interface", padding=(10, 8))
-        app_frame.pack(fill=tk.X, padx=10, pady=(0, 4))
+        app_frame = ttk.LabelFrame(scroll_frame, text="Interface", padding=(10, 8))
+        app_frame.pack(fill=tk.X, padx=0, pady=(0, 4))
         app_frame.columnconfigure(1, weight=1)
         ttk.Label(app_frame, text=self._tr("header.language")).grid(
             row=0, column=0, sticky="w", **pad
@@ -2524,10 +2582,7 @@ class TranscriptionGUI:
         )
         rec_combo.grid(row=2, column=1, sticky="w", **pad)
 
-        # -- Bottom buttons --
-        btn_row = ttk.Frame(dlg)
-        btn_row.pack(fill=tk.X, padx=10, pady=(4, 10))
-
+        # -- Bottom buttons (packed first — see btn_row above) --
         def _detect() -> None:
             sys_p = get_system_proxies()
             http_v.set(sys_p["http"])
@@ -2814,6 +2869,38 @@ class TranscriptionGUI:
     # File transcription methods
     # ------------------------------------------------------------------
 
+    def _warn_if_no_gpu(self) -> bool:
+        """Check GPU availability and offer a choice. Returns True to proceed on CPU."""
+        reason = None
+        try:
+            import torch
+
+            if not torch.cuda.is_available():
+                reason = "CUDA is not available on this system."
+            else:
+                try:
+                    free_bytes, _ = torch.cuda.mem_get_info()
+                    free_mb = free_bytes // (1024 * 1024)
+                    if free_mb < 3000:
+                        reason = f"GPU VRAM too low ({free_mb} MB free, need 3000+ MB)."
+                    else:
+                        torch.zeros(1, device="cuda")
+                        return True
+                except Exception as exc:
+                    reason = str(exc)
+        except ImportError:
+            reason = "PyTorch (torch) is not installed."
+
+        msg = self._tr("dialog.message.gpu_warning")
+        if reason:
+            msg = f"{reason}\n\n{msg}"
+
+        return messagebox.askyesno(
+            self._tr("dialog.title.gpu_warning"),
+            msg,
+            parent=self.root,
+        )
+
     def _install_ffmpeg(self) -> None:
         """Start local FFmpeg installation in a background thread."""
         self._ffmpeg_install_btn.configure(
@@ -3076,6 +3163,9 @@ class TranscriptionGUI:
             self._refresh_file_workflow()
             return
 
+        if not self._warn_if_no_gpu():
+            return
+
         if hasattr(self, "_file_queue_table"):
             if not self._file_queue_items:
                 if not raw_path:
@@ -3090,6 +3180,11 @@ class TranscriptionGUI:
                     self._refresh_file_workflow()
                     return
                 self._add_files_to_queue([file_path])
+            has_pending = any(item.status == "Queued" for item in self._file_queue_items.values())
+            if not has_pending and self._file_queue_items:
+                self._set_file_status(self._tr("file.status.all_files_done"))
+                self._refresh_file_workflow()
+                return
             self._clear_file_table()
             self._file_batch_cancel_requested = False
             self._set_file_batch_ui_running(True)

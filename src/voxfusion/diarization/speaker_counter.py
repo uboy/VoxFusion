@@ -65,7 +65,11 @@ def _count_sync(
     # Move to GPU if available
     try:
         if torch.cuda.is_available():
-            pipeline.to(torch.device("cuda"))
+            try:
+                torch.zeros(1, device="cuda")
+                pipeline.to(torch.device("cuda"))
+            except Exception:
+                pass
     except Exception:
         pass
 

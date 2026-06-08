@@ -259,5 +259,12 @@
   "about.title": "О программе VoxFusion",
   "about.version": "Версия: {version}",
   "about.license": "Лицензия: GPL-2.0",
-  "about.website": "Сайт:"
+  "about.website": "Сайт:",
+  "dialog.title.speaker_detect_failed": "Ошибка определения говорящих",
+  "dialog.message.speaker_detect_failed": "Не удалось определить говорящих:\n{error}\n\nПродолжить без разделения по говорящим?",
+  "dialog.title.speaker_detect_empty": "Говорящие не обнаружены",
+  "dialog.message.speaker_detect_empty": "Определение говорящих не нашло спикеров в сэмпле аудио.\n\nВозможные причины:\n  \u2022 Аудио слишком короткое или нет речи\n  \u2022 Модель pyannote не установлена\n  \u2022 Не задан токен HuggingFace\n  \u2022 Активен офлайн-режим (модель не в кэше)\n\nПродолжить без разделения по говорящим?",
+  "dialog.title.gpu_warning": "GPU недоступен",
+  "dialog.message.gpu_warning": "CUDA-совместимый GPU не обнаружен (или недостаточно видеопамяти).\n\nТранскрибация будет выполнена на CPU, что может быть значительно медленнее.\n\nПродолжить?",
+  "file.status.all_files_done": "Все файлы в очереди уже обработаны. Нечего транскрибировать."
 }

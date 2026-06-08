@@ -92,25 +92,29 @@ _OVERLAP_DURATION_S = 1
 _CHUNK_SAMPLES = _CHUNK_DURATION_S * _SAMPLE_RATE
 _OVERLAP_SAMPLES = _OVERLAP_DURATION_S * _SAMPLE_RATE
 _MIN_TRANSCRIBE_SAMPLES = 320
+_MIN_CHUNK_SAMPLES = _SAMPLE_RATE  # 1 s — anything shorter is not worth transcribing
 # Maximum words to inspect at a chunk seam when deduplicating overlap artefacts.
 _SEAM_DEDUP_MAX_WORDS = 12
 
 
-def _dedup_seam(prev: str, curr: str) -> str:
+def _dedup_seam(prev: str, curr: str) -> tuple[str, int]:
     """Remove from *curr* any word-prefix that duplicates the word-suffix of *prev*.
 
     The 1-second chunk overlap means the last ~2-3 words of one chunk often
     reappear at the start of the next.  This trims them from *curr* so the
     joined transcript does not contain repeated phrases.
-    Used by the manual chunking fallback path.
+
+    Returns:
+        (cleaned_text, words_removed) — the trimmed text and how many leading
+        words were removed from *curr*.
     """
     prev_words = prev.split()
     curr_words = curr.split()
     limit = min(_SEAM_DEDUP_MAX_WORDS, len(prev_words), len(curr_words))
     for n in range(limit, 0, -1):
         if prev_words[-n:] == curr_words[:n]:
-            return " ".join(curr_words[n:])
-    return curr
+            return " ".join(curr_words[n:]), n
+    return curr, 0
 
 
 def _resolve_gigaam_device(requested: str) -> str:
@@ -365,6 +369,14 @@ class GigaAMCTCEngine:
                 torch = None
 
             if torch is not None:
+                try:
+                    torch.zeros(1, device="cuda")
+                except Exception:
+                    log.warning(
+                        "gigaam.cuda_unavailable_forcing_cpu",
+                        note="CUDA test tensor failed — model will load on CPU only.",
+                    )
+                    os.environ["CUDA_VISIBLE_DEVICES"] = ""
                 # Use getattr — test mocks may not expose float32.
                 float32 = getattr(torch, "float32", None)
                 if float32 is not None:
@@ -390,7 +402,18 @@ class GigaAMCTCEngine:
                 if callable(getattr(self._model, "float", None)):
                     self._model = self._model.float()
                 if callable(getattr(self._model, "to", None)):
-                    self._model.to(device)
+                    try:
+                        self._model.to(device)
+                    except Exception as cuda_exc:
+                        if device == "cpu":
+                            raise
+                        log.warning(
+                            "gigaam.cuda_placement_failed_fallback_cpu",
+                            device=device,
+                            error=str(cuda_exc),
+                        )
+                        self._model.to("cpu")
+                        device = "cpu"
                 log.info("gigaam.device_selected", device=device)
         except (
             Exception
@@ -469,7 +492,11 @@ class GigaAMCTCEngine:
         try:
             activate_ffmpeg_runtime()
             total_duration_s = len(audio) / _SAMPLE_RATE
-            log.info("gigaam.transcribe_start", duration_s=round(total_duration_s, 1))
+            log.info(
+                "gigaam.transcribe_start",
+                duration_s=round(total_duration_s, 1),
+                samples=len(audio),
+            )
 
             # Write entire audio to a single temp file.  On Linux prefer /dev/shm to avoid disk I/O.
             _tmpdir = "/dev/shm" if sys.platform == "linux" and os.path.isdir("/dev/shm") else None
@@ -545,8 +572,20 @@ class GigaAMCTCEngine:
         total_duration_s: float,
     ) -> list[TranscriptionSegment]:
         """Fallback: fixed 24-second windows with seam dedup and per-window timestamps."""
+        if len(audio) < _MIN_TRANSCRIBE_SAMPLES:
+            log.warning(
+                "gigaam.chunked_audio_too_short",
+                samples=len(audio),
+                min_samples=_MIN_TRANSCRIBE_SAMPLES,
+            )
+            return []
         total_chunks = max(1, -(-len(audio) // (_CHUNK_SAMPLES - _OVERLAP_SAMPLES)))
-        log.info("gigaam.chunked_start", duration_s=round(total_duration_s, 1), chunks=total_chunks)
+        log.info(
+            "gigaam.chunked_start",
+            duration_s=round(total_duration_s, 1),
+            samples=len(audio),
+            chunks=total_chunks,
+        )
 
         _tmpdir = "/dev/shm" if sys.platform == "linux" and os.path.isdir("/dev/shm") else None
         parts: list[tuple[float, float, str]] = []
@@ -564,6 +603,15 @@ class GigaAMCTCEngine:
                 start_s=chunk_start_s,
                 end_s=chunk_end_s,
             )
+            if len(chunk) < _MIN_CHUNK_SAMPLES:
+                log.warning(
+                    "gigaam.chunk_too_short",
+                    chunk=chunk_idx,
+                    of=total_chunks,
+                    samples=len(chunk),
+                )
+                pos += _CHUNK_SAMPLES - _OVERLAP_SAMPLES
+                continue
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False, dir=_tmpdir) as f:
                 chunk_path = f.name
             try:
@@ -576,18 +624,39 @@ class GigaAMCTCEngine:
                     log.info(
                         "gigaam.chunk_done", chunk=chunk_idx, of=total_chunks, text="(silence)"
                     )
+            except Exception as exc:
+                log.warning(
+                    "gigaam.chunk_failed",
+                    chunk=chunk_idx,
+                    of=total_chunks,
+                    error=str(exc)[:200],
+                )
             finally:
                 with suppress(OSError):
                     os.unlink(chunk_path)
             pos += _CHUNK_SAMPLES - _OVERLAP_SAMPLES
 
         # Deduplicate words duplicated at seam boundaries due to overlap.
+        # For each chunk after dedup, adjust start_time forward proportionally
+        # to the number of words removed (they belong to the overlap region
+        # already covered by the previous chunk).
+        _OVERLAP_S = _OVERLAP_SAMPLES / _SAMPLE_RATE
         deduped_parts: list[tuple[float, float, str]] = []
         for chunk_start_s, chunk_end_s, part_text in parts:
-            prev_text = deduped_parts[-1][2] if deduped_parts else ""
-            clean = _dedup_seam(prev_text, part_text) if deduped_parts else part_text
-            if clean:
-                deduped_parts.append((chunk_start_s, chunk_end_s, clean))
+            if not deduped_parts:
+                deduped_parts.append((chunk_start_s, chunk_end_s, part_text))
+                continue
+            prev_text = deduped_parts[-1][2]
+            clean, words_removed = _dedup_seam(prev_text, part_text)
+            if not clean:
+                continue
+            total_words = len(part_text.split())
+            if total_words > 0 and words_removed > 0:
+                fraction = words_removed / total_words
+                adjusted_start = chunk_start_s + fraction * _OVERLAP_S
+            else:
+                adjusted_start = chunk_start_s
+            deduped_parts.append((adjusted_start, chunk_end_s, clean))
 
         result_chars = sum(len(text) for _, _, text in deduped_parts)
         log.info(

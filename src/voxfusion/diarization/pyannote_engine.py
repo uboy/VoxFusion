@@ -276,9 +276,17 @@ class PyAnnoteDiarizer:
                 import torch
 
                 if torch.cuda.is_available():
-                    self._pipeline.to(torch.device("cuda"))  # type: ignore[union-attr]
-                    if self._emit_pipeline_logs:
-                        log.info("pyannote.using_gpu")
+                    try:
+                        torch.zeros(1, device="cuda")
+                    except Exception as exc:
+                        log.warning(
+                            "pyannote.cuda_broken_forcing_cpu",
+                            error=str(exc),
+                        )
+                    else:
+                        self._pipeline.to(torch.device("cuda"))  # type: ignore[union-attr]
+                        if self._emit_pipeline_logs:
+                            log.info("pyannote.using_gpu")
             except ImportError:
                 pass
 

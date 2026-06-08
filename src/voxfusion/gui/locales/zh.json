@@ -259,5 +259,12 @@
   "about.title": "关于 VoxFusion",
   "about.version": "版本: {version}",
   "about.license": "许可证: GPL-2.0",
-  "about.website": "网站:"
+  "about.website": "网站:",
+  "dialog.title.speaker_detect_failed": "说话人检测失败",
+  "dialog.message.speaker_detect_failed": "无法检测说话人:\n{error}\n\n是否在没有说话人检测的情况下继续？",
+  "dialog.title.speaker_detect_empty": "未检测到说话人",
+  "dialog.message.speaker_detect_empty": "说话人检测未在音频样本中找到任何说话人。\n\n可能原因:\n  \u2022 音频过短或无语音\n  \u2022 pyannote 模型未安装\n  \u2022 未配置 HuggingFace token\n  \u2022 离线模式已激活（模型未缓存）\n\n是否在没有说话人检测的情况下继续？",
+  "dialog.title.gpu_warning": "GPU 不可用",
+  "dialog.message.gpu_warning": "未检测到 CUDA 兼容的 GPU（或 GPU 显存不足）。\n\n转写将在 CPU 上运行，速度可能明显变慢。\n\n是否继续？",
+  "file.status.all_files_done": "队列中的所有文件都已处理完毕。没有需要转写的文件。"
 }
