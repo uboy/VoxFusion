@@ -3140,10 +3140,17 @@ class TranscriptionGUI:
         self._file_worker.start()
 
     def _start_file_transcribe(self) -> None:
-        raw_path = self._file_path_var.get().strip()
-
         if self._file_worker is not None:
-            return  # already running
+            return
+
+        if self._worker is not None:
+            self._stop_capture()
+            thread = getattr(self._worker, "_thread", None)
+            if thread is not None:
+                thread.join(timeout=15)
+            self._worker = None
+
+        raw_path = self._file_path_var.get().strip()
 
         try:
             min_speakers = self._parse_optional_positive_int_localized(
