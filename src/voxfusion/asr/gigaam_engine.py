@@ -640,7 +640,7 @@ class GigaAMCTCEngine:
         # For each chunk after dedup, adjust start_time forward proportionally
         # to the number of words removed (they belong to the overlap region
         # already covered by the previous chunk).
-        _OVERLAP_S = _OVERLAP_SAMPLES / _SAMPLE_RATE
+        _overlap_s = _OVERLAP_SAMPLES / _SAMPLE_RATE
         deduped_parts: list[tuple[float, float, str]] = []
         for chunk_start_s, chunk_end_s, part_text in parts:
             if not deduped_parts:
@@ -653,7 +653,7 @@ class GigaAMCTCEngine:
             total_words = len(part_text.split())
             if total_words > 0 and words_removed > 0:
                 fraction = words_removed / total_words
-                adjusted_start = chunk_start_s + fraction * _OVERLAP_S
+                adjusted_start = chunk_start_s + fraction * _overlap_s
             else:
                 adjusted_start = chunk_start_s
             deduped_parts.append((adjusted_start, chunk_end_s, clean))

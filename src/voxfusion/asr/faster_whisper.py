@@ -14,7 +14,7 @@ from time import monotonic
 
 import numpy as np
 
-from voxfusion.asr.cuda_utils import has_ctranslate2_cuda, select_best_gpu
+from voxfusion.asr.cuda_utils import has_ctranslate2_cuda
 from voxfusion.config.models import ASRConfig
 from voxfusion.exceptions import ModelLoadError, ModelNotFoundError, TranscriptionError
 from voxfusion.logging import get_logger

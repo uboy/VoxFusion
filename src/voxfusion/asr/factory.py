@@ -75,9 +75,7 @@ def create_asr_engine(
     if has_ctranslate2_cuda():
         from voxfusion.asr.faster_whisper import FasterWhisperEngine
 
-        cuda_cfg = ASRConfig(
-            **{**cfg.model_dump(), "device": "cuda", "compute_type": "float16"}
-        )
+        cuda_cfg = ASRConfig(**{**cfg.model_dump(), "device": "cuda", "compute_type": "float16"})
         log.info("asr_factory.selected", backend="cuda")
         return FasterWhisperEngine(cuda_cfg), "cuda"
 
