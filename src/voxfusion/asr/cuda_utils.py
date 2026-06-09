@@ -52,13 +52,15 @@ def has_cuda_vram() -> bool:
 
 
 def has_ctranslate2_cuda() -> bool:
-    """Return True if CTranslate2 has CUDA support AND a GPU is visible.
+    """Return True if CTranslate2 can use CUDA for inference on this system.
 
-    ``get_supported_compute_types("cuda")`` returns supported types even for
-    CPU-only wheels.  ``get_cuda_device_count()`` may return > 0 when the
-    driver is visible but the bundled CUDA runtime is incompatible with the
-    system CUDA toolkit version (e.g. CT2 built with CUDA 12 vs system
-    CUDA 13).  The only reliable check is an actual small inference probe.
+    Checks three things:
+    1. ``get_supported_compute_types("cuda")`` — CTranslate2 was built with CUDA support.
+    2. ``get_cuda_device_count()`` — a GPU is visible to CTranslate2.
+    3. ``libcublas.so.12`` is loadable — the CUDA math library CTranslate2 needs
+       is present and ABI-compatible.  CTranslate2 4.x is built against CUDA 12 and
+       requires ``libcublas.so.12``; systems with only CUDA 13 (e.g. ``libcublas.so.13``)
+       will pass checks 1-2 but fail at model loading.
     """
     try:
         import ctranslate2
@@ -70,14 +72,16 @@ def has_ctranslate2_cuda() -> bool:
     except Exception:
         return False
     try:
-        import numpy as np
+        import ctypes
 
-        arr = np.zeros((1, 1), dtype=np.float32)
-        cpu_view = ctranslate2.StorageView.from_array(arr)
-        cuda_view = ctranslate2.StorageView.to(cpu_view, device="cuda")
-        del cuda_view
+        ctypes.CDLL("libcublas.so.12")
         return True
-    except Exception:
+    except OSError:
+        log.warning(
+            "cuda.ctranslate2_no_libcublas12",
+            note="CTranslate2 needs libcublas.so.12 (CUDA 12). "
+            "Install CUDA 12 toolkit or 'libcublas12' package for GPU support.",
+        )
         return False
 
 
