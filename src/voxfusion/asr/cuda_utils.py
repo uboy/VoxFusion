@@ -52,13 +52,31 @@ def has_cuda_vram() -> bool:
 
 
 def has_ctranslate2_cuda() -> bool:
-    """Return True if CTranslate2 supports CUDA on this system."""
+    """Return True if CTranslate2 has CUDA support AND a GPU is visible.
+
+    ``get_supported_compute_types("cuda")`` returns supported types even for
+    CPU-only wheels.  ``get_cuda_device_count()`` may return > 0 when the
+    driver is visible but the bundled CUDA runtime is incompatible with the
+    system CUDA toolkit version (e.g. CT2 built with CUDA 12 vs system
+    CUDA 13).  The only reliable check is an actual small inference probe.
+    """
     try:
         import ctranslate2
 
         if not bool(ctranslate2.get_supported_compute_types("cuda")):
             return False
-        return _cuda_runtime_probe()
+        if ctranslate2.get_cuda_device_count() < 1:
+            return False
+    except Exception:
+        return False
+    try:
+        import numpy as np
+
+        arr = np.zeros((1, 1), dtype=np.float32)
+        cpu_view = ctranslate2.StorageView.from_array(arr)
+        cuda_view = ctranslate2.StorageView.to(cpu_view, device="cuda")
+        del cuda_view
+        return True
     except Exception:
         return False
 
