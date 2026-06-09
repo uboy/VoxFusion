@@ -3143,7 +3143,7 @@ class TranscriptionGUI:
         if self._file_worker is not None:
             return
 
-        if self._worker is not None:
+        if getattr(self, "_worker", None) is not None:
             self._stop_capture()
             thread = getattr(self._worker, "_thread", None)
             if thread is not None:

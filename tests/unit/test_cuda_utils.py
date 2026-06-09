@@ -13,10 +13,14 @@ def _make_torch_mock(
     free_mb_per_device: list[int] | None = None,
     total_mb_per_device: list[int] | None = None,
     device_names: list[str] | None = None,
+    zeros_succeeds: bool = True,
 ) -> types.ModuleType:
     torch_mock = MagicMock()
     torch_mock.cuda.is_available.return_value = cuda_available
     torch_mock.cuda.device_count.return_value = device_count
+    torch_mock.zeros = MagicMock()
+    if not zeros_succeeds:
+        torch_mock.zeros.side_effect = RuntimeError("CUDA error")
 
     if free_mb_per_device is None:
         free_mb_per_device = [10000] * device_count
@@ -80,8 +84,35 @@ def test_has_ctranslate2_cuda_true() -> None:
 
     ct2 = MagicMock()
     ct2.get_supported_compute_types.return_value = ["float16", "int8"]
-    with patch.dict("sys.modules", {"ctranslate2": ct2}):
+    ct2.get_cuda_device_count.return_value = 1
+    with (
+        patch.dict("sys.modules", {"ctranslate2": ct2}),
+        patch("ctypes.CDLL", return_value=MagicMock()),
+    ):
         assert has_ctranslate2_cuda() is True
+
+
+def test_has_ctranslate2_cuda_false_when_no_gpu_count() -> None:
+    from voxfusion.asr.cuda_utils import has_ctranslate2_cuda
+
+    ct2 = MagicMock()
+    ct2.get_supported_compute_types.return_value = ["float16", "int8"]
+    ct2.get_cuda_device_count.return_value = 0
+    with patch.dict("sys.modules", {"ctranslate2": ct2}):
+        assert has_ctranslate2_cuda() is False
+
+
+def test_has_ctranslate2_cuda_false_when_no_libcublas() -> None:
+    from voxfusion.asr.cuda_utils import has_ctranslate2_cuda
+
+    ct2 = MagicMock()
+    ct2.get_supported_compute_types.return_value = ["float16", "int8"]
+    ct2.get_cuda_device_count.return_value = 1
+    with (
+        patch.dict("sys.modules", {"ctranslate2": ct2}),
+        patch("ctypes.CDLL", side_effect=OSError("not found")),
+    ):
+        assert has_ctranslate2_cuda() is False
 
 
 def test_has_ctranslate2_cuda_false_when_no_cuda_types() -> None:

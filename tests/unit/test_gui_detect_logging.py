@@ -112,6 +112,7 @@ def test_detect_speakers_logs_failure(tmp_path: Path, monkeypatch) -> None:
 
     monkeypatch.setattr(gui_main, "log", fake_log)
     monkeypatch.setattr(gui_main.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(gui_main.messagebox, "askyesno", lambda *a, **kw: False)
     monkeypatch.setattr(
         gui_main,
         "load_detection_audio_chunk",

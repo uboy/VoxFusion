@@ -127,28 +127,38 @@ def test_tmpdir_is_none_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_dedup_seam_removes_overlapping_words() -> None:
     prev = "всем доброе утро и тем кто будет смотреть в записи."
     curr = "смотреть в записи. Делюсь экраном."
-    result = _dedup_seam(prev, curr)
+    result, removed = _dedup_seam(prev, curr)
     assert result == "Делюсь экраном."
+    assert removed == 3
 
 
 def test_dedup_seam_no_overlap_returns_curr_unchanged() -> None:
     prev = "первая часть текста."
     curr = "вторая часть текста."
-    assert _dedup_seam(prev, curr) == curr
+    result, removed = _dedup_seam(prev, curr)
+    assert result == curr
+    assert removed == 0
 
 
 def test_dedup_seam_exact_duplicate_returns_empty() -> None:
     text = "занятие."
-    assert _dedup_seam(text, text) == ""
+    result, removed = _dedup_seam(text, text)
+    assert result == ""
+    assert removed == 1
 
 
 def test_dedup_seam_single_word_overlap() -> None:
     prev = "заканчивается занятие."
     curr = "занятие. И сегодня мы будем."
-    result = _dedup_seam(prev, curr)
+    result, removed = _dedup_seam(prev, curr)
     assert result == "И сегодня мы будем."
+    assert removed == 1
 
 
 def test_dedup_seam_empty_strings() -> None:
-    assert _dedup_seam("", "hello world") == "hello world"
-    assert _dedup_seam("hello world", "") == ""
+    result, removed = _dedup_seam("", "hello world")
+    assert result == "hello world"
+    assert removed == 0
+    result, removed = _dedup_seam("hello world", "")
+    assert result == ""
+    assert removed == 0
