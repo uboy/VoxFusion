@@ -54,27 +54,18 @@ def _is_hallucination(text: str) -> bool:
 def _resolve_device(device: str) -> tuple[str, str]:
     """Resolve device string to ``(device, compute_type)``.
 
-    For ``"auto"`` or ``"cuda"``, scans all GPUs and picks the first with
-    enough VRAM.  Returns a specific device like ``("cuda:1", "float16")``
-    or falls back to ``("cpu", "int8")``.
+    For ``"auto"`` or ``"cuda"``, checks GPU availability and returns
+    ``("cuda", "float16")`` or falls back to ``("cpu", "int8")``.
+    CTranslate2 accepts ``"cuda"`` but not ``"cuda:N"``.
     """
     if device.startswith("cuda"):
-        if ":" in device:
-            if has_ctranslate2_cuda():
-                return device, "float16"
-            log.warning("asr.cuda_unavailable_fallback_cpu", requested=device)
-            return "cpu", "int8"
         if has_ctranslate2_cuda():
-            selected = select_best_gpu()
-            if selected is not None:
-                return selected, "float16"
+            return "cuda", "float16"
         log.warning("asr.cuda_unavailable_fallback_cpu", requested=device)
         return "cpu", "int8"
     if device == "auto":
         if has_ctranslate2_cuda():
-            selected = select_best_gpu()
-            if selected is not None:
-                return selected, "float16"
+            return "cuda", "float16"
         return "cpu", "int8"
     return device, "float16" if device.startswith("cuda") else "int8"
 
