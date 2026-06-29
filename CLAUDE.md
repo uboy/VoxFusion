@@ -307,3 +307,9 @@ v0.1.0 is implemented and working. Key capabilities shipped:
 - GUI: multi-step workflow (record → transcribe → send to Open WebUI LLM)
 - GUI settings persistence, WASAPI-only device list, resizable log pane
 - Binary packaging via PyInstaller (`scripts/build_binaries.py`)
+
+## Directory Management for Source Videos
+
+- `source_videos/Unprocessed`: Must always be flat. Do NOT create subdirectories here.
+- `source_videos/Processed`: Must contain categorized subdirectories (e.g. `Podcasts_and_Interviews`, `AI_and_Agents`, etc.).
+- **Workflow**: When processing new media, download files into the root of `Unprocessed`. Once transcripts are generated and processed, move both the media file and its transcript into the appropriate categorized subdirectory under `Processed`.
