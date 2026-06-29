@@ -6,6 +6,7 @@ from pathlib import Path
 
 import click
 
+from voxfusion.asr_catalog import validate_model_selection
 from voxfusion.config.loader import load_config
 from voxfusion.config.models import PipelineConfig
 from voxfusion.gui.helpers import find_ffmpeg
@@ -299,7 +300,11 @@ def _transcribe_batch(
     "--model",
     "-m",
     default=None,
-    help="ASR model size (tiny, base, small, medium, large-v3).",
+    help=(
+        "ASR model id, e.g. tiny/base/small/medium/large-v3, "
+        "gigaam-v3-e2e-rnnt, parakeet-tdt-0.6b-v3. "
+        "Run 'voxfusion models list' for the full list."
+    ),
 )
 @click.option(
     "--word-timestamps",
@@ -365,6 +370,10 @@ def transcribe(
     if language:
         overrides.setdefault("asr", {})["language"] = language
     if model:
+        try:
+            validate_model_selection(model)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
         overrides.setdefault("asr", {})["model_size"] = model
     if word_timestamps:
         overrides.setdefault("asr", {})["word_timestamps"] = True

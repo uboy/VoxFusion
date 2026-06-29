@@ -41,6 +41,36 @@ class TestPipelineConfig:
         cfg = ASRConfig(model_size="unknown-model")
         assert cfg.model_size == "small"
 
+    def test_asr_config_warns_on_unknown_model_fallback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import voxfusion.config.models as models_module
+
+        calls: list[tuple] = []
+        monkeypatch.setattr(
+            models_module._log,
+            "warning",
+            lambda *args, **kwargs: calls.append((args, kwargs)),
+        )
+        ASRConfig(model_size="gigaam-v3-e2e-mnt")
+        assert calls, "unknown model fallback must not be silent"
+        assert calls[0][0][0] == "asr_config.unknown_model_fallback"
+        assert calls[0][1]["requested"] == "gigaam-v3-e2e-mnt"
+
+    def test_asr_config_does_not_warn_for_known_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import voxfusion.config.models as models_module
+
+        calls: list[tuple] = []
+        monkeypatch.setattr(
+            models_module._log,
+            "warning",
+            lambda *args, **kwargs: calls.append((args, kwargs)),
+        )
+        ASRConfig(model_size="small")
+        assert not calls
+
     def test_asr_config_drops_unsupported_language_to_auto(self) -> None:
         cfg = ASRConfig(model_size="small", language="xx")
         assert cfg.language is None

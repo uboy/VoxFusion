@@ -5,6 +5,7 @@ import time
 import click
 
 from voxfusion.asr_catalog import GIGAAM_REVISIONS as _GIGAAM_REVISIONS
+from voxfusion.asr_catalog import get_missing_packages, get_model_catalog
 from voxfusion.cli.formatting import echo_key_value, echo_success, echo_warning
 from voxfusion.config.loader import load_config
 
@@ -39,9 +40,18 @@ def models_group() -> None:
 
 @models_group.command("list")
 def models_list() -> None:
-    """List currently configured models."""
+    """List selectable ASR models and the currently configured models."""
+    click.echo("Selectable ASR models (--model / VOXFUSION_ASR__MODEL_SIZE):\n")
+    for model in get_model_catalog():
+        missing = get_missing_packages(model.id)
+        if missing:
+            status = f"needs: {', '.join(missing)}"
+        else:
+            status = "available"
+        click.echo(f"  {model.id:<24} {model.engine:<14} [{status}]")
+
     cfg = load_config()
-    click.echo("Configured models:\n")
+    click.echo("\nConfigured models:\n")
     echo_key_value("ASR engine", cfg.asr.engine)
     echo_key_value("ASR model size", cfg.asr.model_size)
     echo_key_value("ASR device", cfg.asr.device)

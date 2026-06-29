@@ -5,7 +5,15 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from voxfusion.asr_catalog import get_model_info, normalize_language_for_model
+from voxfusion.asr_catalog import (
+    get_model_info,
+    is_known_model,
+    list_model_ids,
+    normalize_language_for_model,
+)
+from voxfusion.logging import get_logger
+
+_log = get_logger(__name__)
 
 
 class VADParameters(BaseModel):
@@ -54,6 +62,18 @@ class ASRConfig(BaseModel):
 
     @model_validator(mode="after")
     def _normalize_catalog_compatibility(self) -> "ASRConfig":
+        requested = self.model_size
+        if requested and not is_known_model(requested):
+            # Graceful degradation (see CLAUDE.md): unknown ids fall back to the
+            # default model. Warn so the fallback is not silent on non-CLI paths
+            # such as VOXFUSION_ASR__MODEL_SIZE or config files (the CLI rejects
+            # unknown --model values outright via validate_model_selection).
+            _log.warning(
+                "asr_config.unknown_model_fallback",
+                requested=requested,
+                fallback=get_model_info(None).id,
+                valid_models=list_model_ids(),
+            )
         model_info = get_model_info(self.model_size)
         self.model_size = model_info.id
         self.engine = model_info.engine

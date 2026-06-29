@@ -434,6 +434,16 @@ GIGAAM_REVISIONS: dict[str, str] = {
     "gigaam-v3-e2e-rnnt": "e2e_rnnt",
 }
 
+# Maps an engine name to the install extra that provides its required packages,
+# used to build actionable error messages when a model's deps are missing.
+# Engines absent from this map (e.g. "breeze") have no dedicated extra; in that
+# case the missing package names are reported directly.
+_ENGINE_INSTALL_EXTRA: dict[str, str] = {
+    "gigaam": "gigaam",
+    "parakeet": "parakeet",
+    "funasr": "chinese",
+}
+
 _MODEL_BY_ID = {model.id: model for model in ASR_MODEL_CATALOG}
 
 
@@ -494,14 +504,67 @@ def get_language_code(label: str, model_id: str | None = None) -> str | None:
     return normalize_language_for_model(model_id, info.code)
 
 
-def is_model_available(model_id: str | None) -> bool:
-    """Return False when the model requires packages missing in the current runtime."""
+def is_known_model(model_id: str | None) -> bool:
+    """Return True only when *model_id* is an exact id in the catalog."""
+    return bool(model_id) and model_id in _MODEL_BY_ID
+
+
+def _is_importable(package: str) -> bool:
+    """Return True if *package* can be located by the import system.
+
+    ``importlib.util.find_spec`` returns ``None`` only for a missing *top-level*
+    module; for a dotted name (e.g. ``"pyannote.audio"``) it imports the parent
+    first and raises ``ModuleNotFoundError`` when the parent is absent. Treat
+    that as "not importable" rather than letting it propagate.
+    """
     import importlib.util
 
+    try:
+        return importlib.util.find_spec(package) is not None
+    except ModuleNotFoundError:
+        return False
+
+
+def get_missing_packages(model_id: str | None) -> tuple[str, ...]:
+    """Return required packages for *model_id* that cannot be imported.
+
+    An empty tuple means every required package is importable (or the model
+    has no extra requirements).
+    """
     model = get_model_info(model_id)
-    if not model.requires_packages:
-        return True
-    return all(importlib.util.find_spec(pkg) is not None for pkg in model.requires_packages)
+    return tuple(pkg for pkg in model.requires_packages if not _is_importable(pkg))
+
+
+def is_model_available(model_id: str | None) -> bool:
+    """Return False when the model requires packages missing in the current runtime."""
+    return not get_missing_packages(model_id)
+
+
+def validate_model_selection(model_id: str) -> None:
+    """Validate an explicitly requested ASR model id.
+
+    Raises:
+        ValueError: if *model_id* is not a supported model, or if it is
+            supported but its required packages are not installed. The message
+            is user-facing and includes the valid ids or an install hint.
+    """
+    if not is_known_model(model_id):
+        valid = ", ".join(list_model_ids())
+        raise ValueError(f"Unknown ASR model '{model_id}'. Supported models: {valid}.")
+
+    missing = get_missing_packages(model_id)
+    if missing:
+        engine = _MODEL_BY_ID[model_id].engine
+        extra = _ENGINE_INSTALL_EXTRA.get(engine)
+        hint = (
+            f" Install it with: pip install -e .[{extra}]"
+            if extra
+            else f" Install the required package(s): {', '.join(missing)}."
+        )
+        raise ValueError(
+            f"ASR model '{model_id}' requires package(s) not installed in this "
+            f"environment: {', '.join(missing)}.{hint}"
+        )
 
 
 def get_available_model_catalog() -> tuple[ASRModelInfo, ...]:

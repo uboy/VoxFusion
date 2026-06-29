@@ -81,6 +81,48 @@ def test_transcribe_passes_diarization_overrides(tmp_path: Path, monkeypatch) ->
     assert overrides["diarization"]["ml"]["max_speakers"] == 5
 
 
+def test_transcribe_rejects_unknown_model(tmp_path: Path) -> None:
+    audio_file = tmp_path / "input.wav"
+    audio_file.write_bytes(b"RIFF")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        transcribe,
+        [str(audio_file), "--model", "gigaam-v3-e2e-mnt"],
+        obj={"verbose": False, "quiet": True},
+    )
+
+    assert result.exit_code != 0
+    assert "Unknown ASR model 'gigaam-v3-e2e-mnt'" in result.output
+    # Lists the valid ids so the user can correct the typo.
+    assert "gigaam-v3-e2e-rnnt" in result.output
+
+
+def test_transcribe_rejects_model_with_missing_packages(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    audio_file = tmp_path / "input.wav"
+    audio_file.write_bytes(b"RIFF")
+
+    # Pretend the gigaam packages are not importable in this environment.
+    monkeypatch.setattr(
+        "voxfusion.asr_catalog.get_missing_packages",
+        lambda model_id: ("torch", "torchaudio") if model_id == "gigaam-v3-e2e-ctc" else (),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        transcribe,
+        [str(audio_file), "--model", "gigaam-v3-e2e-ctc"],
+        obj={"verbose": False, "quiet": True},
+    )
+
+    assert result.exit_code != 0
+    assert "requires package(s) not installed" in result.output
+    assert "pip install -e .[gigaam]" in result.output
+
+
 def test_transcribe_accepts_none_diarization_strategy(
     tmp_path: Path,
     monkeypatch,

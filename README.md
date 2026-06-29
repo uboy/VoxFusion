@@ -198,7 +198,29 @@ export TRANSFORMERS_OFFLINE=1
 voxfusion transcribe test.wav --model gigaam-v3-e2e-ctc
 ```
 
-### Model sizes
+### Supported ASR models
+
+Pass any of these ids to `--model` (CLI) or `VOXFUSION_ASR__MODEL_SIZE`. Run
+`voxfusion models list` to see which are available in your environment. An
+unknown id or a model whose packages are missing now fails with a clear error
+instead of silently falling back to Whisper small.
+
+| `--model` id | Engine | Languages | Live capture | Install extra |
+|--------------|--------|-----------|:------------:|---------------|
+| `tiny` | faster-whisper | 99 languages | ✅ | built-in |
+| `base` | faster-whisper | 99 languages | ✅ | built-in |
+| `small` *(default)* | faster-whisper | 99 languages | ✅ | built-in |
+| `medium` | faster-whisper | 99 languages | ✅ | built-in |
+| `large-v3` | faster-whisper | 99 languages | ✅ | built-in |
+| `gigaam-v3-e2e-rnnt` | gigaam | Russian | ❌ | `gigaam` |
+| `gigaam-v3-e2e-ctc` | gigaam | Russian | ✅ | `gigaam` |
+| `gigaam-v3-rnnt` | gigaam | Russian | ❌ | `gigaam` |
+| `gigaam-v3-ctc` | gigaam | Russian | ❌ | `gigaam` |
+| `parakeet-tdt-0.6b-v3` | parakeet | 25 European langs | ❌ | `parakeet` |
+| `breeze-asr` | breeze | 99 languages | ❌ | (transformers + torch) |
+| `funasr-paraformer-zh` | funasr | Chinese | ❌ | `chinese` |
+
+### Model download sizes
 
 | Model | Size | Languages | Quality |
 |-------|------|-----------|---------|
@@ -371,3 +393,69 @@ the action is always visible in the application log.
 ## License
 
 GPLv2. All contributions and derivative works must remain open-source under the same license.
+
+### Third-party dependency licenses
+
+VoxFusion uses the following third-party packages. All are GPLv2-compatible.
+
+**Core dependencies:**
+
+| Package | Version | License | Purpose |
+|---------|---------|---------|---------|
+| faster-whisper | >= 1.0 | Apache 2.0 | ASR engine (CTranslate2-backed Whisper) |
+| ctranslate2 | >= 4.0 | MIT | ASR model runtime |
+| numpy | >= 1.24 | BSD | Audio array operations |
+| scipy | >= 1.7 | BSD | Signal processing |
+| pydantic | >= 2.0 | MIT | Configuration validation |
+| pydantic-settings | >= 2.0 | MIT | Environment variable config |
+| click | >= 8.0 | BSD | CLI framework |
+| sounddevice | >= 0.4 | MIT | Cross-platform audio I/O |
+| soundfile | >= 0.12 | BSD | Audio file reading/writing |
+| structlog | >= 23.0 | Apache 2.0 / MIT | Structured logging |
+| pyyaml | >= 6.0 | MIT | YAML config parsing |
+| httpx | >= 0.24 | BSD | Async HTTP client |
+| tqdm | >= 4.66 | MIT / MPL 2.0 | Progress bars |
+| typing-extensions | >= 4.13 | PSF | Backported typing features |
+| torch | >= 2.4 | BSD | ML model runtime |
+| transformers | >= 4.57 | Apache 2.0 | HuggingFace model loading |
+| pyannote-audio | >= 4.0 | MIT | ML-based speaker diarization |
+| torchcodec | >= 0.7 | BSD | Video/audio decoding for pyannote |
+
+**Optional dependencies:**
+
+| Package | Version | License | Purpose | Install extra |
+|---------|---------|---------|---------|---------------|
+| argostranslate | >= 1.9 | MIT | Offline NMT translation | `translation-offline` |
+| noisereduce | >= 0.4 | MIT | Audio noise reduction | `noise-reduction` |
+| librosa | >= 0.10 | ISC | Audio analysis utilities | `audio-quality` |
+| soxr | >= 0.3 | LGPL 2.1 | High-quality resampling | `audio-quality` |
+| cryptography | >= 41.0 | Apache 2.0 / BSD | Output encryption | `security` |
+| tkinterdnd2 | >= 0.3 | MIT | GUI drag-and-drop | `dnd` |
+| nemo_toolkit | >= 2.0 | Apache 2.0 | Parakeet ASR backend | `parakeet` |
+| funasr | >= 1.0 | MIT | Chinese ASR (Paraformer) | `chinese` |
+| torchaudio | >= 2.4 | BSD | Audio transforms for GigaAM | `gigaam` |
+| sentencepiece | >= 0.1.99 | Apache 2.0 | Tokenization for GigaAM | `gigaam` |
+| omegaconf | >= 2.3 | MIT | Config framework for GigaAM | `gigaam` |
+| hydra-core | >= 1.3 | MIT | Config framework for GigaAM | `gigaam` |
+
+**Platform-specific dependencies:**
+
+| Package | Version | License | Platform |
+|---------|---------|---------|----------|
+| pyaudiowpatch | >= 0.2.12 | MIT | Windows (WASAPI loopback) |
+| pulsectl | >= 23.5 | MIT | Linux (PulseAudio/PipeWire) |
+| pyobjc-framework-CoreAudio | >= 10.0 | MIT | macOS (audio devices) |
+| pyobjc-framework-ScreenCaptureKit | >= 10.0 | MIT | macOS (screen audio capture) |
+
+**Development dependencies:**
+
+| Package | Version | License |
+|---------|---------|---------|
+| pytest | >= 7.0 | MIT |
+| pytest-asyncio | >= 0.21 | Apache 2.0 |
+| pytest-cov | >= 4.0 | MIT |
+| ruff | >= 0.1 | MIT |
+| mypy | >= 1.5 | MIT |
+| pip-audit | >= 2.6 | Apache 2.0 |
+| pre-commit | >= 3.0 | MIT |
+| pyinstaller | >= 6.15 | GPL 2.0+ |

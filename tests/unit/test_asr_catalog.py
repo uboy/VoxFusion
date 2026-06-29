@@ -8,11 +8,14 @@ from voxfusion.asr_catalog import (
     get_available_model_catalog,
     get_language_code,
     get_language_label,
+    get_missing_packages,
     get_model_info,
+    is_known_model,
     is_model_available,
     list_languages_for_model,
     list_model_ids,
     normalize_language_for_model,
+    validate_model_selection,
 )
 
 
@@ -59,6 +62,62 @@ def test_gigaam_requires_both_transformers_and_torch(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(importlib.util, "find_spec", _fake_find_spec)
     assert is_model_available("gigaam-v3-e2e-ctc") is False
+
+
+def test_is_known_model_distinguishes_catalog_ids_from_typos() -> None:
+    assert is_known_model("gigaam-v3-e2e-rnnt") is True
+    assert is_known_model("gigaam-v3-e2e-mnt") is False  # the reported typo
+    assert is_known_model("") is False
+    assert is_known_model(None) is False
+
+
+def test_get_missing_packages_does_not_raise_when_dotted_parent_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression: find_spec raises ModuleNotFoundError (not None) for a dotted
+    # name like "pyannote.audio" when the parent package is absent. The helper
+    # must treat that as "missing", never propagate the exception.
+    real_find_spec = importlib.util.find_spec
+
+    def _fake_find_spec(name: str):
+        if name == "pyannote.audio":
+            raise ModuleNotFoundError("No module named 'pyannote'")
+        if name in {"transformers", "torch", "torchaudio", "sentencepiece", "omegaconf", "hydra"}:
+            return object()
+        return real_find_spec(name)
+
+    monkeypatch.setattr(importlib.util, "find_spec", _fake_find_spec)
+    missing = get_missing_packages("gigaam-v3-e2e-rnnt")
+    assert missing == ("pyannote.audio",)
+    assert is_model_available("gigaam-v3-e2e-rnnt") is False
+
+
+def test_validate_model_selection_rejects_unknown_id() -> None:
+    with pytest.raises(ValueError) as excinfo:
+        validate_model_selection("gigaam-v3-e2e-mnt")
+    message = str(excinfo.value)
+    assert "Unknown ASR model 'gigaam-v3-e2e-mnt'" in message
+    # Lists valid ids so the user can correct the typo.
+    assert "gigaam-v3-e2e-rnnt" in message
+
+
+def test_validate_model_selection_reports_missing_packages_with_install_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "voxfusion.asr_catalog.get_missing_packages",
+        lambda model_id: ("torch", "pyannote.audio") if model_id == "gigaam-v3-e2e-rnnt" else (),
+    )
+    with pytest.raises(ValueError) as excinfo:
+        validate_model_selection("gigaam-v3-e2e-rnnt")
+    message = str(excinfo.value)
+    assert "requires package(s) not installed" in message
+    assert "pip install -e .[gigaam]" in message
+
+
+def test_validate_model_selection_passes_for_available_model() -> None:
+    # Whisper models have no extra package requirements, so this never raises.
+    validate_model_selection("small")
 
 
 def test_available_model_catalog_hides_backends_with_missing_runtime(

@@ -9,7 +9,7 @@ from datetime import datetime
 
 import click
 
-from voxfusion.asr_catalog import get_model_info
+from voxfusion.asr_catalog import get_model_info, validate_model_selection
 from voxfusion.cli.formatting import echo_error, echo_warning
 from voxfusion.config.loader import load_config
 from voxfusion.logging import configure_logging, get_logger
@@ -144,6 +144,10 @@ def capture(
     overrides.setdefault("capture", {})["lossy_mode"] = True  # Сбрасываем при переполнении
     # Используем tiny модель для скорости в streaming режиме (если не указана другая)
     if model:
+        try:
+            validate_model_selection(model)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
         overrides.setdefault("asr", {})["model_size"] = model
     else:
         overrides.setdefault("asr", {})["model_size"] = "tiny"
