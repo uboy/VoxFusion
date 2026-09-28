@@ -97,8 +97,8 @@ chinese = ["funasr"]
 pytest = ">=7.0"
 pytest-asyncio = ">=0.21"
 pytest-cov = ">=4.0"
-ruff = ">=0.1"
-mypy = ">=1.5"
+ruff = "==0.15.16"
+mypy = "==2.1.0"
 pip-audit = ">=2.6"
 pre-commit = ">=3.0"
 pyinstaller = { version = ">=6.15", python = ">=3.11,<3.15" }
