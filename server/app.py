@@ -66,7 +66,11 @@ def _register_job(job: TranscribeJob) -> None:
         _jobs[job.job_id] = job
         _jobs_order.append(job.job_id)
         while len(_jobs_order) > MAX_JOBS_HISTORY:
-            oldest = _jobs_order.pop(0)
+            finished = [jid for jid in _jobs_order if _jobs[jid].status in ("done", "error")]
+            if not finished:
+                break
+            oldest = finished[0]
+            _jobs_order.remove(oldest)
             _jobs.pop(oldest, None)
 
 
@@ -85,7 +89,7 @@ def _require_auth(request: Request) -> None:
     if not header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="missing bearer token")
     supplied = header[len("Bearer "):].strip()
-    if not supplied or not hmac.compare_digest(supplied, TOKEN):
+    if not supplied or not hmac.compare_digest(supplied.encode(), TOKEN.encode()):
         raise HTTPException(status_code=401, detail="invalid token")
 
 
@@ -157,6 +161,10 @@ async def _retention_loop() -> None:
             if UPLOAD_DIR.exists():
                 for path in UPLOAD_DIR.iterdir():
                     try:
+                        job_prefix = path.name.split("_", 1)[0]
+                        active = _jobs.get(job_prefix)
+                        if active is not None and active.status in ("queued", "running"):
+                            continue
                         if path.is_file() and path.stat().st_mtime < cutoff:
                             path.unlink()
                     except OSError:
