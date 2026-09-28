@@ -20,7 +20,7 @@ sudo systemctl enable --now voxfusion-api
 Секреты и параметры — `/home/dmazur/secrets/voxfusion-api.env`
 (EnvironmentFile юнита, chmod 600):
 
-|  | записей в истории задач (500) |
+| `VOXFUSION_API_MAX_JOBS_HISTORY` | записей в истории задач | 500 |
 | Переменная | Назначение | По умолчанию |
 |---|---|---|
 | `VOXFUSION_API_TOKEN` | Bearer-токен (обязателен; без него все защищённые эндпоинты отдают 401) | — |
