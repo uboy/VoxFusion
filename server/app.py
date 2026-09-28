@@ -24,10 +24,11 @@ import re
 import threading
 import time
 import uuid
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Annotated, Any
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 
@@ -88,7 +89,7 @@ def _require_auth(request: Request) -> None:
         raise HTTPException(status_code=401, detail="service token is not configured")
     if not header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="missing bearer token")
-    supplied = header[len("Bearer "):].strip()
+    supplied = header[len("Bearer ") :].strip()
     if not supplied or not hmac.compare_digest(supplied.encode(), TOKEN.encode()):
         raise HTTPException(status_code=401, detail="invalid token")
 
@@ -144,7 +145,7 @@ async def _store_upload(job_id: str, filename: str | None, src: UploadFile) -> t
     except HTTPException:
         dest.unlink(missing_ok=True)
         raise
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         dest.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=f"failed to store upload: {exc}") from exc
     if size == 0:
@@ -180,7 +181,7 @@ async def _retention_loop() -> None:
                 for jid in stale:
                     _jobs.pop(jid, None)
                     _jobs_order.remove(jid)
-        except Exception:  # noqa: BLE001 - cleanup must never kill the app
+        except Exception:
             pass
         await asyncio.sleep(RETENTION_SWEEP_INTERVAL_S)
 
@@ -219,13 +220,13 @@ def healthz() -> dict[str, Any]:
 @app.post("/v1/transcribe")
 async def transcribe(
     request: Request,
-    file: UploadFile = File(...),
-    language: str | None = Form(default=None),
-    include_segments: str | None = Form(default=None),
+    file: Annotated[UploadFile, File(...)],
+    language: Annotated[str | None, Form()] = None,
+    include_segments: Annotated[str | None, Form()] = None,
 ) -> dict[str, Any]:
     """Queue a transcription job. Returns immediately with a job_id."""
     _require_auth(request)
-    lang = (language or "").strip().lower()
+    lang: str | None = (language or "").strip().lower()
     if lang in ("", "auto"):
         lang = None
     want_segments = (include_segments or "").strip().lower() in ("1", "true", "yes", "on")

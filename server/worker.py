@@ -53,11 +53,9 @@ class TranscribeJob:
 class TranscriptionWorker:
     """FIFO worker thread around a single shared ``PipelineOrchestrator``."""
 
-    def __init__(self, overrides: dict | None = None) -> None:
+    def __init__(self, overrides: dict[str, Any] | None = None) -> None:
         self._queue: queue.Queue[TranscribeJob] = queue.Queue()
-        self._thread = threading.Thread(
-            target=self._run, name="voxfusion-api-worker", daemon=True
-        )
+        self._thread = threading.Thread(target=self._run, name="voxfusion-api-worker", daemon=True)
         self._stop_event = threading.Event()
         self._orchestrator: PipelineOrchestrator | None = None
         self._lock = threading.Lock()
@@ -97,7 +95,7 @@ class TranscriptionWorker:
             job.status = STATUS_RUNNING
             try:
                 self._process(job)
-            except Exception as exc:  # noqa: BLE001 - any failure goes to the job
+            except Exception as exc:
                 job.status = STATUS_ERROR
                 job.error = str(exc) or exc.__class__.__name__
             finally:
@@ -107,9 +105,7 @@ class TranscriptionWorker:
 
     def _get_orchestrator(self) -> PipelineOrchestrator:
         if self._orchestrator is None:
-            self._orchestrator = PipelineOrchestrator(
-                self.config, interactive=True
-            )
+            self._orchestrator = PipelineOrchestrator(self.config, interactive=True)
         return self._orchestrator
 
     def _process(self, job: TranscribeJob) -> None:
@@ -118,7 +114,7 @@ class TranscriptionWorker:
         # per-call language, so the engine falls back to config.asr.language.
         # The worker is single-threaded, hence mutating the shared config
         # between jobs is safe.
-        orch._asr._config.language = job.language or None  # noqa: SLF001
+        orch._asr._config.language = job.language or None  # type: ignore[attr-defined]
 
         started = time.monotonic()
         result = asyncio.run(orch.transcribe_file(job.file_path))
