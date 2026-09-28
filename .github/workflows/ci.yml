@@ -29,7 +29,7 @@ jobs:
             faster-whisper ctranslate2 numpy scipy pydantic pydantic-settings \
             click sounddevice soundfile structlog pyyaml httpx tqdm \
             typing-extensions "transformers>=4.48,<5.0" \
-            ruff mypy \
+            ruff==0.15.16 mypy==2.1.0 \
             types-PyYAML types-tqdm
 
       - name: Install package (editable, no deps)
