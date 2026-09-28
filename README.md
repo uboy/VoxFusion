@@ -323,6 +323,23 @@ python scripts/build_binaries.py --target all   # both + ZIPs
 
 PyInstaller is included in Poetry dev dependencies. For pip installs: `pip install pyinstaller` first.
 
+**Build from the project `venv`, not the system Python.** A system-Python build can succeed
+while silently omitting optional ML dependencies, producing a bundle that fails only at
+runtime when diarization or speaker detection is used:
+
+```powershell
+.\venv\Scripts\python.exe scripts/build_binaries.py --target gui
+```
+
+Two more packaging constraints, both found the hard way:
+
+- **`pyannote.audio` needs its telemetry config bundled explicitly.** Frozen builds crash on
+  a missing `pyannote/audio/telemetry/config.yaml` unless the build adds it as data.
+- **FFmpeg paths must be absolute before they become `--add-data` entries.** A relative
+  `PATH` hit resolves during the build but breaks inside the bundle.
+- **A running bundled `.exe` blocks rebuilding into the same output directory.** Close the
+  previous build before rebuilding.
+
 See `docs/BINARY_BUILD.md` for platform-specific packaging notes.
 
 ## Test validation
@@ -357,6 +374,66 @@ All settings can be set via environment variables (prefix `VOXFUSION_`, double u
 
 GUI settings persist to `~/.voxfusion/gui_settings.json`.
 The GUI file-transcription tab also persists speaker-separation settings and reuses the same Hugging Face token for gated models and pyannote diarization.
+
+## Troubleshooting
+
+Symptoms that come up repeatedly, with the cause rather than a workaround.
+
+### `PortAudioError: MME error 11` on start, or capture opens but stays silent
+
+The MME host API is the default in many PortAudio builds and is the least reliable one on
+Windows. VoxFusion prefers WASAPI and falls back across host APIs and channel layouts. If
+you pinned a device manually, drop the pin and let it choose.
+
+### `Selected PyAudio loopback device pa:N failed ... Errno -9998 Invalid number of channels`
+
+Some loopback endpoints reject the first channel count they advertise. VoxFusion retries an
+ordered set of channel counts and falls back to mono. If you still see this on a specific
+device, capture the device list (`voxfusion devices`) when reporting it.
+
+### `sounddevice` sees no usable device
+
+Three causes, in order of how often they turn out to be it:
+
+1. the endpoint is held by another program (conferencing apps keep it open);
+2. exclusive mode is enabled for the device in Windows sound settings;
+3. the audio driver predates the current Windows audio stack.
+
+### `Speaker detect failed` on `.webm`, `.mp4`, or other container formats
+
+Speaker detection must read audio through the same FFmpeg extraction path as full
+transcription. Reading a container directly through `soundfile` fails by design. If a
+build of yours shows this, it is a bug in the preflight path, not in your file.
+
+### Open WebUI returns `503` with a valid API key
+
+Test the two endpoints separately: if `/api/models` answers and only
+`/api/chat/completions` fails, the key is fine and the backend or the selected model is
+overloaded. The GUI `Test Model` button sends a minimal real completion for exactly this.
+
+Related: a saved or default model id is not guaranteed to exist in a remote catalog. When
+the configured model is absent, VoxFusion picks a valid one and logs the mismatch instead
+of failing silently.
+
+### Expected log lines are missing
+
+Check the log mode first. `Normal` deliberately shows only stage transitions and errors;
+low-level lines are absent by design. Switch the GUI selector to `Debug`, or pass
+`--debug` / `-v` in the CLI, before treating it as a defect.
+
+## Design notes
+
+Decisions that are easy to mistake for accidents.
+
+- **Batch transcription is sequential by default.** One shared transcription worker is
+  reused rather than starting concurrent model workers, because model memory, not CPU, is
+  the limit on a single machine.
+- **The GUI playlist is an explicit queue with per-file status**, not extra rows in the
+  transcript table: the two have different lifetimes.
+- **Queue metadata is probed asynchronously.** Duration and size appear when available, and
+  transcription can start before probing finishes.
+- **Live GigaAM emits drafts and finalizes on stop** rather than transcribing once at the
+  end, so a long session is usable while it runs. See `Running` above for the mode switch.
 
 ## Docs
 
