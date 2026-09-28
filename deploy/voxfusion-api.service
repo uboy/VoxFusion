@@ -1,0 +1,24 @@
+[Unit]
+Description=VoxFusion HTTP transcription API (CPU-only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dmazur
+WorkingDirectory=/home/dmazur/proj/VoxFusion
+EnvironmentFile=/home/dmazur/secrets/voxfusion-api.env
+# Hard CPU-only: the GPU on this host is reserved for 1C training.
+# CUDA_VISIBLE_DEVICES is emptied so ctranslate2/torch cannot see the device.
+Environment="CUDA_VISIBLE_DEVICES="
+Environment="OMP_NUM_THREADS=6"
+Environment="MKL_NUM_THREADS=6"
+# Host also runs GPU training: cap the service hard (2 cores) and deprioritize.
+CPUQuota=200%
+Nice=10
+ExecStart=/home/dmazur/proj/VoxFusion/.venv/bin/uvicorn server.app:app --host 0.0.0.0 --port 8500 --workers 1
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
