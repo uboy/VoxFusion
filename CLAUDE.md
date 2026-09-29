@@ -316,7 +316,6 @@ v0.1.0 is implemented and working. Key capabilities shipped:
 
 ## Push and CI (mandatory, 2026-09-29)
 
-- Before EVERY `git push` to `main`: run `./scripts/ci-mirror.sh` (ruff check + ruff format --check + mypy + pytest tests/unit). It must be green BEFORE the push, not after.
-- The bm1 global pre-push hook runs this script automatically and blocks the push when it fails. Emergency bypass: `SKIP_CI_MIRROR=1 git push` - only with the reason stated in the report to Denis.
+- Before EVERY `git push` to `main`: run `./scripts/ci-mirror.sh` (ruff check + ruff format --check + mypy + pytest tests/unit). It must be green BEFORE the push, not after. Owner decision: no mechanical pre-push gate - the mirror is run manually, "готово = зелёный CI".
 - CI equivalence: CI lints `src/ tests/` and mypies `src/`; the mirror additionally covers `server/` (stricter). Any new CI step must be added to `scripts/ci-mirror.sh` in the same commit.
-- Precedent: 2026-09-29 evening, 3 red CI runs pushed unchecked (ab3d2ab ruff I001/F401, a585f01 ruff format, and 4d94050 ruff I001 before that). Rule from Denis: "готово = зелёный CI".
+- Precedent: 2026-09-29 evening, 3 red CI runs pushed unchecked (ab3d2ab ruff I001/F401, a585f01 ruff format, and 4d94050 ruff I001 before that). Rule from Denis: "готово = зелёный CI"; the mechanical gate variant was rejected as unrequested machine-level change - the reusable script pattern lives in Denis's tracker (docs/agents/ci-mirror-before-push.md).
