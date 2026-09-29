@@ -7,7 +7,13 @@ transcription can be re-run after the failure is fixed.
 
 from pathlib import Path
 
-from server.worker import STATUS_DONE, STATUS_ERROR, STATUS_RUNNING, TranscribeJob, TranscriptionWorker
+from server.worker import (
+    STATUS_DONE,
+    STATUS_ERROR,
+    STATUS_RUNNING,
+    TranscribeJob,
+    TranscriptionWorker,
+)
 
 
 def _make_worker() -> TranscriptionWorker:
