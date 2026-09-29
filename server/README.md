@@ -29,6 +29,11 @@ sudo systemctl enable --now voxfusion-api
 | `VOXFUSION_API_CPU_THREADS` | Потоки ctranslate2 | `6` |
 | `VOXFUSION_API_DATA_DIR` | Каталог uploads | `/home/dmazur/voxfusion-api` |
 | `VOXFUSION_API_RETENTION_HOURS` | Чистка файлов упавших задач и завершённых задач в истории (успешные удаляются сразу) | `24` |
+
+Отсчёт 24 ч: файлы - по mtime (момент завершения загрузки на диск), записи
+задач в памяти - по времени создания. После рестарта сервиса записи теряются,
+но их файлы лежат в uploads до ретеншн-чистки; перезапустить их через API
+нельзя (реестра нет) - клиент делает новый POST.
 | `VOXFUSION_API_MAX_UPLOAD_GB` | Предел размера загрузки | `32` |
 
 Юнит жёстко выставляет `CUDA_VISIBLE_DEVICES=` (CPU-only), `OMP_NUM_THREADS=6`,
@@ -69,11 +74,15 @@ ffmpeg-extraction внутри пайплайна.
 ```bash
 curl -s http://localhost:8500/v1/jobs/ab12cd34ef56 -H "Authorization: Bearer $TOKEN"
 # {"job_id":"...","status":"done","text":"...","segments":[...],
-#  "error":null,"duration_s":42.1,"model":"faster-whisper/small", ...}
+#  "error":null,"processing_time_s":42.1,"audio_duration_s":3600.0,
+#  "model":"gigaam/gigaam-v3-rnnt", ...}
 ```
 
 `status`: `queued` -> `running` -> `done` | `error`. Ошибка декодирования
 файла (например, «wav» из нулей) попадает в `error` задачи, а не в HTTP 500.
+Поля времени: `processing_time_s` - сколько обрабатывалась задача;
+`audio_duration_s` - длительность самого аудио (из пайплайна; `null`, если
+пайплайн её не отдал, например при ошибке).
 
 ### GET /v1/jobs — последние задачи
 

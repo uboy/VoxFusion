@@ -6,6 +6,8 @@ All notable changes to VoxFusion are documented here.
 
 ### Changed
 - **API**: uploaded file is deleted immediately when a job completes successfully (owner request 2026-09-29: the upload is a transient artifact, "transcribe → return result → clean up"). Files of **failed** jobs are kept on disk so transcription can be re-run after the failure is fixed; the retention sweep (`VOXFUSION_API_RETENTION_HOURS`, 24 h) remains the safety net for them.
+- **API**: response fields renamed/added - `duration_s` (was ambiguous, actually processing time) is now `processing_time_s`; new `audio_duration_s` carries the real audio duration from the pipeline (`source_info[duration_s]`); README documents both.
+- **API**: partial upload file is now removed on client disconnect/timeout mid-upload (`asyncio.CancelledError` is a BaseException that slipped past `except Exception`, leaving an orphan in uploads until the retention sweep).
 
 ### Added
 - **CI**: GitHub Actions workflow — lint (ruff, mypy) + test matrix Python 3.11/3.12 (P0 TEST-1)

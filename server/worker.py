@@ -46,7 +46,8 @@ class TranscribeJob:
     text: str | None = None
     segments: list[dict[str, Any]] | None = None
     error: str | None = None
-    duration_s: float | None = None
+    processing_time_s: float | None = None
+    audio_duration_s: float | None = None
     model: str | None = None
 
 
@@ -137,7 +138,9 @@ class TranscriptionWorker:
 
         started = time.monotonic()
         result = asyncio.run(orch.transcribe_file(job.file_path))
-        job.duration_s = round(time.monotonic() - started, 2)
+        job.processing_time_s = round(time.monotonic() - started, 2)
+        raw_audio_s = result.source_info.get("duration_s")
+        job.audio_duration_s = float(raw_audio_s) if raw_audio_s is not None else None
 
         lines: list[str] = []
         segments_out: list[dict[str, Any]] = []

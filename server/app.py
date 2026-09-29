@@ -106,7 +106,8 @@ def _job_summary(job: TranscribeJob) -> dict[str, Any]:
         "size_bytes": job.size_bytes,
         "language": job.language,
         "created": _iso(job.created),
-        "duration_s": job.duration_s,
+        "processing_time_s": job.processing_time_s,
+        "audio_duration_s": job.audio_duration_s,
         "model": job.model,
     }
 
@@ -143,6 +144,11 @@ async def _store_upload(job_id: str, filename: str | None, src: UploadFile) -> t
                     )
                 out.write(chunk)
     except HTTPException:
+        dest.unlink(missing_ok=True)
+        raise
+    except asyncio.CancelledError:
+        # Client disconnect / timeout mid-upload: BaseException, not caught
+        # by the branch below - clean up the partial file explicitly.
         dest.unlink(missing_ok=True)
         raise
     except Exception as exc:
