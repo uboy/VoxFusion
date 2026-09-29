@@ -9,8 +9,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
-
-from server.app import UPLOAD_DIR, _store_upload
+from server.app import _store_upload
 
 
 class _FakeUpload:
