@@ -313,3 +313,10 @@ v0.1.0 is implemented and working. Key capabilities shipped:
 - `source_videos/Unprocessed`: Must always be flat. Do NOT create subdirectories here.
 - `source_videos/Processed`: Must contain categorized subdirectories (e.g. `Podcasts_and_Interviews`, `AI_and_Agents`, etc.).
 - **Workflow**: When processing new media, download files into the root of `Unprocessed`. Once transcripts are generated and processed, move both the media file and its transcript into the appropriate categorized subdirectory under `Processed`.
+
+## Push and CI (mandatory, 2026-09-29)
+
+- Before EVERY `git push` to `main`: run `./scripts/ci-mirror.sh` (ruff check + ruff format --check + mypy + pytest tests/unit). It must be green BEFORE the push, not after.
+- The bm1 global pre-push hook runs this script automatically and blocks the push when it fails. Emergency bypass: `SKIP_CI_MIRROR=1 git push` - only with the reason stated in the report to Denis.
+- CI equivalence: CI lints `src/ tests/` and mypies `src/`; the mirror additionally covers `server/` (stricter). Any new CI step must be added to `scripts/ci-mirror.sh` in the same commit.
+- Precedent: 2026-09-29 evening, 3 red CI runs pushed unchecked (ab3d2ab ruff I001/F401, a585f01 ruff format, and 4d94050 ruff I001 before that). Rule from Denis: "готово = зелёный CI".
