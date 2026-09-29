@@ -4,6 +4,9 @@ All notable changes to VoxFusion are documented here.
 
 ## [Unreleased]
 
+### Changed
+- **API**: uploaded file is deleted immediately when a job completes successfully (owner request 2026-09-29: the upload is a transient artifact, "transcribe → return result → clean up"). Files of **failed** jobs are kept on disk so transcription can be re-run after the failure is fixed; the retention sweep (`VOXFUSION_API_RETENTION_HOURS`, 24 h) remains the safety net for them.
+
 ### Added
 - **CI**: GitHub Actions workflow — lint (ruff, mypy) + test matrix Python 3.11/3.12 (P0 TEST-1)
 - **Security**: `trust_remote_code=True` risk documented in README § Security and surfaced as a runtime warning on every GigaAM model load (P1 SEC-1)

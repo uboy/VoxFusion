@@ -99,9 +99,28 @@ class TranscriptionWorker:
                 job.status = STATUS_ERROR
                 job.error = str(exc) or exc.__class__.__name__
             finally:
+                self._cleanup_upload(job)
                 with self._lock:
                     self._running_job_id = None
                 self._queue.task_done()
+
+    def _cleanup_upload(self, job: TranscribeJob) -> None:
+        """Delete the uploaded file as soon as the job is done.
+
+        The upload is a transient processing artifact: the client already
+        holds the original, and the transcription result lives in the job
+        record. Failed jobs keep their file so transcription can be re-run
+        (new POST with the same file) after the failure is fixed; the
+        retention sweep in app.py is the final safety net for those.
+        """
+        if job.status != STATUS_DONE:
+            return
+        try:
+            job.file_path.unlink(missing_ok=True)
+        except Exception:
+            # Never let cleanup kill the single worker thread; the retention
+            # sweep will pick the file up later.
+            pass
 
     def _get_orchestrator(self) -> PipelineOrchestrator:
         if self._orchestrator is None:
