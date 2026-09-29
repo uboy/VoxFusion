@@ -29,9 +29,7 @@ class _FakeUpload:
 
 def test_store_upload_writes_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("server.app.UPLOAD_DIR", tmp_path)
-    dest, size = asyncio.run(
-        _store_upload("jobABC", "meeting.wav", _FakeUpload([b"foo", b"bar"]))
-    )
+    dest, size = asyncio.run(_store_upload("jobABC", "meeting.wav", _FakeUpload([b"foo", b"bar"])))
     assert dest == tmp_path / "jobABC_meeting.wav"
     assert dest.read_bytes() == b"foobar"
     assert size == 6
@@ -42,7 +40,5 @@ def test_store_upload_cancelled_removes_partial_file(
 ) -> None:
     monkeypatch.setattr("server.app.UPLOAD_DIR", tmp_path)
     with pytest.raises(asyncio.CancelledError):
-        asyncio.run(
-            _store_upload("jobXYZ", "meeting.wav", _FakeUpload([b"partial", None]))
-        )
+        asyncio.run(_store_upload("jobXYZ", "meeting.wav", _FakeUpload([b"partial", None])))
     assert list(tmp_path.iterdir()) == []
