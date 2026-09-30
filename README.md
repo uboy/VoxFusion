@@ -371,6 +371,7 @@ All settings can be set via environment variables (prefix `VOXFUSION_`, double u
 | `VOXFUSION_DIARIZATION__STRATEGY` | Diarization mode: `auto`, `channel`, `ml`, `hybrid` |
 | `VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN` | HuggingFace token for pyannote diarization models (not needed when the models are already in the local HuggingFace cache) |
 | `VOXFUSION_API_DIARIZATION_STRATEGY` | Diarization strategy for the HTTP API (`server/app.py`); default `channel`, set `auto` to run ML diarization on uploaded files |
+| `VOXFUSION_API_ETA_MULTIPLIER` | ETA estimate factor for the HTTP API (`eta_seconds` = audio duration × factor); default `1.8` (measured RTF ~1.5 on 2 CPU cores + ~20% buffer) |
 | `VOXFUSION_GUI_SETTINGS_PATH` | Override GUI settings file location |
 
 GUI settings persist to `~/.voxfusion/gui_settings.json`.

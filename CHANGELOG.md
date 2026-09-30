@@ -11,6 +11,8 @@ All notable changes to VoxFusion are documented here.
 - **Diarization**: a locally cached pyannote model now satisfies the ML prerequisites without a HuggingFace token (a cached snapshot loads without auth, so fully offline installs keep ML diarization instead of silently falling back to channel); the token gate in `pyannote_engine` allows the same cache fallback. Without cache and token the behaviour is unchanged.
 
 ### Added
+- **API**: job ETA - `POST /v1/transcribe` response and every job record now carry `eta_seconds` (audio duration via ffprobe × `VOXFUSION_API_ETA_MULTIPLIER`, default `1.8` = measured RTF ~1.5 on 2 CPU cores plus a ~20% buffer; `null` when ffprobe cannot read the duration, upload keeps working).
+- **API**: `POST /v1/jobs/{id}/cancel` - a queued job is cancelled immediately (upload removed), a running job flips to the new terminal status `cancelled` within one pipeline progress interval (~seconds) via cooperative cancellation; cancelling a finished job is a no-op; `cancelled` jobs delete their upload like `done` ones.
 - **API**: `VOXFUSION_API_DIARIZATION_STRATEGY` env var (default `channel`) plugs the diarization strategy into `_CONFIG_OVERRIDES`; `auto` makes uploaded files go through ML diarization when pyannote + token/cache are available, an invalid value fails at service startup.
 - **CI**: GitHub Actions workflow — lint (ruff, mypy) + test matrix Python 3.11/3.12 (P0 TEST-1)
 - **Security**: `trust_remote_code=True` risk documented in README § Security and surfaced as a runtime warning on every GigaAM model load (P1 SEC-1)

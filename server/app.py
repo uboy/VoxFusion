@@ -19,8 +19,11 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import json
+import math
 import os
 import re
+import subprocess
 import threading
 import time
 import uuid
@@ -32,7 +35,15 @@ from typing import Annotated, Any
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 
-from server.worker import TranscribeJob, TranscriptionWorker
+from server.worker import (
+    STATUS_CANCELLED,
+    STATUS_DONE,
+    STATUS_ERROR,
+    STATUS_QUEUED,
+    STATUS_RUNNING,
+    TranscribeJob,
+    TranscriptionWorker,
+)
 
 DATA_DIR = Path(os.environ.get("VOXFUSION_API_DATA_DIR", "/home/dmazur/voxfusion-api"))
 UPLOAD_DIR = DATA_DIR / "uploads"
@@ -63,6 +74,10 @@ DIARIZATION_STRATEGY = _resolve_diarization_strategy(
     os.environ.get("VOXFUSION_API_DIARIZATION_STRATEGY")
 )
 
+# ETA shown to clients while a job is queued/running. Measured RTF on this
+# host is ~1.5 (CPUQuota=200%); the default adds a ~20% buffer on top.
+ETA_MULTIPLIER = float(os.environ.get("VOXFUSION_API_ETA_MULTIPLIER", "1.8"))
+
 _CONFIG_OVERRIDES = {
     "asr": {
         "model_size": os.environ.get("VOXFUSION_API_MODEL", "small"),
@@ -72,6 +87,41 @@ _CONFIG_OVERRIDES = {
     },
     "diarization": {"strategy": DIARIZATION_STRATEGY},
 }
+
+
+def _probe_duration(path: Path) -> float | None:
+    """Audio duration in seconds via ffprobe; None when unavailable."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "json",
+                str(path),
+            ],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+        data = json.loads(result.stdout.decode("utf-8", "replace") or "{}")
+        duration = float(data["format"]["duration"])
+    except Exception:
+        return None
+    return duration if duration > 0 else None
+
+
+def _estimate_eta(duration_s: float | None) -> float | None:
+    """Expected processing time with buffer; None without a duration."""
+    if duration_s is None:
+        return None
+    return float(math.ceil(duration_s * ETA_MULTIPLIER))
+
 
 worker = TranscriptionWorker(overrides=_CONFIG_OVERRIDES)
 
@@ -86,7 +136,11 @@ def _register_job(job: TranscribeJob) -> None:
         _jobs[job.job_id] = job
         _jobs_order.append(job.job_id)
         while len(_jobs_order) > MAX_JOBS_HISTORY:
-            finished = [jid for jid in _jobs_order if _jobs[jid].status in ("done", "error")]
+            finished = [
+                jid
+                for jid in _jobs_order
+                if _jobs[jid].status in (STATUS_DONE, STATUS_ERROR, STATUS_CANCELLED)
+            ]
             if not finished:
                 break
             oldest = finished[0]
@@ -127,6 +181,7 @@ def _job_summary(job: TranscribeJob) -> dict[str, Any]:
         "created": _iso(job.created),
         "processing_time_s": job.processing_time_s,
         "audio_duration_s": job.audio_duration_s,
+        "eta_seconds": job.eta_seconds,
         "model": job.model,
     }
 
@@ -200,7 +255,7 @@ async def _retention_loop() -> None:
                 stale = [
                     jid
                     for jid in _jobs_order
-                    if _jobs[jid].status in ("done", "error")
+                    if _jobs[jid].status in (STATUS_DONE, STATUS_ERROR, STATUS_CANCELLED)
                     and _jobs[jid].created < created_cutoff
                 ]
                 for jid in stale:
@@ -267,9 +322,10 @@ async def transcribe(
         include_segments=want_segments,
         size_bytes=size,
     )
+    job.eta_seconds = _estimate_eta(_probe_duration(dest))
     _register_job(job)
     worker.submit(job)
-    return {"job_id": job_id, "status": "queued"}
+    return {"job_id": job_id, "status": "queued", "eta_seconds": job.eta_seconds}
 
 
 def safe_upload_name(path: Path) -> str:
@@ -280,6 +336,26 @@ def safe_upload_name(path: Path) -> str:
 def get_job(job_id: str, request: Request) -> dict[str, Any]:
     _require_auth(request)
     return _job_full(_get_job(job_id))
+
+
+@app.post("/v1/jobs/{job_id}/cancel")
+def cancel_job(job_id: str, request: Request) -> dict[str, Any]:
+    """Cancel a queued job immediately or request cancellation of a running one."""
+    _require_auth(request)
+    job = _get_job(job_id)
+    if job.status == STATUS_QUEUED:
+        job.status = STATUS_CANCELLED
+        try:
+            job.file_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return {"job_id": job_id, "status": STATUS_CANCELLED}
+    if job.status == STATUS_RUNNING:
+        # Cooperative cancel: the worker checks the flag at the next
+        # pipeline progress event (every few seconds) and flips the status.
+        job.cancel_requested = True
+        return {"job_id": job_id, "status": STATUS_RUNNING, "cancel_requested": True}
+    return {"job_id": job_id, "status": job.status}
 
 
 @app.get("/v1/jobs")

@@ -143,6 +143,10 @@ def test_file_transcribe_clears_table_on_start(tmp_path: Path) -> None:
     gui.root = MagicMock()
     gui._language_code_for_label = lambda label, model: None
 
+    # GPU state must not gate this test: on hosts with busy VRAM the real
+    # check opens a dialog and returns False, aborting before the clear.
+    gui._warn_if_no_gpu = lambda: True
+
     cleared: list[bool] = []
 
     def fake_clear() -> None:

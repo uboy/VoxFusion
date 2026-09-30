@@ -29,6 +29,11 @@ STATUS_QUEUED = "queued"
 STATUS_RUNNING = "running"
 STATUS_DONE = "done"
 STATUS_ERROR = "error"
+STATUS_CANCELLED = "cancelled"
+
+
+class JobCancelledError(Exception):
+    """Raised inside the pipeline event callback to abort a running job."""
 
 
 @dataclass
@@ -49,6 +54,8 @@ class TranscribeJob:
     processing_time_s: float | None = None
     audio_duration_s: float | None = None
     model: str | None = None
+    eta_seconds: float | None = None
+    cancel_requested: bool = False
 
 
 class TranscriptionWorker:
@@ -61,6 +68,7 @@ class TranscriptionWorker:
         self._orchestrator: PipelineOrchestrator | None = None
         self._lock = threading.Lock()
         self._running_job_id: str | None = None
+        self._running_job: TranscribeJob | None = None
         self._overrides = overrides
         self.config: PipelineConfig = load_config(overrides=overrides)
         self.model_name = f"{self.config.asr.engine}/{self.config.asr.model_size}"
@@ -91,30 +99,50 @@ class TranscriptionWorker:
                 job = self._queue.get(timeout=0.5)
             except queue.Empty:
                 continue
+            if job.status == STATUS_CANCELLED:
+                # Cancelled while still queued: the cancel endpoint already
+                # removed the upload, just drop the entry.
+                self._queue.task_done()
+                continue
             with self._lock:
                 self._running_job_id = job.job_id
+            self._running_job = job
             job.status = STATUS_RUNNING
             try:
                 self._process(job)
+            except JobCancelledError:
+                job.status = STATUS_CANCELLED
             except Exception as exc:
                 job.status = STATUS_ERROR
                 job.error = str(exc) or exc.__class__.__name__
             finally:
+                self._running_job = None
                 self._cleanup_upload(job)
                 with self._lock:
                     self._running_job_id = None
                 self._queue.task_done()
 
+    def _event_hook(self, event: object) -> None:
+        """Pipeline progress callback: cooperative cancellation point.
+
+        The batch pipeline emits progress events every few seconds; raising
+        here aborts the current job within one progress interval.
+        """
+        job = self._running_job
+        if job is not None and job.cancel_requested:
+            raise JobCancelledError(f"job {job.job_id} cancelled by client request")
+
     def _cleanup_upload(self, job: TranscribeJob) -> None:
-        """Delete the uploaded file as soon as the job is done.
+        """Delete the uploaded file as soon as the job finishes.
 
         The upload is a transient processing artifact: the client already
         holds the original, and the transcription result lives in the job
         record. Failed jobs keep their file so transcription can be re-run
         (new POST with the same file) after the failure is fixed; the
         retention sweep in app.py is the final safety net for those.
+        Cancelled jobs delete their file immediately, same as done ones.
         """
-        if job.status != STATUS_DONE:
+        if job.status not in (STATUS_DONE, STATUS_CANCELLED):
             return
         try:
             job.file_path.unlink(missing_ok=True)
@@ -125,7 +153,11 @@ class TranscriptionWorker:
 
     def _get_orchestrator(self) -> PipelineOrchestrator:
         if self._orchestrator is None:
-            self._orchestrator = PipelineOrchestrator(self.config, interactive=True)
+            self._orchestrator = PipelineOrchestrator(
+                self.config,
+                on_event=self._event_hook,
+                interactive=True,
+            )
         return self._orchestrator
 
     def _process(self, job: TranscribeJob) -> None:
