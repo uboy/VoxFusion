@@ -45,13 +45,32 @@ SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 TOKEN = os.environ.get("VOXFUSION_API_TOKEN", "")
 
+DIARIZATION_STRATEGIES = ("auto", "channel", "ml", "hybrid", "none")
+
+
+def _resolve_diarization_strategy(raw: str | None) -> str:
+    """Normalize the strategy env value; invalid config must fail at startup."""
+    strategy = (raw or "channel").strip().lower()
+    if strategy not in DIARIZATION_STRATEGIES:
+        raise RuntimeError(
+            f"VOXFUSION_API_DIARIZATION_STRATEGY={raw!r} is invalid; "
+            f"expected one of: {', '.join(DIARIZATION_STRATEGIES)}"
+        )
+    return strategy
+
+
+DIARIZATION_STRATEGY = _resolve_diarization_strategy(
+    os.environ.get("VOXFUSION_API_DIARIZATION_STRATEGY")
+)
+
 _CONFIG_OVERRIDES = {
     "asr": {
         "model_size": os.environ.get("VOXFUSION_API_MODEL", "small"),
         "device": os.environ.get("VOXFUSION_API_DEVICE", "cpu"),
         "cpu_threads": int(os.environ.get("VOXFUSION_API_CPU_THREADS", "6")),
         "language": None,
-    }
+    },
+    "diarization": {"strategy": DIARIZATION_STRATEGY},
 }
 
 worker = TranscriptionWorker(overrides=_CONFIG_OVERRIDES)

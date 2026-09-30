@@ -125,6 +125,22 @@ def _resolve_hf_token(
     return None, None
 
 
+def _model_cached(model_id: str) -> bool:
+    """True when the model snapshot is already present in the local HF cache.
+
+    A cached model loads without any auth (the hub falls back to local
+    files), so a missing token must not disable ML diarization on fully
+    offline installations.
+    """
+    try:
+        from huggingface_hub import snapshot_download
+
+        snapshot_download(model_id, local_files_only=True)
+    except Exception:
+        return False
+    return True
+
+
 def _ml_prerequisites(
     config: DiarizationConfig,
     *,
@@ -137,9 +153,20 @@ def _ml_prerequisites(
     if spec is None:
         return False, "ML diarization requires the optional 'pyannote.audio' package.", None
     token, token_source = _resolve_hf_token(config, interactive=interactive)
-    if not token:
-        return False, "ML diarization requires a HuggingFace token for pyannote models.", None
-    return True, None, token_source
+    if token:
+        return True, None, token_source
+    # No token anywhere: a locally cached pipeline still loads, so cached
+    # installs work without a HuggingFace account.
+    if _model_cached(config.ml.model):
+        return True, None, "local cache (no token)"
+    return (
+        False,
+        (
+            "ML diarization requires a HuggingFace token for pyannote models, "
+            f"or a local cache of {config.ml.model}."
+        ),
+        None,
+    )
 
 
 def _log_selection(

@@ -67,12 +67,31 @@ def test_prompt_returns_none_on_empty_input() -> None:
 
 
 def test_ml_prerequisites_does_not_prompt_when_not_interactive() -> None:
+    from voxfusion.diarization import factory as factory_module
     from voxfusion.diarization.factory import _ml_prerequisites
 
     with patch.dict(os.environ, _no_token_env(), clear=True):
-        ok, reason, _source = _ml_prerequisites(_config_without_token(), interactive=False)
+        with patch.object(factory_module, "_model_cached", return_value=False):
+            ok, reason, _source = _ml_prerequisites(_config_without_token(), interactive=False)
     assert ok is False
     assert "token" in (reason or "").lower()
+
+
+def test_ml_prerequisites_cached_model_ready_without_prompt() -> None:
+    """No token anywhere, but the model snapshot is cached locally: ready, no prompt."""
+    from voxfusion.diarization import factory as factory_module
+    from voxfusion.diarization.factory import _ml_prerequisites
+
+    with patch.dict(os.environ, _no_token_env(), clear=True):
+        with patch.object(factory_module, "_model_cached", return_value=True):
+            with patch(
+                "voxfusion.diarization.factory._prompt_hf_token_interactively"
+            ) as mock_prompt:
+                ok, reason, source = _ml_prerequisites(_config_without_token(), interactive=False)
+                mock_prompt.assert_not_called()
+    assert ok is True
+    assert reason is None
+    assert source == "local cache (no token)"
 
 
 def test_ml_prerequisites_uses_env_var_before_prompt() -> None:

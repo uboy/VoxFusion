@@ -81,8 +81,8 @@ _disable_pyannote_telemetry()
 
 def _pipeline_auth_kwargs(
     from_pretrained: object,
-    token: str,
-) -> dict[str, str]:
+    token: str | None,
+) -> dict[str, str | None]:
     """Return auth kwargs compatible with the installed pyannote version."""
     try:
         signature = inspect.signature(from_pretrained)
@@ -238,10 +238,15 @@ class PyAnnoteDiarizer:
             or os.environ.get("HUGGING_FACE_HUB_TOKEN")
         )
         if not token:
-            raise DiarizationError(
-                "Hugging Face auth token required for pyannote models. "
-                "Set VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN or HF_TOKEN"
-            )
+            # Lazy import: factory.py imports this module at top level.
+            from voxfusion.diarization.factory import _model_cached
+
+            if not _model_cached(self._config.model):
+                raise DiarizationError(
+                    "Hugging Face auth token required for pyannote models. "
+                    "Set VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN or HF_TOKEN, "
+                    "or pre-cache the model in the local HuggingFace cache"
+                )
 
         if self._emit_pipeline_logs:
             log.info("pyannote.loading_pipeline", model=self._config.model)

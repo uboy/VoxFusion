@@ -18,8 +18,8 @@ Runs on Windows, macOS, and Linux. Comes with a GUI and a CLI.
   - OpenVINO Whisper — automatic when Intel Iris Xe / Arc GPU is detected
 - **Speaker diarization** — identifies who said what (pyannote.audio or channel-based)
   - file transcription can use `auto`, `ml`, `hybrid`, or `channel`
-  - `auto` prefers ML diarization when pyannote + Hugging Face token are available
-  - pyannote diarization requires gated Hugging Face access not only to `pyannote/speaker-diarization-3.1`, but also to its dependent gated models such as `pyannote/segmentation-3.0`
+  - `auto` prefers ML diarization when pyannote and either a Hugging Face token or a locally cached model are available
+  - pyannote diarization requires gated Hugging Face access not only to `pyannote/speaker-diarization-3.1`, but also to its dependent gated models such as `pyannote/segmentation-3.0` (a one-time download; afterwards it runs offline without any token)
 - **Offline translation** — no API keys required (Argos Translate)
 - **Output formats** — JSON, SRT, VTT, plain text
 - **GUI** — multi-step workflow: record → transcribe → send to LLM (Open WebUI compatible)
@@ -369,7 +369,8 @@ All settings can be set via environment variables (prefix `VOXFUSION_`, double u
 | `VOXFUSION_LIVE_GIGAAM__FINALIZE_LEFT_CONTEXT_MS` | Left context kept for stop-time live GigaAM finalization |
 | `VOXFUSION_LIVE_GIGAAM__QUEUE_HARD_LIMIT_JOBS` | Maximum live GigaAM draft backlog before new utterances defer to finalization-only |
 | `VOXFUSION_DIARIZATION__STRATEGY` | Diarization mode: `auto`, `channel`, `ml`, `hybrid` |
-| `VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN` | HuggingFace token for pyannote diarization models |
+| `VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN` | HuggingFace token for pyannote diarization models (not needed when the models are already in the local HuggingFace cache) |
+| `VOXFUSION_API_DIARIZATION_STRATEGY` | Diarization strategy for the HTTP API (`server/app.py`); default `channel`, set `auto` to run ML diarization on uploaded files |
 | `VOXFUSION_GUI_SETTINGS_PATH` | Override GUI settings file location |
 
 GUI settings persist to `~/.voxfusion/gui_settings.json`.

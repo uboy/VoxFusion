@@ -8,8 +8,10 @@ All notable changes to VoxFusion are documented here.
 - **API**: uploaded file is deleted immediately when a job completes successfully (owner request 2026-09-29: the upload is a transient artifact, "transcribe → return result → clean up"). Files of **failed** jobs are kept on disk so transcription can be re-run after the failure is fixed; the retention sweep (`VOXFUSION_API_RETENTION_HOURS`, 24 h) remains the safety net for them.
 - **API**: response fields renamed/added - `duration_s` (was ambiguous, actually processing time) is now `processing_time_s`; new `audio_duration_s` carries the real audio duration from the pipeline (`source_info[duration_s]`); README documents both.
 - **API**: partial upload file is now removed on client disconnect/timeout mid-upload (`asyncio.CancelledError` is a BaseException that slipped past `except Exception`, leaving an orphan in uploads until the retention sweep).
+- **Diarization**: a locally cached pyannote model now satisfies the ML prerequisites without a HuggingFace token (a cached snapshot loads without auth, so fully offline installs keep ML diarization instead of silently falling back to channel); the token gate in `pyannote_engine` allows the same cache fallback. Without cache and token the behaviour is unchanged.
 
 ### Added
+- **API**: `VOXFUSION_API_DIARIZATION_STRATEGY` env var (default `channel`) plugs the diarization strategy into `_CONFIG_OVERRIDES`; `auto` makes uploaded files go through ML diarization when pyannote + token/cache are available, an invalid value fails at service startup.
 - **CI**: GitHub Actions workflow — lint (ruff, mypy) + test matrix Python 3.11/3.12 (P0 TEST-1)
 - **Security**: `trust_remote_code=True` risk documented in README § Security and surfaced as a runtime warning on every GigaAM model load (P1 SEC-1)
 - **GUI**: `[ERROR]` / `[WARNING]` text prefixes on all three status label areas (live, file, LLM) with colour coding (P1 UX-2)
