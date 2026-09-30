@@ -63,8 +63,8 @@ def test_estimate_eta_none_without_duration() -> None:
 
 
 def test_estimate_eta_applies_multiplier() -> None:
-    assert _estimate_eta(600.0) == 1080.0  # 600 * 1.8, default multiplier
-    assert _estimate_eta(1.0) == 2.0  # rounded up
+    assert _estimate_eta(600.0) == 1320.0  # 600 * 2.2, default multiplier
+    assert _estimate_eta(1.0) == 3.0  # rounded up
 
 
 def test_probe_duration_parses_ffprobe_json() -> None:
@@ -306,8 +306,8 @@ def test_speaker_hint_capped_at_32() -> None:
 
 
 def test_eta_multiplier_default_and_value() -> None:
-    assert _resolve_eta_multiplier(None) == 1.8
-    assert _resolve_eta_multiplier("") == 1.8
+    assert _resolve_eta_multiplier(None) == 2.2
+    assert _resolve_eta_multiplier("") == 2.2
     assert _resolve_eta_multiplier("2.2") == 2.2
 
 

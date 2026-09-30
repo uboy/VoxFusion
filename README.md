@@ -373,11 +373,17 @@ All settings can be set via environment variables (prefix `VOXFUSION_`, double u
 | `VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN` | HuggingFace token for pyannote diarization models (not needed when the models are already in the local HuggingFace cache) |
 | `VOXFUSION_API_DIARIZATION_STRATEGY` | Diarization strategy for the HTTP API (`server/app.py`); default `channel`, set `auto` to run ML diarization on uploaded files |
 | `VOXFUSION_API_DIARIZATION_MODEL` | Diarization model id for the HTTP API; default `pyannote/speaker-diarization-3.1`, e.g. `pyannote/speaker-diarization-community-1` (CC-BY-4.0, needs pyannote.audio 4+) |
-| `VOXFUSION_API_ETA_MULTIPLIER` | ETA estimate factor for the HTTP API (`eta_seconds` = audio duration × factor); default `1.8` (measured RTF ~1.5 on 2 CPU cores + ~20% buffer) |
+| `VOXFUSION_API_ETA_MULTIPLIER` | ETA estimate factor for the HTTP API (`eta_seconds` = audio duration × factor); default `2.2` (measured RTF ~2.0 with ML diarization on 2 CPU cores + ~10% buffer) |
 | `VOXFUSION_GUI_SETTINGS_PATH` | Override GUI settings file location |
 
 GUI settings persist to `~/.voxfusion/gui_settings.json`.
 The GUI file-transcription tab also persists speaker-separation settings and reuses the same Hugging Face token for gated models and pyannote diarization.
+
+## HTTP API (server/app.py)
+
+Asynchronous transcription service: `POST /v1/transcribe` (multipart `file`; optional form fields `language`, `include_segments`, `min_speakers`, `max_speakers` capped at 32) returns `{job_id, status, eta_seconds}` immediately; `GET /v1/jobs/{id}` returns the result (`text`, `segments` with `start`/`end`/`text`/`speaker` when `include_segments=true`); `POST /v1/jobs/{id}/cancel` gives up a job (a queued one is dropped immediately, a running one flips to `cancelled` within a pipeline progress interval - the running model call itself is not preempted and keeps the CPU busy until it finishes). Auth: `Authorization: Bearer $VOXFUSION_API_TOKEN` on everything except `/healthz`.
+
+**No-speech contract:** when the recognizer finds no speech (silence, pure tones, non-target languages), the API returns a successful job with `text: ""` and `segments: []` (an empty array, not `null` and not an error). Clients should treat an empty result as "no speech recognized", not as a failure.
 
 ## Troubleshooting
 

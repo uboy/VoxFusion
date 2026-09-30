@@ -86,12 +86,13 @@ def _resolve_diarization_model(raw: str | None) -> str:
 DIARIZATION_MODEL = _resolve_diarization_model(os.environ.get("VOXFUSION_API_DIARIZATION_MODEL"))
 
 
-# ETA shown to clients while a job is queued/running. Measured RTF on this
-# host is ~1.5 (CPUQuota=200%); the default adds a ~20% buffer on top.
+# ETA shown to clients while a job is queued/running. Measured RTF with the
+# community-1 diarization model is ~2.0 (CPUQuota=200%); the default adds a
+# ~10% buffer on top.
 def _resolve_eta_multiplier(raw: str | None) -> float:
     """ETA multiplier from env; invalid or non-positive config fails at startup."""
     try:
-        multiplier = float(raw if raw is not None and raw.strip() else "1.8")
+        multiplier = float(raw if raw is not None and raw.strip() else "2.2")
     except ValueError:
         raise RuntimeError(f"VOXFUSION_API_ETA_MULTIPLIER={raw!r} is not a number") from None
     if multiplier <= 0:
