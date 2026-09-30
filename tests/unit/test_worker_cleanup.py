@@ -8,6 +8,7 @@ transcription can be re-run after the failure is fixed.
 from pathlib import Path
 
 from server.worker import (
+    STATUS_CANCELLED,
     STATUS_DONE,
     STATUS_ERROR,
     STATUS_RUNNING,
@@ -57,6 +58,16 @@ def test_running_job_keeps_upload(tmp_path: Path) -> None:
     worker._cleanup_upload(job)
 
     assert job.file_path.exists()
+
+
+def test_cancelled_job_deletes_upload(tmp_path: Path) -> None:
+    worker = _make_worker()
+    job = _make_job(tmp_path)
+    job.status = STATUS_CANCELLED
+
+    worker._cleanup_upload(job)
+
+    assert not job.file_path.exists()
 
 
 def test_cleanup_is_idempotent(tmp_path: Path) -> None:

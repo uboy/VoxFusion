@@ -85,9 +85,21 @@ def _resolve_diarization_model(raw: str | None) -> str:
 
 DIARIZATION_MODEL = _resolve_diarization_model(os.environ.get("VOXFUSION_API_DIARIZATION_MODEL"))
 
+
 # ETA shown to clients while a job is queued/running. Measured RTF on this
 # host is ~1.5 (CPUQuota=200%); the default adds a ~20% buffer on top.
-ETA_MULTIPLIER = float(os.environ.get("VOXFUSION_API_ETA_MULTIPLIER", "1.8"))
+def _resolve_eta_multiplier(raw: str | None) -> float:
+    """ETA multiplier from env; invalid or non-positive config fails at startup."""
+    try:
+        multiplier = float(raw if raw is not None and raw.strip() else "1.8")
+    except ValueError:
+        raise RuntimeError(f"VOXFUSION_API_ETA_MULTIPLIER={raw!r} is not a number") from None
+    if multiplier <= 0:
+        raise RuntimeError(f"VOXFUSION_API_ETA_MULTIPLIER={raw!r} must be > 0")
+    return multiplier
+
+
+ETA_MULTIPLIER = _resolve_eta_multiplier(os.environ.get("VOXFUSION_API_ETA_MULTIPLIER"))
 
 _CONFIG_OVERRIDES = {
     "asr": {
@@ -101,6 +113,11 @@ _CONFIG_OVERRIDES = {
         "ml": {"model": DIARIZATION_MODEL},
     },
 }
+
+
+# ffprobe parses client-controlled media, so it runs with a minimal
+# environment: no service secrets leak into a potentially exploitable child.
+_FFPROBE_ENV = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": "C.UTF-8"}
 
 
 def _probe_duration(path: Path) -> float | None:
@@ -120,6 +137,7 @@ def _probe_duration(path: Path) -> float | None:
             capture_output=True,
             timeout=30,
             check=False,
+            env=_FFPROBE_ENV,
         )
         if result.returncode != 0:
             return None
@@ -127,7 +145,11 @@ def _probe_duration(path: Path) -> float | None:
         duration = float(data["format"]["duration"])
     except Exception:
         return None
-    return duration if duration > 0 else None
+    # math.ceil(Infinity) would raise OverflowError after the upload was
+    # already stored, so non-finite durations degrade to "no ETA" as well.
+    if not math.isfinite(duration) or duration <= 0:
+        return None
+    return duration
 
 
 def _estimate_eta(duration_s: float | None) -> float | None:
@@ -258,7 +280,7 @@ async def _retention_loop() -> None:
                     try:
                         job_prefix = path.name.split("_", 1)[0]
                         active = _jobs.get(job_prefix)
-                        if active is not None and active.status in ("queued", "running"):
+                        if active is not None and active.status in (STATUS_QUEUED, STATUS_RUNNING):
                             continue
                         if path.is_file() and path.stat().st_mtime < cutoff:
                             path.unlink()
@@ -311,6 +333,9 @@ def healthz() -> dict[str, Any]:
     }
 
 
+MAX_SPEAKER_HINT = 32
+
+
 def _parse_speaker_hint(raw: str | None, field: str) -> int | None:
     """Parse a min/max speakers form value; blank means 'no hint'."""
     value = (raw or "").strip()
@@ -324,6 +349,11 @@ def _parse_speaker_hint(raw: str | None, field: str) -> int | None:
         ) from None
     if parsed < 1:
         raise HTTPException(status_code=400, detail=f"{field} must be >= 1")
+    if parsed > MAX_SPEAKER_HINT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field} must be <= {MAX_SPEAKER_HINT}",
+        )
     return parsed
 
 
@@ -364,7 +394,8 @@ async def transcribe(
         min_speakers=job_min_speakers,
         max_speakers=job_max_speakers,
     )
-    job.eta_seconds = _estimate_eta(_probe_duration(dest))
+    # Off the event loop: a slow ffprobe would freeze all concurrent requests.
+    job.eta_seconds = _estimate_eta(await asyncio.to_thread(_probe_duration, dest))
     _register_job(job)
     worker.submit(job)
     return {"job_id": job_id, "status": "queued", "eta_seconds": job.eta_seconds}
@@ -387,6 +418,10 @@ def cancel_job(job_id: str, request: Request) -> dict[str, Any]:
     job = _get_job(job_id)
     if job.status == STATUS_QUEUED:
         job.status = STATUS_CANCELLED
+        # Also raise the flag: if the worker picked the job up between our
+        # status read and this write, its post-RUNNING check drops it instead
+        # of processing a deleted file.
+        job.cancel_requested = True
         try:
             job.file_path.unlink(missing_ok=True)
         except OSError:

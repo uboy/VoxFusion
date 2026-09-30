@@ -101,22 +101,33 @@ class TranscriptionWorker:
                 job = self._queue.get(timeout=0.5)
             except queue.Empty:
                 continue
-            if job.status == STATUS_CANCELLED:
-                # Cancelled while still queued: the cancel endpoint already
-                # removed the upload, just drop the entry.
+            if job.status == STATUS_CANCELLED or (
+                job.status == STATUS_QUEUED and job.cancel_requested
+            ):
+                # Cancelled while still queued (possibly in the window between
+                # the worker's queue.get and the endpoint's cancel): the
+                # cancel endpoint already removed the upload, just drop it.
+                job.status = STATUS_CANCELLED
                 self._queue.task_done()
                 continue
             with self._lock:
                 self._running_job_id = job.job_id
             self._running_job = job
             job.status = STATUS_RUNNING
+            if job.cancel_requested:
+                # Cancel raced the queue pickup: honour it without processing.
+                job.status = STATUS_CANCELLED
+                self._running_job = None
+                self._cleanup_upload(job)
+                self._queue.task_done()
+                continue
             try:
                 self._process(job)
             except JobCancelledError:
                 job.status = STATUS_CANCELLED
             except Exception as exc:
-                job.status = STATUS_ERROR
                 job.error = str(exc) or exc.__class__.__name__
+                job.status = STATUS_ERROR
             finally:
                 self._running_job = None
                 self._cleanup_upload(job)
@@ -127,8 +138,12 @@ class TranscriptionWorker:
     def _event_hook(self, event: object) -> None:
         """Pipeline progress callback: cooperative cancellation point.
 
-        The batch pipeline emits progress events every few seconds; raising
-        here aborts the current job within one progress interval.
+        The batch pipeline emits progress events every few seconds, so the
+        job status flips to ``cancelled`` within one progress interval.
+        Note: the running model call itself (ASR/diarization inference) is
+        not interrupted - it keeps the CPU busy in its executor thread until
+        it finishes; cancelling gives up the result, it does not preempt
+        the compute.
         """
         job = self._running_job
         if job is not None and job.cancel_requested:
