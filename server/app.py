@@ -74,6 +74,17 @@ DIARIZATION_STRATEGY = _resolve_diarization_strategy(
     os.environ.get("VOXFUSION_API_DIARIZATION_STRATEGY")
 )
 
+DEFAULT_DIARIZATION_MODEL = "pyannote/speaker-diarization-3.1"
+
+
+def _resolve_diarization_model(raw: str | None) -> str:
+    """Diarization model id; blank/unset keeps the bundled default."""
+    model = (raw or "").strip()
+    return model or DEFAULT_DIARIZATION_MODEL
+
+
+DIARIZATION_MODEL = _resolve_diarization_model(os.environ.get("VOXFUSION_API_DIARIZATION_MODEL"))
+
 # ETA shown to clients while a job is queued/running. Measured RTF on this
 # host is ~1.5 (CPUQuota=200%); the default adds a ~20% buffer on top.
 ETA_MULTIPLIER = float(os.environ.get("VOXFUSION_API_ETA_MULTIPLIER", "1.8"))
@@ -85,7 +96,10 @@ _CONFIG_OVERRIDES = {
         "cpu_threads": int(os.environ.get("VOXFUSION_API_CPU_THREADS", "6")),
         "language": None,
     },
-    "diarization": {"strategy": DIARIZATION_STRATEGY},
+    "diarization": {
+        "strategy": DIARIZATION_STRATEGY,
+        "ml": {"model": DIARIZATION_MODEL},
+    },
 }
 
 
@@ -297,12 +311,30 @@ def healthz() -> dict[str, Any]:
     }
 
 
+def _parse_speaker_hint(raw: str | None, field: str) -> int | None:
+    """Parse a min/max speakers form value; blank means 'no hint'."""
+    value = (raw or "").strip()
+    if not value:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise HTTPException(
+            status_code=400, detail=f"{field} must be an integer, got {raw!r}"
+        ) from None
+    if parsed < 1:
+        raise HTTPException(status_code=400, detail=f"{field} must be >= 1")
+    return parsed
+
+
 @app.post("/v1/transcribe")
 async def transcribe(
     request: Request,
     file: Annotated[UploadFile, File(...)],
     language: Annotated[str | None, Form()] = None,
     include_segments: Annotated[str | None, Form()] = None,
+    min_speakers: Annotated[str | None, Form()] = None,
+    max_speakers: Annotated[str | None, Form()] = None,
 ) -> dict[str, Any]:
     """Queue a transcription job. Returns immediately with a job_id."""
     _require_auth(request)
@@ -310,6 +342,14 @@ async def transcribe(
     if lang in ("", "auto"):
         lang = None
     want_segments = (include_segments or "").strip().lower() in ("1", "true", "yes", "on")
+    job_min_speakers = _parse_speaker_hint(min_speakers, "min_speakers")
+    job_max_speakers = _parse_speaker_hint(max_speakers, "max_speakers")
+    if (
+        job_min_speakers is not None
+        and job_max_speakers is not None
+        and job_min_speakers > job_max_speakers
+    ):
+        raise HTTPException(status_code=400, detail="min_speakers must be <= max_speakers")
 
     job_id = uuid.uuid4().hex[:12]
     dest, size = await _store_upload(job_id, file.filename, file)
@@ -321,6 +361,8 @@ async def transcribe(
         language=lang,
         include_segments=want_segments,
         size_bytes=size,
+        min_speakers=job_min_speakers,
+        max_speakers=job_max_speakers,
     )
     job.eta_seconds = _estimate_eta(_probe_duration(dest))
     _register_job(job)

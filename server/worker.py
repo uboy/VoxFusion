@@ -56,6 +56,8 @@ class TranscribeJob:
     model: str | None = None
     eta_seconds: float | None = None
     cancel_requested: bool = False
+    min_speakers: int | None = None  # None = engine default
+    max_speakers: int | None = None  # None = engine default
 
 
 class TranscriptionWorker:
@@ -165,8 +167,13 @@ class TranscriptionWorker:
         # Per-job language override: the batch pipeline does not pass a
         # per-call language, so the engine falls back to config.asr.language.
         # The worker is single-threaded, hence mutating the shared config
-        # between jobs is safe.
+        # between jobs is safe. Same pattern for the diarization speaker
+        # hints: the pyannote engine reads them from the shared
+        # DiarizationMLConfig at pipeline call time.
         orch._asr._config.language = job.language or None  # type: ignore[attr-defined]
+        ml_config = self.config.diarization.ml
+        ml_config.min_speakers = job.min_speakers
+        ml_config.max_speakers = job.max_speakers
 
         started = time.monotonic()
         result = asyncio.run(orch.transcribe_file(job.file_path))

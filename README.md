@@ -164,6 +164,7 @@ voxfusion models download --diarization pyannote
    - GigaAM v3: https://huggingface.co/ai-sage/GigaAM-v3/tree/main
    - Pyannote segmentation-3.0: https://huggingface.co/pyannote/segmentation-3.0 (gated, accept license first)
    - Pyannote speaker-diarization-3.1: https://huggingface.co/pyannote/speaker-diarization-3.1 (gated)
+   - Pyannote speaker-diarization-community-1 (optional, set `VOXFUSION_API_DIARIZATION_MODEL`): https://huggingface.co/pyannote/speaker-diarization-community-1 (gated, **CC-BY-4.0** — attribution required when distributing outputs/deployments; needs pyannote.audio 4+)
 
 2. **Create the cache directory structure** on the target machine:
    ```bash
@@ -371,6 +372,7 @@ All settings can be set via environment variables (prefix `VOXFUSION_`, double u
 | `VOXFUSION_DIARIZATION__STRATEGY` | Diarization mode: `auto`, `channel`, `ml`, `hybrid` |
 | `VOXFUSION_DIARIZATION__ML__HF_AUTH_TOKEN` | HuggingFace token for pyannote diarization models (not needed when the models are already in the local HuggingFace cache) |
 | `VOXFUSION_API_DIARIZATION_STRATEGY` | Diarization strategy for the HTTP API (`server/app.py`); default `channel`, set `auto` to run ML diarization on uploaded files |
+| `VOXFUSION_API_DIARIZATION_MODEL` | Diarization model id for the HTTP API; default `pyannote/speaker-diarization-3.1`, e.g. `pyannote/speaker-diarization-community-1` (CC-BY-4.0, needs pyannote.audio 4+) |
 | `VOXFUSION_API_ETA_MULTIPLIER` | ETA estimate factor for the HTTP API (`eta_seconds` = audio duration × factor); default `1.8` (measured RTF ~1.5 on 2 CPU cores + ~20% buffer) |
 | `VOXFUSION_GUI_SETTINGS_PATH` | Override GUI settings file location |
 
